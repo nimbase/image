@@ -20,6 +20,7 @@ import ./image/codecs/bmp as bmpApi
 import ./image/codecs/gif as gifApi
 import ./image/codecs/png as pngApi
 import ./image/codecs/tiff as tiffApi
+import ./image/codecs/ico as icoApi
 
 export colorApi
 export errorApi
@@ -42,3 +43,4 @@ export bmpApi
 export gifApi
 export pngApi
 export tiffApi
+export icoApi
