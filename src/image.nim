@@ -17,6 +17,7 @@ import ./image/codecs/pnm as pnmApi
 import ./image/codecs/tga as tgaApi
 import ./image/codecs/hdr as hdrApi
 import ./image/codecs/bmp as bmpApi
+import ./image/codecs/gif as gifApi
 
 export colorApi
 export errorApi
@@ -36,3 +37,4 @@ export pnmApi
 export tgaApi
 export hdrApi
 export bmpApi
+export gifApi
