@@ -21,6 +21,7 @@ import ./image/codecs/gif as gifApi
 import ./image/codecs/png as pngApi
 import ./image/codecs/tiff as tiffApi
 import ./image/codecs/ico as icoApi
+import ./image/codecs/jpeg as jpegApi
 
 export colorApi
 export errorApi
@@ -44,3 +45,4 @@ export gifApi
 export pngApi
 export tiffApi
 export icoApi
+export jpegApi

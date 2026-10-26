@@ -1,12 +1,6 @@
-## jpeg codec — stub (full port pending, see plans/0*.md).
-## Returns Unsupported for now; Tier1/2/3 order: pnm/tga/hdr/bmp -> png/gif/tiff/ico -> jpeg/webp/exr/avif.
-import ../error
-import ../decoder
-import ../io
-import ../color
+## JPEG facade: pure-Nim baseline decoder + encoder.
+import ./jpgdec
+import ./jpgenc
 
-proc decodeStub*(name: string): ImageResult[bool] =
-  err[bool](unsupportedError(ukGenericFeature, name & ": not yet implemented"))
-
-proc prepareStub*(name: string): ImageResult[DecoderPreparedImage] =
-  err[DecoderPreparedImage](unsupportedError(ukGenericFeature, name & ": not yet implemented"))
+export jpgdec
+export jpgenc
