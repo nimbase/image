@@ -24,6 +24,7 @@ import ./image/codecs/ico as icoApi
 import ./image/codecs/jpeg as jpegApi
 import ./image/codecs/openexr as openexrApi
 import ./image/codecs/webp as webpApi
+import ./image/codecs/avif as avifApi
 
 export colorApi
 export errorApi
@@ -50,3 +51,4 @@ export icoApi
 export jpegApi
 export openexrApi
 export webpApi
+export avifApi
