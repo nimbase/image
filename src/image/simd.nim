@@ -1,9 +1,11 @@
 ## Runtime-dispatched SIMD for image decoding (see plans/08-simd-acceleration.md).
 ##
-## Contract: every dispatched path is bit-identical to `unfilterRowScalar`.
+## Contract: every dispatched path is bit-identical to its scalar oracle.
 ## x86_64 uses SSE2 always (ABI baseline) and AVX2 when `runtimecheck`
-## reports it; arm64 uses NEON. Unknown filters return false so callers can
-## raise `bad filter`. Small rows (< 16 bytes) stay scalar to avoid setup cost.
+## reports it; arm64 uses NEON. Unknown PNG filters return false so callers
+## can raise `bad filter`. Small PNG rows (< 16 bytes) stay scalar to avoid
+## setup cost.
+import std/math
 import ./simd/x86_sse2
 
 when defined(amd64):
@@ -85,3 +87,145 @@ proc simdUnfilterRow*(filter: uint8, cur, prev: var seq[uint8],
       return unfilterRowScalar(filter, cur, prev, bpp)
     return true
   unfilterRowScalar(filter, cur, prev, bpp)
+
+# ---------- JPEG DCT helpers ----------
+
+var JpegCosT*: array[8, array[8, float64]]
+var JpegCfac*: array[8, float64]
+
+proc initJpegTables() =
+  for u in 0..7:
+    JpegCfac[u] = if u == 0: 0.3535533905932738 else: 0.5
+    for x in 0..7:
+      JpegCosT[u][x] = cos((2.0 * float64(x) + 1.0) * float64(u) * PI / 16.0)
+
+initJpegTables()
+
+proc fptr(p: ptr float64, i: int): ptr float64 {.inline.} =
+  cast[ptr float64](cast[int](p) + i * sizeof(float64))
+
+proc idctPass1*(tmpP, midP, cosP, cfacP: ptr float64) {.inline.} =
+  ## First IDCT pass, dispatched to the best backend.
+  when defined(amd64):
+    if useAvx2: idctPass1Avx(tmpP, midP, cosP, cfacP)
+    else: idctPass1Sse2(tmpP, midP, cosP, cfacP)
+  elif defined(arm64):
+    idctPass1Neon(tmpP, midP, cosP, cfacP)
+  else:
+    for y in 0..7:
+      for u in 0..7:
+        let k = fptr(cfacP, u)[] * fptr(tmpP, y*8+u)[]
+        for i in 0..7:
+          fptr(midP, y*8+i)[] = fptr(midP, y*8+i)[] + k * fptr(cosP, u*8+i)[]
+
+proc idctPass2*(midP, outP, cosP, cfacP: ptr float64) {.inline.} =
+  ## Second IDCT pass, dispatched to the best backend.
+  when defined(amd64):
+    if useAvx2: idctPass2Avx(midP, outP, cosP, cfacP)
+    else: idctPass2Sse2(midP, outP, cosP, cfacP)
+  elif defined(arm64):
+    idctPass2Neon(midP, outP, cosP, cfacP)
+  else:
+    for y in 0..7:
+      for v in 0..7:
+        let c = fptr(cfacP, v)[]
+        let t = fptr(cosP, v*8+y)[]
+        for i in 0..7:
+          fptr(outP, y*8+i)[] = fptr(outP, y*8+i)[] +
+            (c * fptr(midP, v*8+i)[]) * t
+
+proc fdctPass1*(pxP, midP, cosP, cfacP: ptr float64) {.inline.} =
+  ## First FDCT pass (plus row scaling), dispatched to the best backend.
+  when defined(amd64):
+    if useAvx2: fdctPass1Avx(pxP, midP, cosP, cfacP)
+    else: fdctPass1Sse2(pxP, midP, cosP, cfacP)
+  elif defined(arm64):
+    fdctPass1Neon(pxP, midP, cosP, cfacP)
+  else:
+    for v in 0..7:
+      for y in 0..7:
+        let k = fptr(cosP, v*8+y)[]
+        for i in 0..7:
+          fptr(midP, v*8+i)[] = fptr(midP, v*8+i)[] +
+            k * fptr(pxP, y*8+i)[]
+      for i in 0..7:
+        fptr(midP, v*8+i)[] = fptr(midP, v*8+i)[] * fptr(cfacP, v)[]
+
+proc fdctPass2*(midP, resP, cosP, cfacP: ptr float64) {.inline.} =
+  ## Second FDCT pass, dispatched to the best backend. Products accumulate
+  ## into a temp row summed in scalar order, preserving exact accumulation.
+  when defined(amd64):
+    if useAvx2: fdctPass2Avx(midP, resP, cosP, cfacP)
+    else: fdctPass2Sse2(midP, resP, cosP, cfacP)
+  elif defined(arm64):
+    fdctPass2Neon(midP, resP, cosP, cfacP)
+  else:
+    var acc: array[8, float64]
+    for v in 0..7:
+      for u in 0..7:
+        for i in 0..7: acc[i] = 0.0
+        for i in 0..7:
+          acc[i] += fptr(midP, v*8+i)[] * fptr(cosP, u*8+i)[]
+        var s = 0.0
+        for x in 0..7: s += acc[x]
+        fptr(resP, v*8+u)[] = s * fptr(cfacP, u)[]
+
+proc idctBlockScalar*(coef: array[64, float64],
+    qt: array[64, int]): array[64, uint8] =
+  ## Scalar oracle: separable float IDCT with dequant. Vectorized paths must
+  ## match this exactly (same op order per element).
+  var tmp: array[64, float64]
+  for i in 0..63: tmp[i] = coef[i] * float64(qt[i])
+  var mid: array[64, float64]
+  for y in 0..7:
+    for x in 0..7:
+      var s = 0.0
+      for u in 0..7: s += JpegCfac[u] * tmp[y*8+u] * JpegCosT[u][x]
+      mid[y*8+x] = s
+  for y in 0..7:
+    for x in 0..7:
+      var s = 0.0
+      for v in 0..7: s += JpegCfac[v] * mid[v*8+x] * JpegCosT[v][y]
+      result[y*8+x] = uint8(clamp(int(s + 128.5), 0, 255))
+
+proc idctBlockSimd*(coef: array[64, float64],
+    qt: array[64, int]): array[64, uint8] =
+  ## Vectorized IDCT. Pass 1 scales rows by one scalar per (y, u); pass 2
+  ## uses the `(c * m) * t` form to preserve the scalar multiply grouping.
+  var tmp: array[64, float64]
+  for i in 0..63: tmp[i] = coef[i] * float64(qt[i])
+  var mid: array[64, float64]
+  var outp: array[64, float64]
+  let cosP = cast[ptr float64](addr JpegCosT[0][0])
+  let cfacP = cast[ptr float64](addr JpegCfac[0])
+  idctPass1(cast[ptr float64](addr tmp[0]), cast[ptr float64](addr mid[0]),
+    cosP, cfacP)
+  idctPass2(cast[ptr float64](addr mid[0]), cast[ptr float64](addr outp[0]),
+    cosP, cfacP)
+  for i in 0..63:
+    result[i] = uint8(clamp(int(outp[i] + 128.5), 0, 255))
+
+proc fdctBlockScalar*(px: array[64, float64]): array[64, float64] =
+  ## Scalar oracle for the forward DCT.
+  var mid: array[64, float64]
+  for v in 0..7:
+    for x in 0..7:
+      var s = 0.0
+      for y in 0..7: s += px[y*8+x] * JpegCosT[v][y]
+      mid[v*8+x] = s * JpegCfac[v]
+  for v in 0..7:
+    for u in 0..7:
+      var s = 0.0
+      for x in 0..7: s += mid[v*8+x] * JpegCosT[u][x]
+      result[v*8+u] = s * JpegCfac[u]
+
+proc fdctBlockSimd*(px: array[64, float64]): array[64, float64] =
+  ## Vectorized FDCT. Pass 2 accumulates products into a temp row that is
+  ## then summed in scalar order, preserving the exact accumulation.
+  var mid: array[64, float64]
+  let cosP = cast[ptr float64](addr JpegCosT[0][0])
+  let cfacP = cast[ptr float64](addr JpegCfac[0])
+  fdctPass1(cast[ptr float64](addr px[0]), cast[ptr float64](addr mid[0]),
+    cosP, cfacP)
+  fdctPass2(cast[ptr float64](addr mid[0]), cast[ptr float64](addr result[0]),
+    cosP, cfacP)

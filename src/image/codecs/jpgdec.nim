@@ -7,6 +7,7 @@ import ../color
 import ../error
 import ../buffer
 import ../dynamic
+import ../simd
 
 # ---------- zigzag (natural order -> index) computed from diagonals ----------
 
@@ -31,46 +32,10 @@ proc initZigzag() =
 
 initZigzag()
 
-# ---------- separable float DCT/IDCT via cosine table ----------
-
-var CosT {.global.}: array[8, array[8, float64]]
-var Cfac {.global.}: array[8, float64]
-
-proc initCos() =
-  for u in 0..7:
-    Cfac[u] = if u == 0: 0.3535533905932738 else: 0.5 # 1/sqrt(8), 1/2
-    for x in 0..7:
-      CosT[u][x] = cos((2.0 * float64(x) + 1.0) * float64(u) * PI / 16.0)
-
-initCos()
+# ---------- separable float DCT via shared JPEG tables (see image/simd) ----------
 
 proc idctBlock(coef: array[64, float64], qt: array[64, int]): array[64, uint8] =
-  var tmp: array[64, float64]
-  for i in 0..63: tmp[i] = coef[i] * float64(qt[i])
-  var mid: array[64, float64]
-  for y in 0..7:
-    for x in 0..7:
-      var s = 0.0
-      for u in 0..7: s += Cfac[u] * tmp[y*8+u] * CosT[u][x]
-      mid[y*8+x] = s
-  for y in 0..7:
-    for x in 0..7:
-      var s = 0.0
-      for v in 0..7: s += Cfac[v] * mid[v*8+x] * CosT[v][y]
-      result[y*8+x] = uint8(clamp(int(s + 128.5), 0, 255))
-
-proc fdctBlock(px: array[64, float64]): array[64, float64] =
-  var mid: array[64, float64]
-  for v in 0..7:
-    for x in 0..7:
-      var s = 0.0
-      for y in 0..7: s += px[y*8+x] * CosT[v][y]
-      mid[v*8+x] = s * Cfac[v]
-  for v in 0..7:
-    for u in 0..7:
-      var s = 0.0
-      for x in 0..7: s += mid[v*8+x] * CosT[u][x]
-      result[v*8+u] = s * Cfac[u]
+  idctBlockSimd(coef, qt)
 
 # ---------- bit reader with stuffed bytes ----------
 
