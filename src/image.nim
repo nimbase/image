@@ -14,6 +14,7 @@ import ./image/metadata as metadataApi
 import ./image/codecs/farbfeld as farbfeldApi
 import ./image/codecs/qoi as qoiApi
 import ./image/codecs/pnm as pnmApi
+import ./image/codecs/tga as tgaApi
 
 export colorApi
 export errorApi
@@ -30,3 +31,4 @@ export metadataApi
 export farbfeldApi
 export qoiApi
 export pnmApi
+export tgaApi
