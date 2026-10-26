@@ -1,6 +1,6 @@
 <p align="center">
   Pure-Nim image encoders and decoders<br>
-  <i>A Nim port of <code>image-rs/image</code>. No C bindings — only <code>pkg/zlib</code> for deflate.</i><br>
+  <i>A Nim port of <code>image-rs/image</code>. Pure Nim, no C bindings — deflate via the nimbase <code>archive</code> library.</i><br>
 </p>
 
 <p align="center">
@@ -174,7 +174,7 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 ## Roadmap
 
 - [x] Core: colors, buffers, `DynamicImage`, format detection, limits, errors
-- [x] Shared: `pkg/zlib` inflate/deflate, pure-Nim LZW (GIF/TIFF)
+- [x] Shared: `archive` library inflate/deflate/CRC32, pure-Nim LZW (GIF/TIFF)
 - [x] BMP (palette, bitfields, RLE4/RLE8)
 - [x] EXR scanline subset (NONE/RLE/ZIP/ZIPS, half/float/uint)
 - [x] Farbfeld

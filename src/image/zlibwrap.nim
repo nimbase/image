@@ -1,59 +1,43 @@
-## zlib helpers via pkg/zlib (allowed C dep) for PNG IDAT / TIFF deflate.
-import zlib/zlib_api
+## Deflate/inflate + CRC32 via the nimbase `archive` library (pure Nim).
+## Drop-in replacement for the former pkg/zlib C dependency.
+import archive/zlibf
+import archive/crc32
 import ../image/error
 
+proc bytesToString(data: openArray[uint8]): string =
+  result = newString(data.len)
+  if data.len > 0:
+    copyMem(addr result[0], unsafeAddr data[0], data.len)
+
+proc stringToBytes(s: string): seq[uint8] =
+  result = newSeq[uint8](s.len)
+  if s.len > 0:
+    copyMem(addr result[0], unsafeAddr s[0], s.len)
+
 proc inflateZlib*(data: openArray[uint8], expectedLen: int): ImageResult[seq[uint8]] =
-  var outLen = expectedLen
-  if outLen <= 0: outLen = data.len * 4 + 64
-  var output = newSeq[uint8](outLen)
-  var dstLen = culong(outLen)
-  let rc =
-    if data.len == 0: Z_BUF_ERROR
-    else:
-      uncompress(addr output[0], dstLen,
-        cast[ptr uint8](unsafeAddr data[0]), culong(data.len))
-  if rc != Z_OK:
-    return err[seq[uint8]](decodingError("zlib inflate failed: " & $rc))
-  output.setLen(int(dstLen))
-  ok(output)
+  ## `expectedLen` is advisory only; the archive backend grows its output.
+  try:
+    ok(stringToBytes(zlibDecompress(bytesToString(data))))
+  except CatchableError as e:
+    err[seq[uint8]](decodingError("inflate failed: " & e.msg))
 
 proc inflateZlibGrow*(data: openArray[uint8], maxOut = 256 * 1024 * 1024): ImageResult[seq[uint8]] =
-  ## Unknown output size: try doubling from 64KB.
-  var cap = 65536
-  while cap <= maxOut:
-    var output = newSeq[uint8](cap)
-    var dstLen = culong(cap)
-    let rc =
-      if data.len == 0: Z_BUF_ERROR
-      else:
-        uncompress(addr output[0], dstLen,
-          cast[ptr uint8](unsafeAddr data[0]), culong(data.len))
-    if rc == Z_OK:
-      output.setLen(int(dstLen))
-      return ok(output)
-    elif rc == Z_BUF_ERROR:
-      cap *= 2
-      continue
-    else:
-      return err[seq[uint8]](decodingError("zlib inflate failed: " & $rc))
-  err[seq[uint8]](limitError(lkInsufficientMemory, "zlib output exceeds limit"))
+  ## Unknown output size; `maxOut` caps the accepted result.
+  try:
+    let output = stringToBytes(zlibDecompress(bytesToString(data)))
+    if output.len > maxOut:
+      return err[seq[uint8]](limitError(lkInsufficientMemory,
+        "inflate output exceeds limit"))
+    ok(output)
+  except CatchableError as e:
+    err[seq[uint8]](decodingError("inflate failed: " & e.msg))
 
 proc deflateZlib*(data: openArray[uint8], level = 6): ImageResult[seq[uint8]] =
-  let bound = int(compressBound(culong(data.len)))
-  var output = newSeq[uint8](bound)
-  var dstLen = culong(bound)
-  let rc =
-    if data.len == 0:
-      var empty: uint8 = 0
-      compress2(addr output[0], dstLen, addr empty, 0, cint(level))
-    else:
-      compress2(addr output[0], dstLen,
-        cast[ptr uint8](unsafeAddr data[0]), culong(data.len), cint(level))
-  if rc != Z_OK:
-    return err[seq[uint8]](encodingError("zlib deflate failed: " & $rc))
-  output.setLen(int(dstLen))
-  ok(output)
+  try:
+    ok(stringToBytes(zlibCompress(bytesToString(data), level)))
+  except CatchableError as e:
+    err[seq[uint8]](encodingError("deflate failed: " & e.msg))
 
 func crc32raw*(data: openArray[uint8]): uint32 =
   if data.len == 0: return 0
-  uint32(crc32(0, cast[ptr uint8](unsafeAddr data[0]), cuint(data.len)))
+  crc32Checksum(data)

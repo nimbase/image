@@ -5,5 +5,4 @@ jobs:
     uses: nimbase/setup-nim-action/.github/workflows/test.yml@main
     with:
       nim-version: stable
-      os: '[{"os":"ubuntu-latest"},{"os":"ubuntu-24.04-arm"}]'
-      pre-install-command: 'sudo apt-get update && sudo apt-get install -y zlib1g-dev'
+      os: '[{"os":"ubuntu-latest"},{"os":"ubuntu-24.04-arm"},{"os":"macos-15"},{"os":"macos-15-intel"}]'
