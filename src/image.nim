@@ -16,6 +16,7 @@ import ./image/codecs/qoi as qoiApi
 import ./image/codecs/pnm as pnmApi
 import ./image/codecs/tga as tgaApi
 import ./image/codecs/hdr as hdrApi
+import ./image/codecs/bmp as bmpApi
 
 export colorApi
 export errorApi
@@ -34,3 +35,4 @@ export qoiApi
 export pnmApi
 export tgaApi
 export hdrApi
+export bmpApi
