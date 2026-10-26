@@ -18,6 +18,7 @@ import ./image/codecs/tga as tgaApi
 import ./image/codecs/hdr as hdrApi
 import ./image/codecs/bmp as bmpApi
 import ./image/codecs/gif as gifApi
+import ./image/codecs/png as pngApi
 
 export colorApi
 export errorApi
@@ -38,3 +39,4 @@ export tgaApi
 export hdrApi
 export bmpApi
 export gifApi
+export pngApi
