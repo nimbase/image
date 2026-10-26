@@ -171,6 +171,34 @@ let f = fromExtension("png")           # (found, fmtPng)
 let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 ```
 
+## Roadmap
+
+- [x] Core: colors, buffers, `DynamicImage`, format detection, limits, errors
+- [x] Shared: `pkg/zlib` inflate/deflate, pure-Nim LZW (GIF/TIFF)
+- [x] BMP (palette, bitfields, RLE4/RLE8)
+- [x] EXR scanline subset (NONE/RLE/ZIP/ZIPS, half/float/uint)
+- [x] Farbfeld
+- [x] GIF (animation, interlace, loop count)
+- [x] HDR (flat + new/old RLE)
+- [x] ICO (PNG + BMP payloads, AND mask)
+- [x] JPEG baseline (DCT, 4:4:4/4:2:2/4:2:0, encoder with quality 1–100)
+- [x] PNG (all color types, filters, Adam7, tRNS, CRC)
+- [x] PNM (P1–P6 + PAM)
+- [x] QOI (full opcode set)
+- [x] TGA (raw/RLE, colormaps, orientation)
+- [x] TIFF (strips/tiles, 4 compressions, YCbCr/CMYK/palette)
+- [x] WebP lossless VP8L (meta-Huffman, LZ77, all transforms; validated vs dwebp)
+- [x] AVIF color math (BT.601/709/2020 YCbCr, YCgCo-Re)
+- [ ] JPEG progressive decode (SOF2)
+- [ ] WebP lossy (VP8 bitstream) decode
+- [ ] EXR PIZ/PXR24/B44/DWAA + tiled/multipart
+- [ ] AVIF bitstream (requires an AV1 decoder)
+- [ ] JPEG XL (jxl)
+- [ ] JPEG 2000 (jp2)
+- [ ] HEIF/HEIC (ISOBMFF container + HEVC bitstream)
+- [ ] RAW (a family of formats, not one codec; often requires camera-specific metadata and processing)
+- [ ] `imageops` processing functions (blur, resize, rotate — excluded from v1)
+
 ### ❤ Contributions & Support
 - 🐛 Found a bug? [Create a new Issue](https://github.com/nimbase/{nimbase-repo-name}/issues)
 - 👋 Wanna help? [Fork it!](https://github.com/nimbase/{nimbase-repo-name}/fork)
