@@ -23,6 +23,7 @@ import ./image/codecs/tiff as tiffApi
 import ./image/codecs/ico as icoApi
 import ./image/codecs/jpeg as jpegApi
 import ./image/codecs/openexr as openexrApi
+import ./image/codecs/webp as webpApi
 
 export colorApi
 export errorApi
@@ -48,3 +49,4 @@ export tiffApi
 export icoApi
 export jpegApi
 export openexrApi
+export webpApi
