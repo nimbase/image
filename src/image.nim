@@ -15,6 +15,7 @@ import ./image/codecs/farbfeld as farbfeldApi
 import ./image/codecs/qoi as qoiApi
 import ./image/codecs/pnm as pnmApi
 import ./image/codecs/tga as tgaApi
+import ./image/codecs/hdr as hdrApi
 
 export colorApi
 export errorApi
@@ -32,3 +33,4 @@ export farbfeldApi
 export qoiApi
 export pnmApi
 export tgaApi
+export hdrApi
