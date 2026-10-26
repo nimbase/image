@@ -19,6 +19,7 @@ import ./image/codecs/hdr as hdrApi
 import ./image/codecs/bmp as bmpApi
 import ./image/codecs/gif as gifApi
 import ./image/codecs/png as pngApi
+import ./image/codecs/tiff as tiffApi
 
 export colorApi
 export errorApi
@@ -40,3 +41,4 @@ export hdrApi
 export bmpApi
 export gifApi
 export pngApi
+export tiffApi
