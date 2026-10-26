@@ -197,6 +197,8 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [ ] JPEG 2000 (jp2)
 - [ ] HEIF/HEIC (ISOBMFF container + HEVC bitstream)
 - [ ] RAW (a family of formats, not one codec; often requires camera-specific metadata and processing)
+- [x] SIMD: PNG Up filter via nimsimd (auto-dispatch SSE2/AVX2/NEON, scalar fallback)
+- [ ] SIMD: PNG Average/Paeth/Sub, JPEG IDCT, YUV batches
 - [ ] `imageops` processing functions (blur, resize, rotate — excluded from v1)
 
 ### ❤ Contributions & Support

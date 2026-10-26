@@ -6,6 +6,7 @@ import ../error
 import ../buffer
 import ../dynamic
 import ../zlibwrap
+import ../simd
 
 const PngSig* = [137'u8, 80, 78, 71, 13, 10, 26, 10]
 
@@ -24,34 +25,6 @@ proc chunkCrc*(typ: array[4, uint8], data: openArray[uint8]): uint32 =
   for i in 0..3: buf[i] = typ[i]
   for i, b in data: buf[4+i] = b
   crc32raw(buf)
-
-proc paeth(a, b, c: int): int =
-  let p = a + b - c
-  let pa = abs(p - a); let pb = abs(p - b); let pc = abs(p - c)
-  if pa <= pb and pa <= pc: a elif pb <= pc: b else: c
-
-proc unfilterRow(filter: uint8, cur, prev: var seq[uint8], bpp: int): bool =
-  case filter
-  of 0: true
-  of 1: # Sub
-    for i in bpp..<cur.len: cur[i] = uint8((int(cur[i]) + int(cur[i-bpp])) and 0xFF)
-    true
-  of 2: # Up
-    for i in 0..<cur.len: cur[i] = uint8((int(cur[i]) + int(prev[i])) and 0xFF)
-    true
-  of 3: # Average
-    for i in 0..<cur.len:
-      let a = if i >= bpp: int(cur[i-bpp]) else: 0
-      cur[i] = uint8((int(cur[i]) + (a + int(prev[i])) div 2) and 0xFF)
-    true
-  of 4: # Paeth
-    for i in 0..<cur.len:
-      let a = if i >= bpp: int(cur[i-bpp]) else: 0
-      let b = int(prev[i])
-      let c = if i >= bpp: int(prev[i-bpp]) else: 0
-      cur[i] = uint8((int(cur[i]) + paeth(a, b, c)) and 0xFF)
-    true
-  else: false
 
 proc bitVal(row: openArray[uint8], bitpos: int): int =
   int((row[bitpos div 8] shr uint8(7 - (bitpos mod 8))) and 1)
@@ -278,7 +251,7 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
         return err[DynamicImage](decodingError("png: truncated IDAT"))
       let f = inflated[p]; inc(p)
       var cur = inflated[p..<p+rowBytes]; p += rowBytes
-      if not unfilterRow(f, cur, prev, fbpp):
+      if not simdUnfilterRow(f, cur, prev, fbpp):
         return err[DynamicImage](decodingError("png: bad filter"))
       for i in 0..<rowBytes: rawRows[y*rowBytes+i] = cur[i]
       prev = cur
@@ -316,7 +289,7 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
           return err[DynamicImage](decodingError("png: truncated Adam7"))
         let f = inflated[p]; inc(p)
         var cur = inflated[p..<p+rowBytes]; p += rowBytes
-        if not unfilterRow(f, cur, prev, fbpp):
+        if not simdUnfilterRow(f, cur, prev, fbpp):
           return err[DynamicImage](decodingError("png: bad filter"))
         for i in 0..<rowBytes: passRows[y*rowBytes+i] = cur[i]
         prev = cur

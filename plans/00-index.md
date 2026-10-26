@@ -18,6 +18,7 @@ Constraints (user-confirmed):
   scope). Only minimal `math.Rect` + `metadata` needed by codecs are in scope.
   See `06-excluded-imageops.md`.
 - `07-testing-release.md` — testing, fuzz, benches, CI, nimble tasks.
+- `08-simd-acceleration.md` — runtime-dispatched SIMD via nimsimd (PNG first).
 
 ## Proposed Nim module tree
 
