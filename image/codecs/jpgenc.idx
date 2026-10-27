@@ -1,0 +1,2 @@
+nimTitle	jpgenc	image/codecs/jpgenc.html	module image/codecs/jpgenc		0
+nim	encodeJpeg	image/codecs/jpgenc.html#encodeJpeg,DynamicImage,int	proc encodeJpeg(img: DynamicImage; quality = 90; subsample = true): ImageResult[\n    seq[uint8]]		163

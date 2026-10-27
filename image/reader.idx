@@ -1,0 +1,2 @@
+nimTitle	reader	image/reader.html	module image/reader		0
+nim	guessFormat	image/reader.html#guessFormat,openArray[uint8]	proc guessFormat(data: openArray[uint8]): tuple[found: bool, f: ImageFormat]		8

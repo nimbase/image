@@ -1,0 +1,12 @@
+nimTitle	gif	image/codecs/gif.html	module image/codecs/gif		0
+nim	gdNone	image/codecs/gif.html#gdNone	GifDisposal.gdNone		13
+nim	gdKeep	image/codecs/gif.html#gdKeep	GifDisposal.gdKeep		13
+nim	gdBackground	image/codecs/gif.html#gdBackground	GifDisposal.gdBackground		13
+nim	gdPrevious	image/codecs/gif.html#gdPrevious	GifDisposal.gdPrevious		13
+nim	GifDisposal	image/codecs/gif.html#GifDisposal	enum GifDisposal		13
+nim	GifFrame	image/codecs/gif.html#GifFrame	object GifFrame		16
+nim	GifImage	image/codecs/gif.html#GifImage	object GifImage		25
+nim	decodeGif	image/codecs/gif.html#decodeGif,seq[uint8]	proc decodeGif(data: seq[uint8]): ImageResult[GifImage]		39
+nim	gifFrameToRgba	image/codecs/gif.html#gifFrameToRgba,GifImage,int	proc gifFrameToRgba(img: GifImage; fi: int): ImageResult[RgbaImage]		168
+nim	gifFirstToRgba	image/codecs/gif.html#gifFirstToRgba,seq[uint8]	proc gifFirstToRgba(data: seq[uint8]): ImageResult[RgbaImage]		187
+nim	encodeGif	image/codecs/gif.html#encodeGif,seq[seq[uint8]],uint16,uint16,seq[tuple[uint8,uint8,uint8]],seq[uint16]	proc encodeGif(frames: seq[seq[uint8]]; width, height: uint16;\n          palette: seq[tuple[r, g, b: uint8]]; delaysCs: seq[uint16] = @[]): seq[\n    uint8]		192

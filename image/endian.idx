@@ -1,0 +1,11 @@
+nimTitle	endian	image/endian.html	module image/endian		0
+nim	readU16BE	image/endian.html#readU16BE,Stream	proc readU16BE(s: Stream): uint16		4
+nim	readU16LE	image/endian.html#readU16LE,Stream	proc readU16LE(s: Stream): uint16		9
+nim	readU32BE	image/endian.html#readU32BE,Stream	proc readU32BE(s: Stream): uint32		14
+nim	readU32LE	image/endian.html#readU32LE,Stream	proc readU32LE(s: Stream): uint32		20
+nim	writeU16BE	image/endian.html#writeU16BE,Stream,uint16	proc writeU16BE(s: Stream; v: uint16)		26
+nim	writeU16LE	image/endian.html#writeU16LE,Stream,uint16	proc writeU16LE(s: Stream; v: uint16)		32
+nim	writeU32BE	image/endian.html#writeU32BE,Stream,uint32	proc writeU32BE(s: Stream; v: uint32)		38
+nim	writeU32LE	image/endian.html#writeU32LE,Stream,uint32	proc writeU32LE(s: Stream; v: uint32)		46
+nim	u16BE	image/endian.html#u16BE,openArray[uint8],int	proc u16BE(data: openArray[uint8]; off = 0): uint16		54
+nim	u32BE	image/endian.html#u32BE,openArray[uint8],int	proc u32BE(data: openArray[uint8]; off = 0): uint32		57

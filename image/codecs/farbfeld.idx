@@ -1,0 +1,9 @@
+nimTitle	farbfeld	image/codecs/farbfeld.html	module image/codecs/farbfeld		0
+nim	FarbfeldMagic	image/codecs/farbfeld.html#FarbfeldMagic	const FarbfeldMagic		10
+nim	FarbfeldDecoder	image/codecs/farbfeld.html#FarbfeldDecoder	object FarbfeldDecoder		13
+nim	FarbfeldEncoder	image/codecs/farbfeld.html#FarbfeldEncoder	object FarbfeldEncoder		17
+nim	prepareFarbfeld	image/codecs/farbfeld.html#prepareFarbfeld,Stream	proc prepareFarbfeld(s: Stream): ImageResult[DecoderPreparedImage]		20
+nim	readFarbfeldImage	image/codecs/farbfeld.html#readFarbfeldImage,Stream,openArray[uint8],uint32,uint32	proc readFarbfeldImage(s: Stream; buf: var openArray[uint8]; w, h: uint32): ImageResult[\n    DecodedImageAttributes]		28
+nim	writeFarbfeld	image/codecs/farbfeld.html#writeFarbfeld,Stream,openArray[uint8],uint32,uint32,ExtendedColorType	proc writeFarbfeld(s: Stream; buf: openArray[uint8]; w, h: uint32;\n              color: ExtendedColorType): ImageResult[bool]		39
+nim	decodeFarbfeld	image/codecs/farbfeld.html#decodeFarbfeld,seq[uint8]	proc decodeFarbfeld(data: seq[uint8]): ImageResult[Rgba16Image]		53
+nim	encodeFarbfeld	image/codecs/farbfeld.html#encodeFarbfeld,Rgba16Image	proc encodeFarbfeld(img: Rgba16Image): seq[uint8]		75

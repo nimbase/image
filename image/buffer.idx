@@ -1,0 +1,21 @@
+nimTitle	buffer	image/buffer.html	module image/buffer		0
+nim	ImageBuffer	image/buffer.html#ImageBuffer	object ImageBuffer		7
+nim	GrayImage	image/buffer.html#GrayImage	type GrayImage		12
+nim	GrayAlphaImage	image/buffer.html#GrayAlphaImage	type GrayAlphaImage		13
+nim	RgbImage	image/buffer.html#RgbImage	type RgbImage		14
+nim	RgbaImage	image/buffer.html#RgbaImage	type RgbaImage		15
+nim	Gray16Image	image/buffer.html#Gray16Image	type Gray16Image		16
+nim	GrayAlpha16Image	image/buffer.html#GrayAlpha16Image	type GrayAlpha16Image		17
+nim	Rgb16Image	image/buffer.html#Rgb16Image	type Rgb16Image		18
+nim	Rgba16Image	image/buffer.html#Rgba16Image	type Rgba16Image		19
+nim	Gray32FImage	image/buffer.html#Gray32FImage	type Gray32FImage		20
+nim	GrayAlpha32FImage	image/buffer.html#GrayAlpha32FImage	type GrayAlpha32FImage		21
+nim	Rgb32FImage	image/buffer.html#Rgb32FImage	type Rgb32FImage		22
+nim	Rgba32FImage	image/buffer.html#Rgba32FImage	type Rgba32FImage		23
+nim	newImageBuffer	image/buffer.html#newImageBuffer,uint32,uint32,P	proc newImageBuffer[P](w, h: uint32; fill: P): ImageBuffer[P]		25
+nim	fromRaw	image/buffer.html#fromRaw,uint32,uint32,seq[P]	proc fromRaw[P](w, h: uint32; buf: seq[P]): tuple[ok: bool, img: ImageBuffer[P]]		28
+nim	dimensions	image/buffer.html#dimensions,ImageBuffer[P]	proc dimensions[P](img: ImageBuffer[P]): tuple[w, h: uint32]		34
+nim	inBounds	image/buffer.html#inBounds,ImageBuffer[P],uint32,uint32	proc inBounds[P](img: ImageBuffer[P]; x, y: uint32): bool		37
+nim	getPixel	image/buffer.html#getPixel,ImageBuffer[P],uint32,uint32	proc getPixel[P](img: ImageBuffer[P]; x, y: uint32): P		40
+nim	putPixel	image/buffer.html#putPixel,ImageBuffer[P],uint32,uint32,P	proc putPixel[P](img: var ImageBuffer[P]; x, y: uint32; p: P)		43
+nim	cropInPlace	image/buffer.html#cropInPlace,ImageBuffer[P],Rect	proc cropInPlace[P](img: var ImageBuffer[P]; r: Rect)		46

@@ -1,0 +1,8 @@
+nimTitle	hdr	image/codecs/hdr.html	module image/codecs/hdr		0
+nim	HdrSignature	image/codecs/hdr.html#HdrSignature	const HdrSignature		10
+nim	Rgbe	image/codecs/hdr.html#Rgbe	tuple Rgbe		12
+nim	rgbeToHdr	image/codecs/hdr.html#rgbeToHdr,Rgbe	proc rgbeToHdr(p: Rgbe): Rgb[float32]		14
+nim	hdrToRgbe	image/codecs/hdr.html#hdrToRgbe,float32,float32,float32	proc hdrToRgbe(r, g, b: float32): Rgbe		23
+nim	decodeHdr	image/codecs/hdr.html#decodeHdr,seq[uint8]	proc decodeHdr(data: seq[uint8]): ImageResult[Rgb32FImage]		36
+nim	encodeHdr	image/codecs/hdr.html#encodeHdr,Rgb32FImage	proc encodeHdr(img: Rgb32FImage): seq[uint8]		189
+nim	encodeHdrFlat	image/codecs/hdr.html#encodeHdrFlat,Rgb32FImage	proc encodeHdrFlat(img: Rgb32FImage): seq[uint8]		215

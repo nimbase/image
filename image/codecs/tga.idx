@@ -1,0 +1,5 @@
+nimTitle	tga	image/codecs/tga.html	module image/codecs/tga		0
+nim	TgaHeader	image/codecs/tga.html#TgaHeader	object TgaHeader		8
+nim	decodeTga	image/codecs/tga.html#decodeTga,seq[uint8]	proc decodeTga(data: seq[uint8]): ImageResult[DynamicImage]		40
+nim	encodeTgaRgb8	image/codecs/tga.html#encodeTgaRgb8,RgbImage	proc encodeTgaRgb8(img: RgbImage): seq[uint8]		229
+nim	encodeTgaRgba8	image/codecs/tga.html#encodeTgaRgba8,RgbaImage	proc encodeTgaRgba8(img: RgbaImage): seq[uint8]		241

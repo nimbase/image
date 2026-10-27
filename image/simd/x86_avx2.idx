@@ -1,0 +1,7 @@
+nimTitle	x86_avx2	image/simd/x86_avx2.html	module image/simd/x86_avx2		0
+nim	upRowAvx2	image/simd/x86_avx2.html#upRowAvx2,ptr.uint8,ptr.uint8,int	proc upRowAvx2(curP, prevP: ptr uint8; n32: int)		12
+nim	ycbcrRowAvx	image/simd/x86_avx2.html#ycbcrRowAvx,ptr.uint8,ptr.uint8,ptr.uint8,ptr.uint8,int	proc ycbcrRowAvx(yP, cbP, crP, rgbP: ptr uint8; n4: int)		25
+nim	idctPass1Avx	image/simd/x86_avx2.html#idctPass1Avx,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc idctPass1Avx(tmpP, midP, cosP, cfacP: ptr float64)		59
+nim	idctPass2Avx	image/simd/x86_avx2.html#idctPass2Avx,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc idctPass2Avx(midP, outP, cosP, cfacP: ptr float64)		71
+nim	fdctPass1Avx	image/simd/x86_avx2.html#fdctPass1Avx,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc fdctPass1Avx(pxP, midP, cosP, cfacP: ptr float64)		85
+nim	fdctPass2Avx	image/simd/x86_avx2.html#fdctPass2Avx,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc fdctPass2Avx(midP, resP, cosP, cfacP: ptr float64)		103

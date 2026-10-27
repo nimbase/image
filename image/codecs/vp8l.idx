@@ -1,0 +1,5 @@
+nimTitle	vp8l	image/codecs/vp8l.html	module image/codecs/vp8l		0
+nim	decodeVp8l	image/codecs/vp8l.html#decodeVp8l,seq[uint8],int,int	proc decodeVp8l(payload: seq[uint8]; wantW, wantH: int): ImageResult[RgbaImage]		548
+nim	decodeWebp	image/codecs/vp8l.html#decodeWebp,seq[uint8]	proc decodeWebp(data: seq[uint8]): ImageResult[DynamicImage]		698
+nim	encodeVp8l	image/codecs/vp8l.html#encodeVp8l,RgbaImage	proc encodeVp8l(img: RgbaImage): seq[uint8]		897
+nim	encodeWebp	image/codecs/vp8l.html#encodeWebp,DynamicImage	proc encodeWebp(img: DynamicImage): ImageResult[seq[uint8]]		948

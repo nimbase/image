@@ -1,0 +1,8 @@
+nimTitle	animation	image/animation.html	module image/animation		0
+nim	LoopCount	image/animation.html#LoopCount	object LoopCount		5
+nim	infiniteLoop	image/animation.html#infiniteLoop	proc infiniteLoop(): LoopCount		10
+nim	finiteLoop	image/animation.html#finiteLoop,uint16	proc finiteLoop(n: uint16): LoopCount		11
+nim	Delay	image/animation.html#Delay	object Delay		14
+nim	delayMs	image/animation.html#delayMs,uint32	proc delayMs(ms: uint32): Delay		17
+nim	toMs	image/animation.html#toMs,Delay	proc toMs(d: Delay): uint32		19
+nim	Frame	image/animation.html#Frame	object Frame		23

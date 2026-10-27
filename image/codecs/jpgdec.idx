@@ -1,0 +1,2 @@
+nimTitle	jpgdec	image/codecs/jpgdec.html	module image/codecs/jpgdec		0
+nim	decodeJpeg	image/codecs/jpgdec.html#decodeJpeg,seq[uint8]	proc decodeJpeg(data: seq[uint8]): ImageResult[DynamicImage]		123

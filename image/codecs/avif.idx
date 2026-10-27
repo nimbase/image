@@ -1,0 +1,18 @@
+nimTitle	avif	image/codecs/avif.html	module image/codecs/avif		0
+nim	ymBT601	image/codecs/avif.html#ymBT601	YuvMatrix.ymBT601		14
+nim	ymBT709	image/codecs/avif.html#ymBT709	YuvMatrix.ymBT709		14
+nim	ymBT2020	image/codecs/avif.html#ymBT2020	YuvMatrix.ymBT2020		14
+nim	YuvMatrix	image/codecs/avif.html#YuvMatrix	enum YuvMatrix		14
+nim	yrLimited	image/codecs/avif.html#yrLimited	YuvRange.yrLimited		19
+nim	yrFull	image/codecs/avif.html#yrFull	YuvRange.yrFull		19
+nim	YuvRange	image/codecs/avif.html#YuvRange	enum YuvRange		19
+nim	krKb	image/codecs/avif.html#krKb,YuvMatrix	proc krKb(m: YuvMatrix): tuple[kr, kb: float64]		23
+nim	yuvToRgbPixel	image/codecs/avif.html#yuvToRgbPixel,uint8,uint8,uint8,YuvMatrix,YuvRange	proc yuvToRgbPixel(y, cb, cr: uint8; m: YuvMatrix; r: YuvRange): tuple[r, g, b: uint8]		29
+nim	rgbToYuvPixel	image/codecs/avif.html#rgbToYuvPixel,uint8,uint8,uint8,YuvMatrix,YuvRange	proc rgbToYuvPixel(rr, gg, bb: uint8; m: YuvMatrix; r: YuvRange): tuple[\n    y, cb, cr: uint8]		47
+nim	yuv444ToRgb	image/codecs/avif.html#yuv444ToRgb,seq[uint8],seq[uint8],seq[uint8],int,int,YuvMatrix,YuvRange	proc yuv444ToRgb(y, u, v: seq[uint8]; width, height: int; m: YuvMatrix; r: YuvRange): RgbImage		64
+nim	yuv420ToRgb	image/codecs/avif.html#yuv420ToRgb,seq[uint8],seq[uint8],seq[uint8],int,int,YuvMatrix,YuvRange	proc yuv420ToRgb(y: seq[uint8]; u, v: seq[uint8]; width, height: int; m: YuvMatrix;\n            r: YuvRange): RgbImage		74
+nim	yuv422ToRgb	image/codecs/avif.html#yuv422ToRgb,seq[uint8],seq[uint8],seq[uint8],int,int,YuvMatrix,YuvRange	proc yuv422ToRgb(y: seq[uint8]; u, v: seq[uint8]; width, height: int; m: YuvMatrix;\n            r: YuvRange): RgbImage		88
+nim	ycgcoReForward	image/codecs/avif.html#ycgcoReForward,int,int,int	proc ycgcoReForward(r, g, b: int): tuple[y, cg, co: int]		101
+nim	ycgcoReInverse	image/codecs/avif.html#ycgcoReInverse,int,int,int	proc ycgcoReInverse(y, cg, co: int): tuple[r, g, b: int]		108
+nim	decodeAvif	image/codecs/avif.html#decodeAvif,seq[uint8]	proc decodeAvif(data: seq[uint8]): ImageResult[DynamicImage]		114
+nim	encodeAvif	image/codecs/avif.html#encodeAvif,DynamicImage	proc encodeAvif(img: DynamicImage): ImageResult[seq[uint8]]		121

@@ -1,0 +1,14 @@
+nimTitle	pnm	image/codecs/pnm.html	module image/codecs/pnm		0
+nim	peAscii	image/codecs/pnm.html#peAscii	PnmEncoding.peAscii		10
+nim	peBinary	image/codecs/pnm.html#peBinary	PnmEncoding.peBinary		10
+nim	PnmEncoding	image/codecs/pnm.html#PnmEncoding	enum PnmEncoding		10
+nim	psBitmap	image/codecs/pnm.html#psBitmap	PnmSubtype.psBitmap		11
+nim	psGraymap	image/codecs/pnm.html#psGraymap	PnmSubtype.psGraymap		11
+nim	psPixmap	image/codecs/pnm.html#psPixmap	PnmSubtype.psPixmap		11
+nim	psArbitrary	image/codecs/pnm.html#psArbitrary	PnmSubtype.psArbitrary		11
+nim	PnmSubtype	image/codecs/pnm.html#PnmSubtype	enum PnmSubtype		11
+nim	PnmHeader	image/codecs/pnm.html#PnmHeader	object PnmHeader		13
+nim	parsePnmHeader	image/codecs/pnm.html#parsePnmHeader,openArray[uint8]	proc parsePnmHeader(data: openArray[uint8]): ImageResult[\n    tuple[h: PnmHeader, bodyOff: int]]		40
+nim	decodePnm	image/codecs/pnm.html#decodePnm,seq[uint8]	proc decodePnm(data: seq[uint8]): ImageResult[DynamicImage]		102
+nim	encodePnmGray8	image/codecs/pnm.html#encodePnmGray8,GrayImage	proc encodePnmGray8(img: GrayImage): seq[uint8]		218
+nim	encodePnmRgb8	image/codecs/pnm.html#encodePnmRgb8,RgbImage	proc encodePnmRgb8(img: RgbImage): seq[uint8]		224

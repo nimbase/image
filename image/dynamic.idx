@@ -1,0 +1,20 @@
+nimTitle	dynamic	image/dynamic.html	module image/dynamic		0
+nim	dkLuma8	image/dynamic.html#dkLuma8	DynamicKind.dkLuma8		9
+nim	dkLumaA8	image/dynamic.html#dkLumaA8	DynamicKind.dkLumaA8		9
+nim	dkRgb8	image/dynamic.html#dkRgb8	DynamicKind.dkRgb8		9
+nim	dkRgba8	image/dynamic.html#dkRgba8	DynamicKind.dkRgba8		9
+nim	dkLuma16	image/dynamic.html#dkLuma16	DynamicKind.dkLuma16		9
+nim	dkLumaA16	image/dynamic.html#dkLumaA16	DynamicKind.dkLumaA16		9
+nim	dkRgb16	image/dynamic.html#dkRgb16	DynamicKind.dkRgb16		9
+nim	dkRgba16	image/dynamic.html#dkRgba16	DynamicKind.dkRgba16		9
+nim	dkLuma32F	image/dynamic.html#dkLuma32F	DynamicKind.dkLuma32F		9
+nim	dkLumaA32F	image/dynamic.html#dkLumaA32F	DynamicKind.dkLumaA32F		9
+nim	dkRgb32F	image/dynamic.html#dkRgb32F	DynamicKind.dkRgb32F		9
+nim	dkRgba32F	image/dynamic.html#dkRgba32F	DynamicKind.dkRgba32F		9
+nim	DynamicKind	image/dynamic.html#DynamicKind	enum DynamicKind		9
+nim	DynamicImage	image/dynamic.html#DynamicImage	object DynamicImage		14
+nim	color	image/dynamic.html#color,DynamicImage	proc color(img: DynamicImage): ColorType		29
+nim	dimensions	image/dynamic.html#dimensions,DynamicImage	proc dimensions(img: DynamicImage): tuple[w, h: uint32]		44
+nim	toRgba8	image/dynamic.html#toRgba8,DynamicImage	proc toRgba8(img: DynamicImage): RgbaImage		59
+nim	toRgb8	image/dynamic.html#toRgb8,DynamicImage	proc toRgb8(img: DynamicImage): RgbImage		78
+nim	toLuma8	image/dynamic.html#toLuma8,DynamicImage	proc toLuma8(img: DynamicImage): GrayImage		90

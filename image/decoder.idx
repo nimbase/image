@@ -1,0 +1,11 @@
+nimTitle	decoder	image/decoder.html	module image/decoder		0
+nim	mhUnsupported	image/decoder.html#mhUnsupported	DecodedMetadataHint.mhUnsupported		11
+nim	mhInHeader	image/decoder.html#mhInHeader	DecodedMetadataHint.mhInHeader		11
+nim	mhPerImage	image/decoder.html#mhPerImage	DecodedMetadataHint.mhPerImage		11
+nim	mhNone	image/decoder.html#mhNone	DecodedMetadataHint.mhNone		11
+nim	DecodedMetadataHint	image/decoder.html#DecodedMetadataHint	enum DecodedMetadataHint		11
+nim	FormatAttributes	image/decoder.html#FormatAttributes	object FormatAttributes		17
+nim	DecodedAnimationAttributes	image/decoder.html#DecodedAnimationAttributes	object DecodedAnimationAttributes		25
+nim	DecodedImageAttributes	image/decoder.html#DecodedImageAttributes	object DecodedImageAttributes		28
+nim	defaultFormatAttributes	image/decoder.html#defaultFormatAttributes	proc defaultFormatAttributes(): FormatAttributes		34
+nim	defaultImageAttributes	image/decoder.html#defaultImageAttributes	proc defaultImageAttributes(): DecodedImageAttributes		35

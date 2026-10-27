@@ -1,0 +1,19 @@
+nimTitle	simd	image/simd.html	module image/simd		0
+nim	useAvx2	image/simd.html#useAvx2	let useAvx2		22
+nim	useNeon	image/simd.html#useNeon	let useNeon		30
+nim	paeth	image/simd.html#paeth,int,int,int	proc paeth(a, b, c: int): int		32
+nim	ycbcrToRgb	image/simd.html#ycbcrToRgb,uint8,uint8,uint8	proc ycbcrToRgb(y, cb, cr: uint8): tuple[r, g, b: uint8]		37
+nim	ycbcrRowScalar	image/simd.html#ycbcrRowScalar,ptr.uint8,ptr.uint8,ptr.uint8,ptr.uint8,int	proc ycbcrRowScalar(yP, cbP, crP, rgbP: ptr uint8; n: int)		48
+nim	ycbcrRowSimd	image/simd.html#ycbcrRowSimd,ptr.uint8,ptr.uint8,ptr.uint8,ptr.uint8,int	proc ycbcrRowSimd(yP, cbP, crP, rgbP: ptr uint8; n: int)		58
+nim	unfilterRowScalar	image/simd.html#unfilterRowScalar,uint8,seq[uint8],seq[uint8],int	proc unfilterRowScalar(filter: uint8; cur, prev: var seq[uint8]; bpp: int): bool		98
+nim	simdUnfilterRow	image/simd.html#simdUnfilterRow,uint8,seq[uint8],seq[uint8],int	proc simdUnfilterRow(filter: uint8; cur, prev: var seq[uint8]; bpp: int): bool		123
+nim	JpegCosT	image/simd.html#JpegCosT	var JpegCosT		162
+nim	JpegCfac	image/simd.html#JpegCfac	var JpegCfac		163
+nim	idctPass1	image/simd.html#idctPass1,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc idctPass1(tmpP, midP, cosP, cfacP: ptr float64)		176
+nim	idctPass2	image/simd.html#idctPass2,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc idctPass2(midP, outP, cosP, cfacP: ptr float64)		190
+nim	fdctPass1	image/simd.html#fdctPass1,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc fdctPass1(pxP, midP, cosP, cfacP: ptr float64)		206
+nim	fdctPass2	image/simd.html#fdctPass2,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc fdctPass2(midP, resP, cosP, cfacP: ptr float64)		223
+nim	idctBlockScalar	image/simd.html#idctBlockScalar,array[,float64],array[,int]	proc idctBlockScalar(coef: array[64, float64]; qt: array[64, int]): array[64, uint8]		242
+nim	idctBlockSimd	image/simd.html#idctBlockSimd,array[,float64],array[,int]	proc idctBlockSimd(coef: array[64, float64]; qt: array[64, int]): array[64, uint8]		260
+nim	fdctBlockScalar	image/simd.html#fdctBlockScalar,array[,float64]	proc fdctBlockScalar(px: array[64, float64]): array[64, float64]		277
+nim	fdctBlockSimd	image/simd.html#fdctBlockSimd,array[,float64]	proc fdctBlockSimd(px: array[64, float64]): array[64, float64]		291

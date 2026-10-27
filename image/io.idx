@@ -1,0 +1,9 @@
+nimTitle	io	image/io.html	module image/io		0
+nim	ImageLayout	image/io.html#ImageLayout	object ImageLayout		6
+nim	DecoderPreparedImage	image/io.html#DecoderPreparedImage	object DecoderPreparedImage		11
+nim	initLayout	image/io.html#initLayout,uint32,uint32,ColorType	proc initLayout(w, h: uint32; c: ColorType): ImageLayout		14
+nim	dimensions	image/io.html#dimensions,ImageLayout	proc dimensions(l: ImageLayout): tuple[w, h: uint32]		17
+nim	totalBytes	image/io.html#totalBytes,ImageLayout	proc totalBytes(l: ImageLayout): uint64		19
+nim	totalBytes	image/io.html#totalBytes,DecoderPreparedImage	proc totalBytes(p: DecoderPreparedImage): uint64		28
+nim	initPrepared	image/io.html#initPrepared,uint32,uint32,ColorType	proc initPrepared(w, h: uint32; c: ColorType): DecoderPreparedImage		30
+nimgrp	totalbytes	image/io.html#totalBytes-procs-all	proc		19

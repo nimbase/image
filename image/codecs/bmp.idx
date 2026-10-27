@@ -1,0 +1,9 @@
+nimTitle	bmp	image/codecs/bmp.html	module image/codecs/bmp		0
+nim	BiRgb	image/codecs/bmp.html#BiRgb	const BiRgb		11
+nim	BiRle8	image/codecs/bmp.html#BiRle8	const BiRle8		12
+nim	BiRle4	image/codecs/bmp.html#BiRle4	const BiRle4		13
+nim	BiBitfields	image/codecs/bmp.html#BiBitfields	const BiBitfields		14
+nim	BiAlphaBitfields	image/codecs/bmp.html#BiAlphaBitfields	const BiAlphaBitfields		15
+nim	decodeBmp	image/codecs/bmp.html#decodeBmp,seq[uint8]	proc decodeBmp(data: seq[uint8]): ImageResult[DynamicImage]		41
+nim	encodeBmpRgb8	image/codecs/bmp.html#encodeBmpRgb8,RgbImage	proc encodeBmpRgb8(img: RgbImage): seq[uint8]		319
+nim	encodeBmpRgba8	image/codecs/bmp.html#encodeBmpRgba8,RgbaImage	proc encodeBmpRgba8(img: RgbaImage): seq[uint8]		344

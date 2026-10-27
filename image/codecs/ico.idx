@@ -1,0 +1,6 @@
+nimTitle	ico	image/codecs/ico.html	module image/codecs/ico		0
+nim	IcoEntry	image/codecs/ico.html#IcoEntry	object IcoEntry		12
+nim	decodeBmpIcoPayload	image/codecs/ico.html#decodeBmpIcoPayload,seq[uint8]	proc decodeBmpIcoPayload(payload: seq[uint8]): ImageResult[DynamicImage]		47
+nim	decodeIcoAll	image/codecs/ico.html#decodeIcoAll,seq[uint8]	proc decodeIcoAll(data: seq[uint8]): ImageResult[seq[DynamicImage]]		162
+nim	decodeIco	image/codecs/ico.html#decodeIco,seq[uint8]	proc decodeIco(data: seq[uint8]): ImageResult[DynamicImage]		174
+nim	encodeIco	image/codecs/ico.html#encodeIco,seq[DynamicImage]	proc encodeIco(images: seq[DynamicImage]): ImageResult[seq[uint8]]		184

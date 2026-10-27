@@ -1,0 +1,23 @@
+nimTitle	metadata	image/metadata.html	module image/metadata		0
+nim	cpUnknown	image/metadata.html#cpUnknown	CicpPrimaries.cpUnknown		3
+nim	cpSRGB	image/metadata.html#cpSRGB	CicpPrimaries.cpSRGB		3
+nim	cpBT2020	image/metadata.html#cpBT2020	CicpPrimaries.cpBT2020		3
+nim	cpDisplayP3	image/metadata.html#cpDisplayP3	CicpPrimaries.cpDisplayP3		3
+nim	CicpPrimaries	image/metadata.html#CicpPrimaries	enum CicpPrimaries		3
+nim	ctUnknown	image/metadata.html#ctUnknown	CicpTransfer.ctUnknown		9
+nim	ctSRGB	image/metadata.html#ctSRGB	CicpTransfer.ctSRGB		9
+nim	ctLinear	image/metadata.html#ctLinear	CicpTransfer.ctLinear		9
+nim	ctPQ	image/metadata.html#ctPQ	CicpTransfer.ctPQ		9
+nim	ctHLG	image/metadata.html#ctHLG	CicpTransfer.ctHLG		9
+nim	CicpTransfer	image/metadata.html#CicpTransfer	enum CicpTransfer		9
+nim	Cicp	image/metadata.html#Cicp	object Cicp		16
+nim	orNormal	image/metadata.html#orNormal	Orientation.orNormal		22
+nim	orMirrorH	image/metadata.html#orMirrorH	Orientation.orMirrorH		22
+nim	orRotate180	image/metadata.html#orRotate180	Orientation.orRotate180		22
+nim	orMirrorV	image/metadata.html#orMirrorV	Orientation.orMirrorV		22
+nim	orMirrorHRotate270	image/metadata.html#orMirrorHRotate270	Orientation.orMirrorHRotate270		22
+nim	orRotate90	image/metadata.html#orRotate90	Orientation.orRotate90		22
+nim	orMirrorHRotate90	image/metadata.html#orMirrorHRotate90	Orientation.orMirrorHRotate90		22
+nim	orRotate270	image/metadata.html#orRotate270	Orientation.orRotate270		22
+nim	Orientation	image/metadata.html#Orientation	enum Orientation		22
+nim	defaultCicp	image/metadata.html#defaultCicp	proc defaultCicp(): Cicp		32

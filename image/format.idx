@@ -1,0 +1,22 @@
+nimTitle	format	image/format.html	module image/format		0
+nim	fmtPng	image/format.html#fmtPng	ImageFormat.fmtPng		7
+nim	fmtJpeg	image/format.html#fmtJpeg	ImageFormat.fmtJpeg		7
+nim	fmtGif	image/format.html#fmtGif	ImageFormat.fmtGif		7
+nim	fmtWebP	image/format.html#fmtWebP	ImageFormat.fmtWebP		7
+nim	fmtPnm	image/format.html#fmtPnm	ImageFormat.fmtPnm		7
+nim	fmtTiff	image/format.html#fmtTiff	ImageFormat.fmtTiff		7
+nim	fmtTga	image/format.html#fmtTga	ImageFormat.fmtTga		7
+nim	fmtBmp	image/format.html#fmtBmp	ImageFormat.fmtBmp		7
+nim	fmtIco	image/format.html#fmtIco	ImageFormat.fmtIco		7
+nim	fmtHdr	image/format.html#fmtHdr	ImageFormat.fmtHdr		7
+nim	fmtOpenExr	image/format.html#fmtOpenExr	ImageFormat.fmtOpenExr		7
+nim	fmtFarbfeld	image/format.html#fmtFarbfeld	ImageFormat.fmtFarbfeld		7
+nim	fmtAvif	image/format.html#fmtAvif	ImageFormat.fmtAvif		7
+nim	fmtQoi	image/format.html#fmtQoi	ImageFormat.fmtQoi		7
+nim	ImageFormat	image/format.html#ImageFormat	enum ImageFormat		7
+nim	fromExtension	image/format.html#fromExtension,string	proc fromExtension(ext: string): tuple[found: bool, f: ImageFormat]		23
+nim	fromPath	image/format.html#fromPath,string	proc fromPath(path: string): ImageResult[ImageFormat]		42
+nim	fromMimeType	image/format.html#fromMimeType,string	proc fromMimeType(mime: string): tuple[found: bool, f: ImageFormat]		50
+nim	toMimeType	image/format.html#toMimeType,ImageFormat	proc toMimeType(f: ImageFormat): string		69
+nim	extensionsStr	image/format.html#extensionsStr,ImageFormat	proc extensionsStr(f: ImageFormat): seq[string]		86
+nim	allFormats	image/format.html#allFormats	proc allFormats(): seq[ImageFormat]		103

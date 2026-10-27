@@ -1,0 +1,4 @@
+nimTitle	lzw	image/lzw.html	module image/lzw		0
+nim	decodeLzwGif	image/lzw.html#decodeLzwGif,seq[uint8],int,int	proc decodeLzwGif(data: seq[uint8]; minCodeSize: int; expectedLen = 0): ImageResult[\n    seq[uint8]]		92
+nim	decodeLzwTiff	image/lzw.html#decodeLzwTiff,seq[uint8],int	proc decodeLzwTiff(data: seq[uint8]; expectedLen = 0): ImageResult[seq[uint8]]		96
+nim	encodeLzwGif	image/lzw.html#encodeLzwGif,openArray[uint8],int	proc encodeLzwGif(indices: openArray[uint8]; minCodeSize: int): seq[uint8]		99

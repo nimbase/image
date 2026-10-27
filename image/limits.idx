@@ -1,0 +1,9 @@
+nimTitle	limits	image/limits.html	module image/limits		0
+nim	LimitSupport	image/limits.html#LimitSupport	object LimitSupport		7
+nim	Limits	image/limits.html#Limits	object Limits		9
+nim	defaultLimits	image/limits.html#defaultLimits	proc defaultLimits(): Limits		23
+nim	noLimits	image/limits.html#noLimits	proc noLimits(): Limits		27
+nim	checkDimensions	image/limits.html#checkDimensions,Limits,uint32,uint32	proc checkDimensions(l: Limits; w, h: uint32): ImageResult[bool]		31
+nim	reserve	image/limits.html#reserve,Limits,uint64	proc reserve(l: var Limits; amount: uint64): ImageResult[bool]		38
+nim	free	image/limits.html#free,Limits,uint64	proc free(l: var Limits; amount: uint64)		45
+nim	reserveBuffer	image/limits.html#reserveBuffer,Limits,uint32,uint32,ColorType	proc reserveBuffer(l: var Limits; w, h: uint32; c: ColorType): ImageResult[bool]		49

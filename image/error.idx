@@ -1,0 +1,41 @@
+nimTitle	error	image/error.html	module image/error		0
+nim	ekDecoding	image/error.html#ekDecoding	ImageErrorKind.ekDecoding		5
+nim	ekEncoding	image/error.html#ekEncoding	ImageErrorKind.ekEncoding		5
+nim	ekParameter	image/error.html#ekParameter	ImageErrorKind.ekParameter		5
+nim	ekLimits	image/error.html#ekLimits	ImageErrorKind.ekLimits		5
+nim	ekUnsupported	image/error.html#ekUnsupported	ImageErrorKind.ekUnsupported		5
+nim	ekIo	image/error.html#ekIo	ImageErrorKind.ekIo		5
+nim	ImageErrorKind	image/error.html#ImageErrorKind	enum ImageErrorKind		5
+nim	pkDimensionMismatch	image/error.html#pkDimensionMismatch	ParamKind.pkDimensionMismatch		13
+nim	pkFailedAlready	image/error.html#pkFailedAlready	ParamKind.pkFailedAlready		13
+nim	pkNoMoreData	image/error.html#pkNoMoreData	ParamKind.pkNoMoreData		13
+nim	pkBufferSizeMismatch	image/error.html#pkBufferSizeMismatch	ParamKind.pkBufferSizeMismatch		13
+nim	pkNoAlphaChannel	image/error.html#pkNoAlphaChannel	ParamKind.pkNoAlphaChannel		13
+nim	pkGeneric	image/error.html#pkGeneric	ParamKind.pkGeneric		13
+nim	ParamKind	image/error.html#ParamKind	enum ParamKind		13
+nim	lkDimensionError	image/error.html#lkDimensionError	LimitKind.lkDimensionError		21
+nim	lkInsufficientMemory	image/error.html#lkInsufficientMemory	LimitKind.lkInsufficientMemory		21
+nim	lkUnsupported	image/error.html#lkUnsupported	LimitKind.lkUnsupported		21
+nim	LimitKind	image/error.html#LimitKind	enum LimitKind		21
+nim	ukColor	image/error.html#ukColor	UnsupportedKind.ukColor		26
+nim	ukColorLayout	image/error.html#ukColorLayout	UnsupportedKind.ukColorLayout		26
+nim	ukFormat	image/error.html#ukFormat	UnsupportedKind.ukFormat		26
+nim	ukGenericFeature	image/error.html#ukGenericFeature	UnsupportedKind.ukGenericFeature		26
+nim	UnsupportedKind	image/error.html#UnsupportedKind	enum UnsupportedKind		26
+nim	fhExact	image/error.html#fhExact	FormatHintKind.fhExact		32
+nim	fhName	image/error.html#fhName	FormatHintKind.fhName		32
+nim	fhPathExtension	image/error.html#fhPathExtension	FormatHintKind.fhPathExtension		32
+nim	fhUnknown	image/error.html#fhUnknown	FormatHintKind.fhUnknown		32
+nim	FormatHintKind	image/error.html#FormatHintKind	enum FormatHintKind		32
+nim	ImageError	image/error.html#ImageError	object ImageError		38
+nim	ImageResult	image/error.html#ImageResult	object ImageResult		47
+nim	ok	image/error.html#ok,T	proc ok[T](v: T): ImageResult[T]		54
+nim	err	image/error.html#err,ImageError	proc err[T](e: ImageError): ImageResult[T]		57
+nim	decodingError	image/error.html#decodingError,string	proc decodingError(msg: string): ImageError		60
+nim	encodingError	image/error.html#encodingError,string	proc encodingError(msg: string): ImageError		63
+nim	paramError	image/error.html#paramError,ParamKind,string	proc paramError(k: ParamKind; msg = ""): ImageError		66
+nim	limitError	image/error.html#limitError,LimitKind,string	proc limitError(k: LimitKind; msg = ""): ImageError		69
+nim	unsupportedError	image/error.html#unsupportedError,UnsupportedKind,string	proc unsupportedError(k: UnsupportedKind; msg = ""): ImageError		72
+nim	ioError	image/error.html#ioError,string	proc ioError(msg: string): ImageError		75
+nim	isOk	image/error.html#isOk,ImageResult[T]	proc isOk[T](r: ImageResult[T]): bool		78
+nim	unwrap	image/error.html#unwrap,ImageResult[T]	proc unwrap[T](r: ImageResult[T]): T		80

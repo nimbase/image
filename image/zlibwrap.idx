@@ -1,0 +1,5 @@
+nimTitle	zlibwrap	image/zlibwrap.html	module image/zlibwrap		0
+nim	inflateZlib	image/zlibwrap.html#inflateZlib,openArray[uint8],int	proc inflateZlib(data: openArray[uint8]; expectedLen: int): ImageResult[seq[uint8]]		17
+nim	inflateZlibGrow	image/zlibwrap.html#inflateZlibGrow,openArray[uint8]	proc inflateZlibGrow(data: openArray[uint8]; maxOut = 262144 * 1024): ImageResult[\n    seq[uint8]]		24
+nim	deflateZlib	image/zlibwrap.html#deflateZlib,openArray[uint8],int	proc deflateZlib(data: openArray[uint8]; level = 6): ImageResult[seq[uint8]]		35
+nim	crc32raw	image/zlibwrap.html#crc32raw,openArray[uint8]	proc crc32raw(data: openArray[uint8]): uint32		41

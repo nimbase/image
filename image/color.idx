@@ -1,0 +1,73 @@
+nimTitle	color	image/color.html	module image/color		0
+nim	ctL8	image/color.html#ctL8	ColorType.ctL8		5
+nim	ctLa8	image/color.html#ctLa8	ColorType.ctLa8		5
+nim	ctRgb8	image/color.html#ctRgb8	ColorType.ctRgb8		5
+nim	ctRgba8	image/color.html#ctRgba8	ColorType.ctRgba8		5
+nim	ctL16	image/color.html#ctL16	ColorType.ctL16		5
+nim	ctLa16	image/color.html#ctLa16	ColorType.ctLa16		5
+nim	ctRgb16	image/color.html#ctRgb16	ColorType.ctRgb16		5
+nim	ctRgba16	image/color.html#ctRgba16	ColorType.ctRgba16		5
+nim	ctL32F	image/color.html#ctL32F	ColorType.ctL32F		5
+nim	ctLa32F	image/color.html#ctLa32F	ColorType.ctLa32F		5
+nim	ctRgb32F	image/color.html#ctRgb32F	ColorType.ctRgb32F		5
+nim	ctRgba32F	image/color.html#ctRgba32F	ColorType.ctRgba32F		5
+nim	ColorType	image/color.html#ColorType	enum ColorType		5
+nim	ekA8	image/color.html#ekA8	ExtKind.ekA8		19
+nim	ekL1	image/color.html#ekL1	ExtKind.ekL1		19
+nim	ekLa1	image/color.html#ekLa1	ExtKind.ekLa1		19
+nim	ekRgb1	image/color.html#ekRgb1	ExtKind.ekRgb1		19
+nim	ekRgba1	image/color.html#ekRgba1	ExtKind.ekRgba1		19
+nim	ekL2	image/color.html#ekL2	ExtKind.ekL2		19
+nim	ekLa2	image/color.html#ekLa2	ExtKind.ekLa2		19
+nim	ekRgb2	image/color.html#ekRgb2	ExtKind.ekRgb2		19
+nim	ekRgba2	image/color.html#ekRgba2	ExtKind.ekRgba2		19
+nim	ekL4	image/color.html#ekL4	ExtKind.ekL4		19
+nim	ekLa4	image/color.html#ekLa4	ExtKind.ekLa4		19
+nim	ekRgb4	image/color.html#ekRgb4	ExtKind.ekRgb4		19
+nim	ekRgba4	image/color.html#ekRgba4	ExtKind.ekRgba4		19
+nim	ekRgb5x1	image/color.html#ekRgb5x1	ExtKind.ekRgb5x1		19
+nim	ekL8	image/color.html#ekL8	ExtKind.ekL8		19
+nim	ekLa8	image/color.html#ekLa8	ExtKind.ekLa8		19
+nim	ekRgb8	image/color.html#ekRgb8	ExtKind.ekRgb8		19
+nim	ekRgba8	image/color.html#ekRgba8	ExtKind.ekRgba8		19
+nim	ekL16	image/color.html#ekL16	ExtKind.ekL16		19
+nim	ekLa16	image/color.html#ekLa16	ExtKind.ekLa16		19
+nim	ekRgb16	image/color.html#ekRgb16	ExtKind.ekRgb16		19
+nim	ekRgba16	image/color.html#ekRgba16	ExtKind.ekRgba16		19
+nim	ekBgr8	image/color.html#ekBgr8	ExtKind.ekBgr8		19
+nim	ekBgra8	image/color.html#ekBgra8	ExtKind.ekBgra8		19
+nim	ekL32F	image/color.html#ekL32F	ExtKind.ekL32F		19
+nim	ekLa32F	image/color.html#ekLa32F	ExtKind.ekLa32F		19
+nim	ekRgb32F	image/color.html#ekRgb32F	ExtKind.ekRgb32F		19
+nim	ekRgba32F	image/color.html#ekRgba32F	ExtKind.ekRgba32F		19
+nim	ekCmyk8	image/color.html#ekCmyk8	ExtKind.ekCmyk8		19
+nim	ekCmyk16	image/color.html#ekCmyk16	ExtKind.ekCmyk16		19
+nim	ekYCbCr8	image/color.html#ekYCbCr8	ExtKind.ekYCbCr8		19
+nim	ekUnknown	image/color.html#ekUnknown	ExtKind.ekUnknown		19
+nim	ExtKind	image/color.html#ExtKind	enum ExtKind		19
+nim	ExtendedColorType	image/color.html#ExtendedColorType	object ExtendedColorType		33
+nim	Rgb	image/color.html#Rgb	object Rgb		40
+nim	Rgba	image/color.html#Rgba	object Rgba		42
+nim	Luma	image/color.html#Luma	object Luma		44
+nim	LumaA	image/color.html#LumaA	object LumaA		46
+nim	bytesPerPixel	image/color.html#bytesPerPixel,ColorType	proc bytesPerPixel(c: ColorType): uint8		49
+nim	hasAlpha	image/color.html#hasAlpha,ColorType	proc hasAlpha(c: ColorType): bool		60
+nim	hasColor	image/color.html#hasColor,ColorType	proc hasColor(c: ColorType): bool		65
+nim	bitsPerPixel	image/color.html#bitsPerPixel,ColorType	proc bitsPerPixel(c: ColorType): uint16		70
+nim	channelCount	image/color.html#channelCount,ColorType	proc channelCount(c: ColorType): uint8		73
+nim	channelCount	image/color.html#channelCount,ExtendedColorType	proc channelCount(c: ExtendedColorType): uint8		80
+nim	bitsPerPixel	image/color.html#bitsPerPixel,ExtendedColorType	proc bitsPerPixel(c: ExtendedColorType): uint16		89
+nim	bufferSize	image/color.html#bufferSize,ExtendedColorType,uint32,uint32	proc bufferSize(c: ExtendedColorType; width, height: uint32): uint64		124
+nim	colorType	image/color.html#colorType,ExtendedColorType	proc colorType(c: ExtendedColorType): tuple[found: bool, ct: ColorType]		129
+nim	toExtended	image/color.html#toExtended,ColorType	proc toExtended(c: ColorType): ExtendedColorType		145
+nim	convU16toU8	image/color.html#convU16toU8,uint16	proc convU16toU8(v: uint16): uint8		162
+nim	convU8toU16	image/color.html#convU8toU16,uint8	proc convU8toU16(v: uint8): uint16		165
+nim	convF32toU8	image/color.html#convF32toU8,float32	proc convF32toU8(v: float32): uint8		169
+nim	convF32toU16	image/color.html#convF32toU16,float32	proc convF32toU16(v: float32): uint16		173
+nim	convU8toF32	image/color.html#convU8toF32,uint8	proc convU8toF32(v: uint8): float32		177
+nim	convU16toF32	image/color.html#convU16toF32,uint16	proc convU16toF32(v: uint16): float32		180
+nim	rgbToLumaU8	image/color.html#rgbToLumaU8,uint8,uint8,uint8	proc rgbToLumaU8(r, g, b: uint8): uint8		185
+nim	rgbToLumaU16	image/color.html#rgbToLumaU16,uint16,uint16,uint16	proc rgbToLumaU16(r, g, b: uint16): uint16		191
+nim	rgbToLumaF32	image/color.html#rgbToLumaF32,float32,float32,float32	proc rgbToLumaF32(r, g, b: float32): float32		195
+nimgrp	channelcount	image/color.html#channelCount-procs-all	proc		73
+nimgrp	bitsperpixel	image/color.html#bitsPerPixel-procs-all	proc		70

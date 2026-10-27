@@ -1,0 +1,5 @@
+nimTitle	math	image/math.html	module image/math		0
+nim	Rect	image/math.html#Rect	object Rect		3
+nim	initRect	image/math.html#initRect,uint32,uint32,uint32,uint32	proc initRect(x, y, w, h: uint32): Rect		7
+nim	intersect	image/math.html#intersect,Rect,Rect	proc intersect(a, b: Rect): tuple[hit: bool, r: Rect]		10
+nim	clampCoord	image/math.html#clampCoord,uint32,uint32,uint32	proc clampCoord(v, lo, hi: uint32): uint32		20

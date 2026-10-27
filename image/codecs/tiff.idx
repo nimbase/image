@@ -1,0 +1,13 @@
+nimTitle	tiff	image/codecs/tiff.html	module image/codecs/tiff		0
+nim	TCompression	image/codecs/tiff.html#TCompression	const TCompression		14
+nim	TPhotometric	image/codecs/tiff.html#TPhotometric	const TPhotometric		15
+nim	TStripOffsets	image/codecs/tiff.html#TStripOffsets	const TStripOffsets		16
+nim	TRowsPerStrip	image/codecs/tiff.html#TRowsPerStrip	const TRowsPerStrip		17
+nim	TStripByteCounts	image/codecs/tiff.html#TStripByteCounts	const TStripByteCounts		18
+nim	TTileWidth	image/codecs/tiff.html#TTileWidth	const TTileWidth		19
+nim	TTileLength	image/codecs/tiff.html#TTileLength	const TTileLength		20
+nim	TTileOffsets	image/codecs/tiff.html#TTileOffsets	const TTileOffsets		21
+nim	TTileByteCounts	image/codecs/tiff.html#TTileByteCounts	const TTileByteCounts		22
+nim	decodeTiffAll	image/codecs/tiff.html#decodeTiffAll,seq[uint8]	proc decodeTiffAll(data: seq[uint8]): ImageResult[seq[DynamicImage]]		645
+nim	decodeTiff	image/codecs/tiff.html#decodeTiff,seq[uint8]	proc decodeTiff(data: seq[uint8]): ImageResult[DynamicImage]		672
+nim	encodeTiff	image/codecs/tiff.html#encodeTiff,DynamicImage	proc encodeTiff(img: DynamicImage): ImageResult[seq[uint8]]		694

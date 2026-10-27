@@ -1,0 +1,9 @@
+nimTitle	png	image/codecs/png.html	module image/codecs/png		0
+nim	PngSig	image/codecs/png.html#PngSig	const PngSig		11
+nim	Adam7X	image/codecs/png.html#Adam7X	const Adam7X		14
+nim	Adam7Y	image/codecs/png.html#Adam7Y	const Adam7Y		15
+nim	Adam7DX	image/codecs/png.html#Adam7DX	const Adam7DX		16
+nim	Adam7DY	image/codecs/png.html#Adam7DY	const Adam7DY		17
+nim	chunkCrc	image/codecs/png.html#chunkCrc,array[,uint8],openArray[uint8]	proc chunkCrc(typ: array[4, uint8]; data: openArray[uint8]): uint32		23
+nim	decodePng	image/codecs/png.html#decodePng,seq[uint8]	proc decodePng(data: seq[uint8]): ImageResult[DynamicImage]		158
+nim	encodePng	image/codecs/png.html#encodePng,DynamicImage	proc encodePng(img: DynamicImage): ImageResult[seq[uint8]]		346

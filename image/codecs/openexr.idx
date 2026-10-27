@@ -1,0 +1,7 @@
+nimTitle	openexr	image/codecs/openexr.html	module image/codecs/openexr		0
+nim	ExrMagic	image/codecs/openexr.html#ExrMagic	const ExrMagic		13
+nim	halfToFloat	image/codecs/openexr.html#halfToFloat,uint16	proc halfToFloat(h: uint16): float32		15
+nim	floatToHalf	image/codecs/openexr.html#floatToHalf,float32	proc floatToHalf(f: float32): uint16		32
+nim	decodeExrAll	image/codecs/openexr.html#decodeExrAll,seq[uint8]	proc decodeExrAll(data: seq[uint8]): ImageResult[seq[DynamicImage]]		163
+nim	decodeExr	image/codecs/openexr.html#decodeExr,seq[uint8]	proc decodeExr(data: seq[uint8]): ImageResult[DynamicImage]		388
+nim	encodeExr	image/codecs/openexr.html#encodeExr,DynamicImage	proc encodeExr(img: DynamicImage): ImageResult[seq[uint8]]		409
