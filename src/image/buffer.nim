@@ -23,7 +23,9 @@ type
   Rgba32FImage* = ImageBuffer[Rgba[float32]]
 
 func newImageBuffer*[P](w, h: uint32, fill: P): ImageBuffer[P] =
-  ImageBuffer[P](width: w, height: h, pixels: newSeq[P](int(w) * int(h)))
+  var px = newSeq[P](int(w) * int(h))
+  for i in 0..<px.len: px[i] = fill
+  ImageBuffer[P](width: w, height: h, pixels: px)
 
 func fromRaw*[P](w, h: uint32, buf: seq[P]): tuple[ok: bool, img: ImageBuffer[P]] =
   if uint64(buf.len) != uint64(w) * uint64(h):

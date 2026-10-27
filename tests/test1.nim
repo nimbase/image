@@ -73,6 +73,13 @@ test "buffer put/get + crop":
   check img.getPixel(1, 1).data[0] == 255
   check img.dimensions() == (4'u32, 4'u32)
 
+test "buffer fill honored":
+  let red = Rgb[uint8](data: [255'u8, 0, 0])
+  let img = newImageBuffer[Rgb[uint8]](2, 3, red)
+  check img.pixels.len == 6
+  for p in img.pixels:
+    check p == red
+
 test "dynamic color/dimensions":
   let g = GrayImage(width: 2, height: 3, pixels: newSeq[Luma[uint8]](6))
   let d = DynamicImage(kind: dkLuma8, luma8: g)

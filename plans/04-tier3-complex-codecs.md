@@ -12,11 +12,13 @@ Reference clones (see `05-external-crates.md`):
 
 Port order:
 1. Baseline DCT sequential, 8-bit, 1/3 components (Luma/RGB/YCbCr), Huffman DC/AC,
-   restart markers, JFIF/Adobe headers. Output Rgb8/L8.
-2. Progressive SOF2 (spectral selection + successive approximation).
+   restart markers, JFIF/Adobe headers. Output Rgb8/L8. DONE.
+2. Progressive SOF2 (spectral selection + successive approximation). DONE —
+   decoder only; single-component scans visit blocks in raster order, encoder
+   stays baseline-only.
 3. 12-bit / arithmetic / lossless -> `Unsupported` first pass.
 4. Encoder: quality tables, subsampling 4:4:4/4:2:2/4:2:0, JFIF header.
-   Match `save_jpeg.rs` test behavior.
+   Match `save_jpeg.rs` test behavior. DONE (baseline-only).
 
 Nim notes: IDCT must be bit-exact-ish (LLM integer path from zune-jpeg).
 Huffman decoder table-driven, not tree-walk, for speed.

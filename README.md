@@ -12,6 +12,9 @@
   <img src="https://github.com/nimbase/image/workflows/test/badge.svg" alt="Github Actions">  <img src="https://github.com/nimbase/image/workflows/docs/badge.svg" alt="Github Actions">
 </p>
 
+> [!NOTE]
+> This is an LLM-accelerated Nim package 
+
 
 ## Features
 
@@ -28,7 +31,7 @@ Codec support (`o` = decode, `w` = encode):
 - GIF: o+w — animation, disposal, interlace, loop count, LZW
 - HDR: o+w — Radiance RGBE, flat + new/old RLE
 - ICO: o+w — PNG and BMP payloads, AND-mask transparency
-- JPEG: o+w — baseline DCT, 4:4:4/4:2:0, quality 1–100; progressive unsupported
+- JPEG: o+w — baseline + progressive (SOF2) DCT decode, 4:4:4/4:2:0, quality 1–100; encoder baseline-only
 - PNG: o+w — all color types, 1/2/4/8/16-bit, all 5 filters, Adam7, tRNS
 - PNM: o+w — P1–P6 plus PAM; writer emits P5/P6
 - QOI: o+w — full op-index/run/diff/luma/rgb/rgba codec
@@ -187,7 +190,7 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] TIFF (strips/tiles, 4 compressions, YCbCr/CMYK/palette)
 - [x] WebP lossless VP8L (meta-Huffman, LZ77, all transforms; validated vs dwebp)
 - [x] AVIF color math (BT.601/709/2020 YCbCr, YCgCo-Re)
-- [ ] JPEG progressive decode (SOF2)
+- [x] JPEG progressive (SOF2) decode (spectral selection + successive approximation; encoder stays baseline-only)
 - [ ] WebP lossy (VP8 bitstream) decode
 - [ ] EXR PIZ/PXR24/B44/DWAA + tiled/multipart
 - [ ] AVIF bitstream (requires an AV1 decoder)
@@ -195,8 +198,8 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [ ] JPEG 2000 (jp2)
 - [ ] HEIF/HEIC (ISOBMFF container + HEVC bitstream)
 - [ ] RAW (a family of formats, not one codec; often requires camera-specific metadata and processing)
-- [x] SIMD: PNG Up filter via nimsimd (auto-dispatch SSE2/AVX2/NEON, scalar fallback)
-- [ ] SIMD: PNG Average/Paeth/Sub, JPEG IDCT, YUV batches
+- [x] SIMD: PNG Up filter, JPEG IDCT/FDCT, YCbCr row batch via nimsimd (runtime auto-dispatch SSE2/AVX2/NEON, bit-identical scalar fallback; `-ffp-contract=off`)
+- [ ] SIMD: PNG Average/Paeth/Sub (scalar by design — small rows stay scalar)
 - [ ] `imageops` processing functions (blur, resize, rotate — excluded from v1)
 
 ### ❤ Contributions & Support
