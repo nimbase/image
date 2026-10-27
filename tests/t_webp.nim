@@ -4,6 +4,8 @@ import std/strutils
 import image
 import image/codecs/webp
 
+let fixturesDir = currentSourcePath().parentDir() / "fixtures"
+
 test "webp vp8l round-trip":
   var px = newSeq[Rgba[uint8]](16)
   for i in 0..<16:
@@ -30,7 +32,7 @@ test "webp vp8l round-trip with alpha":
   check dec.value.rgba8.pixels == px
 
 test "webp reference lossless":
-  let dir = "/Users/georgelemon/Development/nimbase/references/image/tests/images/webp/lossless_images"
+  let dir = fixturesDir / "webp" / "lossless_images"
   var count = 0
   for kind, p in walkDir(dir):
     if not p.endsWith(".webp"): continue
@@ -46,15 +48,12 @@ test "webp reference lossless":
   check count == 3
 
 test "webp lossy unsupported":
-  let p = "/Users/georgelemon/Development/nimbase/references/image/tests/images/webp/lossy_images/simple-rgb.webp"
-  if fileExists(p):
-    var f = open(p, fmRead)
-    var raw = newSeq[uint8](getFileSize(f))
-    discard readBytes(f, raw, 0, raw.len)
-    close(f)
-    check decodeWebp(raw).ok == false
-  else:
-    skip()
+  let p = fixturesDir / "webp" / "lossy_images" / "simple-rgb.webp"
+  var f = open(p, fmRead)
+  var raw = newSeq[uint8](getFileSize(f))
+  discard readBytes(f, raw, 0, raw.len)
+  close(f)
+  check decodeWebp(raw).ok == false
 
 test "webp bad riff":
   check decodeWebp(@[0'u8, 1, 2, 3]).ok == false

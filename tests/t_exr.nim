@@ -4,6 +4,8 @@ import std/strutils
 import image
 import image/codecs/openexr
 
+let fixturesDir = currentSourcePath().parentDir() / "fixtures"
+
 test "half conversions":
   check halfToFloat(0x0000'u16) == 0.0f32
   check halfToFloat(0x3C00'u16) == 1.0f32
@@ -36,7 +38,7 @@ test "exr luma32f round-trip":
   check dec.value.luma32f.pixels == px
 
 test "exr reference RLE":
-  let dir = "/Users/georgelemon/Development/nimbase/references/image/tests/images/exr"
+  let dir = fixturesDir / "exr"
   var foundUncropped = false
   var foundCropped = false
   for kind, p in walkDir(dir):
@@ -60,15 +62,12 @@ test "exr reference RLE":
   check foundUncropped and foundCropped
 
 test "exr PIZ unsupported":
-  let p = "/Users/georgelemon/Development/nimbase/references/image/tests/images/exr/overexposed gradient - data window equals display window.exr"
-  if fileExists(p):
-    var f = open(p, fmRead)
-    var raw = newSeq[uint8](getFileSize(f))
-    discard readBytes(f, raw, 0, raw.len)
-    close(f)
-    check decodeExr(raw).ok == false
-  else:
-    skip()
+  let p = fixturesDir / "exr" / "overexposed gradient - data window equals display window.exr"
+  var f = open(p, fmRead)
+  var raw = newSeq[uint8](getFileSize(f))
+  discard readBytes(f, raw, 0, raw.len)
+  close(f)
+  check decodeExr(raw).ok == false
 
 test "exr bad magic":
   check decodeExr(@[0'u8, 1, 2, 3]).ok == false

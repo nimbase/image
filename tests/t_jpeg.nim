@@ -3,6 +3,8 @@ import std/os
 import image
 import image/codecs/jpeg
 
+let fixturesDir = currentSourcePath().parentDir() / "fixtures"
+
 test "jpeg gray round-trip":
   var px = newSeq[Luma[uint8]](64)
   for i in 0..<64: px[i] = Luma[uint8](data: [uint8(i * 4)])
@@ -49,17 +51,14 @@ test "jpeg rgb round-trip 444":
   check maxDiff <= 8
 
 test "jpeg reference baseline":
-  let p = "/Users/georgelemon/Development/nimbase/references/image/tests/images/jpg/iptc.jpg"
-  if fileExists(p):
-    var f = open(p, fmRead)
-    var raw = newSeq[uint8](getFileSize(f))
-    discard readBytes(f, raw, 0, raw.len)
-    close(f)
-    let dec = decodeJpeg(raw)
-    check dec.ok
-    check dec.value.dimensions() == (64'u32, 48'u32)
-  else:
-    skip()
+  let p = fixturesDir / "jpg" / "iptc.jpg"
+  var f = open(p, fmRead)
+  var raw = newSeq[uint8](getFileSize(f))
+  discard readBytes(f, raw, 0, raw.len)
+  close(f)
+  let dec = decodeJpeg(raw)
+  check dec.ok
+  check dec.value.dimensions() == (64'u32, 48'u32)
 
 test "jpeg progressive":
   # 4:2:0 single-component scans visit blocks in raster order (one block
@@ -68,9 +67,7 @@ test "jpeg progressive":
   for (name, w, h, sum) in [("test.jpg", 32'u32, 23'u32, 325368'u64),
       ("cat.jpg", 320'u32, 240'u32, 31389462'u64),
       ("3.jpg", 650'u32, 470'u32, 116984462'u64)]:
-    let p = "/Users/georgelemon/Development/nimbase/references/image/tests/images/jpg/progressive/" & name
-    if not fileExists(p):
-      skip()
+    let p = fixturesDir / "jpg" / "progressive" / name
     var f = open(p, fmRead)
     var raw = newSeq[uint8](getFileSize(f))
     discard readBytes(f, raw, 0, raw.len)
