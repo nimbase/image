@@ -4,6 +4,8 @@
 when defined(amd64):
   when defined(gcc) or defined(clang):
     {.localPassc: "-mavx2".}
+    # Same as sse2: forbid FMA contraction so scalar/vector round alike.
+    {.localPassc: "-ffp-contract=off".}
 
   import nimsimd/avx2
 

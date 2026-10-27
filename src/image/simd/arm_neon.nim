@@ -2,6 +2,11 @@
 ## All Apple Silicon and modern ARM64 chips have NEON; still reached only
 ## through the runtime dispatcher in `image/simd` with a scalar fallback.
 when defined(arm64):
+  # ARM64 always has FMA: without this, scalar a*b+c fuses to one
+  # rounding while the NEON intrinsics below stay separate (off-by-one
+  # after int truncation). See image/simd.
+  when defined(gcc) or defined(clang):
+    {.localPassc: "-ffp-contract=off".}
   import nimsimd/neon
 
   {.push header: "arm_neon.h".}

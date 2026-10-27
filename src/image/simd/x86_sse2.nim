@@ -1,5 +1,10 @@
 ## PNG Up-filter kernel, SSE2 baseline (no extra compiler flags needed on x86_64).
 when defined(amd64):
+  # Keep scalar oracle rounding identical to the vector kernels below:
+  # with FMA available (always on arm64) the compiler would otherwise
+  # fuse scalar a*b+c into one rounding while intrinsics stay separate.
+  when defined(gcc) or defined(clang):
+    {.localPassc: "-ffp-contract=off".}
   import nimsimd/sse2
 
   proc upRowSse2*(curP, prevP: ptr uint8, n16: int) =

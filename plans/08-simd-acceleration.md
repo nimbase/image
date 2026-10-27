@@ -14,6 +14,9 @@ Decisions (user-confirmed):
 - NEON path must be guarded with `when defined(arm64)` and always have a
   scalar fallback; if nimsimd/neon lacks an intrinsic, hand-roll via `{.emit.}`.
 - Constraint: decode output must stay bit-identical to scalar.
+- FP contraction stays off (`-ffp-contract=off` in every simd TU):
+  with FMA available the compiler fuses scalar `a*b+c` to one rounding
+  while explicit intrinsics stay two roundings (off-by-one after `int`).
 
 ## Design
 

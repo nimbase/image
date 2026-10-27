@@ -5,6 +5,14 @@
 ## reports it; arm64 uses NEON. Unknown PNG filters return false so callers
 ## can raise `bad filter`. Small PNG rows (< 16 bytes) stay scalar to avoid
 ## setup cost.
+##
+## FP-contract note: ARM64 always has FMA, so without this flag Clang/GCC
+## fuse scalar `a*b+c` into one rounding while the NEON/SSE/AVX intrinsics
+## below stay two roundings (off-by-one after int truncation). Disabled so
+## oracle and kernels round identically on all arches.
+when defined(gcc) or defined(clang):
+  {.localPassc: "-ffp-contract=off".}
+
 import std/math
 import ./simd/x86_sse2
 
