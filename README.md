@@ -1,6 +1,6 @@
 <p align="center">
-  Pure-Nim image encoders and decoders<br>
-  <i>A Nim port of <code>image-rs/image</code>. Pure Nim, no C bindings — deflate via the nimbase <code>archive</code> library.</i><br>
+  Pure-Nim image encoders and decoders, no C bindings.<br>
+  Deflate via pure <a href="https://github.com/nimbase/archive">pkg/archive library</a>
 </p>
 
 <p align="center">
@@ -8,14 +8,12 @@
 </p>
 
 <p align="center">
-  <a href="https://nimbase.github.io/{nimbase-repo-name}/">API reference</a><br>
-  <img src="https://github.com/nimbase/{nimbase-repo-name}/workflows/test/badge.svg" alt="Github Actions">  <img src="https://github.com/nimbase/{nimbase-repo-name}/workflows/docs/badge.svg" alt="Github Actions">
+  <a href="https://nimbase.github.io/image/">API reference</a><br>
+  <img src="https://github.com/nimbase/image/workflows/test/badge.svg" alt="Github Actions">  <img src="https://github.com/nimbase/image/workflows/docs/badge.svg" alt="Github Actions">
 </p>
 
 
 ## Features
-
-Core types mirroring `image-rs/image`:
 
 - Colors: `ColorType`, `ExtendedColorType`, `Rgb`/`Rgba`/`Luma`/`LumaA` pixels, sRGB conversions
 - Buffers: `ImageBuffer` (12 aliases), `DynamicImage` (12 variants), `FlatSamples`, `SubImage` views
@@ -202,8 +200,8 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [ ] `imageops` processing functions (blur, resize, rotate — excluded from v1)
 
 ### ❤ Contributions & Support
-- 🐛 Found a bug? [Create a new Issue](https://github.com/nimbase/{nimbase-repo-name}/issues)
-- 👋 Wanna help? [Fork it!](https://github.com/nimbase/{nimbase-repo-name}/fork)
+- 🐛 Found a bug? [Create a new Issue](https://github.com/nimbase/image/issues)
+- 👋 Wanna help? [Fork it!](https://github.com/nimbase/image/fork)
 
 ### 🎩 License
 MIT license | Nim Community.
