@@ -15,6 +15,16 @@
 
 ## 7.2 Reference / regression suites (port from Rust)
 
+- `tests/reference_images.rs` -> `tests/t_reference.nim` (DONE): walks
+  `tests/fixtures/` (exr/jpg/webp + pawel photo), dispatches by extension,
+  asserts decode-ok + nonzero dims; PIZ EXR and lossy VP8 assert clean
+  `ok == false`. Count assertion trips when fixtures change.
+- Pixel-exact fixture vectors stay in `t_jpeg` (dims + sums), `t_exr`,
+  `t_webp` (dims) rather than checked-in PNG ground truth.
+- Truncation: `tests/t_truncate.nim` (all 14 codecs; cuts 0/1/2/mid fail,
+  trailing-byte tolerance documented for BMP/JPEG/QOI/WebP; green in both
+  debug bounds-checked and `-d:release` builds).
+
 - `tests/reference_images.rs` -> `tests/t_reference.nim`: iterate checked-in
   images, decode, compare against `.png` ground truth where applicable.
 - `tests/regression.rs`, `tests/bad_images.rs`, `tests/truncate_images.rs`:
@@ -24,6 +34,11 @@
 - Fuzz seeds: `fuzz/`, `fuzz-afl/` corpora reused as regression inputs.
 
 ## 7.3 Benches (optional, after correctness)
+
+DONE (minimal): `benches/decode.nim` measures PNG/JPEG encode+decode MB/s
+on a 1920x1080 gradient (`clue build benches/decode.nim --release
+-o:/tmp/imgbench && /tmp/imgbench [iters]`). `std/times.cpuTime` only,
+no criterion dep. Not run in CI.
 
 `benches/decode.rs`, `encode.rs`, `copy_from.rs`, `convert.rs` ->
 `nimble` tasks measuring PNG/JPEG decode MB/s. No criterion dep; use
