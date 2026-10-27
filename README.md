@@ -37,7 +37,7 @@ Codec support (`o` = decode, `w` = encode):
 - QOI: o+w — full op-index/run/diff/luma/rgb/rgba codec
 - TGA: o+w — raw/RLE, colormaps, 15-bit, orientation
 - TIFF: o+w — strips/tiles, chunky/planar, None/LZW/Deflate/PackBits, YCbCr/CMYK/palette
-- WebP: o+w — lossless VP8L decode (meta-Huffman, LZ77, all transforms) + literal-only encoder; lossy VP8 unsupported
+- WebP: o+w — lossless VP8L + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) + literal-only encoder; animation / VP8X alpha unsupported
 - AVIF: color math only (BT.601/709/2020 YCbCr, YCgCo-Re); AV1 bitstream unsupported
 
 Not ported (out of scope): `imageops` processing functions, rayon parallelism.
@@ -191,7 +191,7 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] WebP lossless VP8L (meta-Huffman, LZ77, all transforms; validated vs dwebp)
 - [x] AVIF color math (BT.601/709/2020 YCbCr, YCgCo-Re)
 - [x] JPEG progressive (SOF2) decode (spectral selection + successive approximation; encoder stays baseline-only)
-- [ ] WebP lossy (VP8 bitstream) decode
+- [x] WebP lossy VP8 keyframe decode (bit-exact vs dwebp)
 - [ ] EXR PIZ/PXR24/B44/DWAA + tiled/multipart
 - [ ] AVIF bitstream (requires an AV1 decoder)
 - [ ] JPEG XL (jxl)

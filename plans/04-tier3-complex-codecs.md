@@ -25,11 +25,17 @@ Huffman decoder table-driven, not tree-walk, for speed.
 
 ## 4.2 WebP (`codecs/webp/: decoder, encoder, mod` + `image-webp@0.2.0`)
 
-Reference clone: `references/image-webp`.
+Reference clone: `references/image-webp` (pinned v0.2.4; Cargo range
+`0.2.0` resolves to it).
 - Lossless VP8L first (simpler, Huffman + LZ77 + color cache, like PNG-adjacent).
-- Lossy VP8 next (block prediction, DCT, deblocking). Mux (VP8/VP8L/VP8X chunks,
-  animation, ICC/XMP).
-- Encoder: lossless only first (matches Rust note "only lossless encoding
+  DONE (`vp8l.nim` + container in the same file).
+- Lossy VP8 keyframe decode. DONE (`vp8.nim`: bool decoder, segmentation,
+  quant, token probs, 4x4 WHT/IDCT, intra prediction, loop filter, fancy
+  YUV upsampling). Validated bit-exact vs `dwebp` on 100x100 color/gray,
+  101x57 odd-size and 640x427 segmented photo fixtures
+  (`tests/fixtures/webp/lossy_images/`). Still `Unsupported`: VP8X+ALPH
+  compositing, animation (`ANIM`/`ANMF`), interframes (stills never have them).
+- Encoder: lossless only (matches Rust note "only lossless encoding
   currently supported"), lossy later.
 
 ## 4.3 OpenEXR (`codecs/openexr.rs:560` + `exr@1.74.0`)

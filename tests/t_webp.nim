@@ -47,8 +47,39 @@ test "webp reference lossless":
     inc(count)
   check count == 3
 
-test "webp lossy unsupported":
+test "webp lossy vp8":
+  # pixel sums validated bit-exact against dwebp (fancy upsampling)
+  for (name, w, h, sum) in [("simple-rgb.webp", 100'u32, 100'u32, 2623385'u64),
+      ("simple-gray.webp", 100'u32, 100'u32, 3664880'u64),
+      ("odd-101x57-q80.webp", 101'u32, 57'u32, 2164248'u64),
+      ("photo-640x427-q75.webp", 640'u32, 427'u32, 74437231'u64)]:
+    let p = fixturesDir / "webp" / "lossy_images" / name
+    var f = open(p, fmRead)
+    var raw = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, raw, 0, raw.len)
+    close(f)
+    let dec = decodeWebp(raw)
+    check dec.ok
+    check dec.value.kind == dkRgb8
+    check dec.value.dimensions() == (w, h)
+    var s = 0'u64
+    for px in dec.value.rgb8.pixels:
+      s += uint64(px.data[0]) + uint64(px.data[1]) + uint64(px.data[2])
+    check s == sum
+
+test "webp lossy truncated":
   let p = fixturesDir / "webp" / "lossy_images" / "simple-rgb.webp"
+  var f = open(p, fmRead)
+  var raw = newSeq[uint8](getFileSize(f))
+  discard readBytes(f, raw, 0, raw.len)
+  close(f)
+  # any truncation must fail cleanly (bool-decoder EOF paths), never raise
+  for c in [0, 1, 2, raw.len div 2, raw.len - 1]:
+    check decodeWebp(raw[0..<c]).ok == false
+
+test "webp lossy alpha unsupported":
+  # VP8X + ALPH needs alpha compositing (follow-up); must fail cleanly
+  let p = fixturesDir / "webp" / "extended_images" / "lossy_alpha.webp"
   var f = open(p, fmRead)
   var raw = newSeq[uint8](getFileSize(f))
   discard readBytes(f, raw, 0, raw.len)

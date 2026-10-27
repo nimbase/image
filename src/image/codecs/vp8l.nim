@@ -1,12 +1,14 @@
 ## WebP codec — references/image/src/codecs/webp/ + image-webp@0.2.0
 ## VP8L lossless decode (meta-Huffman, LZ77, color cache, 4 transforms) +
-## literal-only VP8L encoder. VP8 lossy / animation / ALPH return Unsupported.
+## literal-only VP8L encoder. VP8 lossy keyframe decode (vp8.nim).
+## Animation / ALPH-with-VP8 return Unsupported.
 ## Bitstream: LSB-first. Pixels in buffer order [R,G,B,A].
 import std/math
 import ../color
 import ../error
 import ../buffer
 import ../dynamic
+import ./vp8
 
 # ---------- LSB bit reader ----------
 
@@ -701,7 +703,9 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
     return err[DynamicImage](decodingError("webp: bad RIFF"))
   var pos = 12
   var vp8l: seq[uint8] = @[]
+  var vp8body: seq[uint8] = @[]
   var hasVp8 = false
+  var hasAlph = false
   var hasAnim = false
   while pos + 8 <= data.len:
     let tag = data[pos..<pos+4]
@@ -716,8 +720,12 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
         vp8l = body
     elif tag == @[uint8('V'),uint8('P'),uint8('8'),uint8(' ')]:
       hasVp8 = true
+      if vp8body.len == 0:
+        vp8body = body
+    elif tag == @[uint8('A'),uint8('L'),uint8('P'),uint8('H')]:
+      hasAlph = true
     elif tag == @[uint8('V'),uint8('P'),uint8('8'),uint8('X')]:
-      discard # canvas info; VP8L chunk handled below
+      discard # canvas info; VP8/VP8L chunks follow inline
     elif tag == @[uint8('A'),uint8('N'),uint8('I'),uint8('M')] or
         tag == @[uint8('A'),uint8('N'),uint8('M'),uint8('F')]:
       hasAnim = true
@@ -738,8 +746,21 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
       rgb[i] = Rgb[uint8](data: [p.data[0], p.data[1], p.data[2]])
     return ok(DynamicImage(kind: dkRgb8, rgb8:
       RgbImage(width: r.value.width, height: r.value.height, pixels: rgb)))
+  if hasVp8 and vp8body.len > 0:
+    if hasAlph:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "webp: alpha with lossy VP8"))
+    let fr = decodeVp8Frame(vp8body)
+    if not fr.ok: return err[DynamicImage](fr.err)
+    let rgb = vp8ToRgb(fr.value)
+    var px = newSeq[Rgb[uint8]](fr.value.width * fr.value.height)
+    for i in 0..<px.len:
+      px[i] = Rgb[uint8](data: [rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]])
+    return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(
+      width: uint32(fr.value.width), height: uint32(fr.value.height),
+      pixels: px)))
   if hasVp8:
-    return err[DynamicImage](unsupportedError(ukGenericFeature, "webp: lossy VP8"))
+    return err[DynamicImage](decodingError("webp: missing VP8 data"))
   err[DynamicImage](decodingError("webp: no image chunk"))
 
 # ---------- literal-only VP8L encoder ----------

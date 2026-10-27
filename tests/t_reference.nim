@@ -3,7 +3,8 @@
 ## design). Pixel-exact assertions live in t_jpeg/t_exr/t_webp; this is
 ## the gate that no fixture regresses to an error or crash.
 ## Expected failures: EXR PIZ (`overexposed gradient…`, tiled/multipart
-## unsupported) and lossy VP8 (`lossy_images/`, VP8 bitstream unsupported).
+## unsupported) and VP8X+ALPH (`lossy_alpha.webp`, alpha compositing
+## follow-up).
 import unittest
 import std/os
 import std/strutils
@@ -24,7 +25,7 @@ test "reference fixtures decode":
     if dirExists(p): continue
     let ext = splitFile(p).ext.toLowerAscii()
     let expectFail = p.contains("overexposed gradient") or
-      p.contains("lossy_images")
+      p.contains("lossy_alpha")
     case ext
     of ".jpg", ".jpeg":
       let dec = decodeJpeg(readRaw(p))
@@ -47,4 +48,4 @@ test "reference fixtures decode":
     else:
       check false # stray fixture: triage it into the suite
     inc(count)
-  check count == 13 # bump when fixtures are added/removed
+  check count == 17 # bump when fixtures are added/removed
