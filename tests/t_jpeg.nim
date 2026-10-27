@@ -61,16 +61,28 @@ test "jpeg reference baseline":
   else:
     skip()
 
-test "jpeg progressive unsupported":
-  let p = "/Users/georgelemon/Development/nimbase/references/image/tests/images/jpg/progressive/cat.jpg"
-  if fileExists(p):
+test "jpeg progressive":
+  # 4:2:0 single-component scans visit blocks in raster order (one block
+  # per MCU); pixel sums below were validated against djpeg -nosmooth
+  # (maxdiff <= 3, float-IDCT rounding).
+  for (name, w, h, sum) in [("test.jpg", 32'u32, 23'u32, 325368'u64),
+      ("cat.jpg", 320'u32, 240'u32, 31389462'u64),
+      ("3.jpg", 650'u32, 470'u32, 116984462'u64)]:
+    let p = "/Users/georgelemon/Development/nimbase/references/image/tests/images/jpg/progressive/" & name
+    if not fileExists(p):
+      skip()
     var f = open(p, fmRead)
     var raw = newSeq[uint8](getFileSize(f))
     discard readBytes(f, raw, 0, raw.len)
     close(f)
-    check decodeJpeg(raw).ok == false
-  else:
-    skip()
+    let dec = decodeJpeg(raw)
+    check dec.ok
+    check dec.value.kind == dkRgb8
+    check dec.value.dimensions() == (w, h)
+    var s = 0'u64
+    for px in dec.value.rgb8.pixels:
+      s += uint64(px.data[0]) + uint64(px.data[1]) + uint64(px.data[2])
+    check s == sum
 
 test "jpeg bad data":
   check decodeJpeg(@[0xFF'u8, 0xD8, 0xFF, 0x00]).ok == false

@@ -15,6 +15,40 @@ when defined(amd64):
   template g(p: ptr float64, i: int): ptr float64 =
     cast[ptr float64](cast[int](p) + i * 8)
 
+  proc ycbcrRowSse2*(yP, cbP, crP, rgbP: ptr uint8, n2: int) =
+    ## YCbCr to interleaved RGB over `n2` pixels (`n2` even).
+    ## Same op order/grouping as the scalar converter: bit-identical.
+    let Y = cast[ptr UncheckedArray[uint8]](yP)
+    let Cb = cast[ptr UncheckedArray[uint8]](cbP)
+    let Cr = cast[ptr UncheckedArray[uint8]](crP)
+    let Rgb = cast[ptr UncheckedArray[uint8]](rgbP)
+    let c128 = mm_set1_pd(128.0)
+    let k1402 = mm_set1_pd(1.402)
+    let k0344 = mm_set1_pd(0.344136)
+    let k0714 = mm_set1_pd(0.714136)
+    let k1772 = mm_set1_pd(1.772)
+    let half = mm_set1_pd(0.5)
+    var o: array[2, int32]
+    var i = 0
+    while i < n2:
+      let yv = mm_set_pd(float64(Y[i+1]), float64(Y[i]))
+      let cbv = mm_sub_pd(mm_set_pd(float64(Cb[i+1]), float64(Cb[i])), c128)
+      let crv = mm_sub_pd(mm_set_pd(float64(Cr[i+1]), float64(Cr[i])), c128)
+      let rv = mm_add_pd(mm_add_pd(yv, mm_mul_pd(k1402, crv)), half)
+      let gv = mm_add_pd(mm_sub_pd(mm_sub_pd(yv, mm_mul_pd(k0344, cbv)),
+        mm_mul_pd(k0714, crv)), half)
+      let bv = mm_add_pd(mm_add_pd(yv, mm_mul_pd(k1772, cbv)), half)
+      mm_storel_epi64(addr o[0], mm_cvttpd_epi32(rv))
+      Rgb[3*i] = uint8(clamp(int(o[0]), 0, 255))
+      Rgb[3*i+3] = uint8(clamp(int(o[1]), 0, 255))
+      mm_storel_epi64(addr o[0], mm_cvttpd_epi32(gv))
+      Rgb[3*i+1] = uint8(clamp(int(o[0]), 0, 255))
+      Rgb[3*i+4] = uint8(clamp(int(o[1]), 0, 255))
+      mm_storel_epi64(addr o[0], mm_cvttpd_epi32(bv))
+      Rgb[3*i+2] = uint8(clamp(int(o[0]), 0, 255))
+      Rgb[3*i+5] = uint8(clamp(int(o[1]), 0, 255))
+      i += 2
+
   proc idctPass1Sse2*(tmpP, midP, cosP, cfacP: ptr float64) =
     ## First IDCT pass: `mid[y][x] += (Cfac[u] * tmp[y][u]) * CosT[u][x]`.
     for y in 0..7:

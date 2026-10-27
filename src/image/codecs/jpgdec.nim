@@ -1,8 +1,7 @@
 ## JPEG codec — references/image/src/codecs/jpeg/ + zune-jpeg/jpeg-encoder
 ## Pure Nim baseline DCT: SOI/APP/DQT/SOF0+SOF1(8-bit)/DHT/DRI/SOS/RST/EOI,
 ## Huffman, separable float IDCT, 4:4:4/4:2:2/4:2:0 (+general H/V replication),
-## YCbCr/RGB/gray/CMYK-Adobe. Progressive (SOF2) returns Unsupported.
-import std/math
+## YCbCr/RGB/gray/CMYK-Adobe. Progressive (SOF2) spectra + refinements.
 import ../color
 import ../error
 import ../buffer
@@ -110,13 +109,7 @@ proc decodeHuff(r: var BitReader, t: HuffTable): tuple[ok: bool, sym: int] =
       return (true, t.symbols[t.valPtr[l] + code - t.minCode[l]])
   (false, 0)
 
-# ---------- color conversion ----------
-
-proc ycbcrToRgb(y, cb, cr: uint8): tuple[r, g, b: uint8] =
-  let fY = float64(y); let fCb = float64(cb) - 128.0; let fCr = float64(cr) - 128.0
-  (uint8(clamp(int(fY + 1.402 * fCr + 0.5), 0, 255)),
-   uint8(clamp(int(fY - 0.344136 * fCb - 0.714136 * fCr + 0.5), 0, 255)),
-   uint8(clamp(int(fY + 1.772 * fCb + 0.5), 0, 255)))
+# ---------- color conversion (scalar single-pixel; see image/simd) ----------
 
 # ---------- frame structures ----------
 
@@ -144,8 +137,39 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
   var restartInterval = 0
   var scanComps: seq[tuple[comp: int, dc, ac: int]] = @[]
   var scanStart = -1
+  # progressive state (SOF2 only; baseline path below is untouched)
+  var progressive = false
+  var pcoef: seq[seq[array[64, int]]] = @[] # per comp: raw coeff blocks
+  var scanCount = 0
+  var pMaxH = 1; var pMaxV = 1
+  var pMcuX = 0; var pMcuY = 0
+  # per (comp, zigzag-k) last point transform, -1 = never coded. Real
+  # encoders split first scans into sub-bands (1-5, 6-63) and refine the
+  # union (1-63), so continuity is tracked per coefficient, not per band.
+  var coefAl: array[4, array[64, int]]
+  for ci in 0..3:
+    for k in 0..63: coefAl[ci][k] = -1
   template need(n: int): bool = pos + n <= data.len
-  while scanStart < 0:
+
+  proc buildCleanScan(startPos: int): tuple[clean: seq[uint8], nextPos: int] =
+    ## Entropy segment from startPos to the next marker; strips RSTn and
+    ## stuffed 0x00 bytes, like the baseline path below.
+    var clean: seq[uint8] = @[]
+    var qq = startPos
+    while qq + 1 < data.len:
+      if data[qq] == 0xFF:
+        let c2 = data[qq+1]
+        if c2 == 0x00:
+          clean.add([0xFF'u8, 0x00]); qq += 2
+        elif c2 >= 0xD0 and c2 <= 0xD7:
+          qq += 2
+        else:
+          break
+      else:
+        clean.add(data[qq]); inc(qq)
+    (clean, qq)
+  var progFinish = false
+  while true:
     if pos + 1 >= data.len:
       return err[DynamicImage](decodingError("jpeg: truncated"))
     if data[pos] != 0xFF:
@@ -158,6 +182,9 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
     if m == 0xD8: continue
     if m in {0xD0..0xD7, 0x01}: continue
     if m == 0xD9:
+      if progressive and scanCount > 0:
+        progFinish = true
+        break
       return err[DynamicImage](decodingError("jpeg: EOI before SOS"))
     if not need(2):
       return err[DynamicImage](decodingError("jpeg: truncated segment"))
@@ -187,7 +214,7 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
             else: (int(body[q+2*i]) shl 8) or int(body[q+2*i+1])
         q += tabLen
         qtsSet[tq] = true
-    of 0xC0, 0xC1:
+    of 0xC0, 0xC1, 0xC2:
       if body.len < 6:
         return err[DynamicImage](decodingError("jpeg: truncated SOF"))
       if int(body[0]) != 8:
@@ -208,9 +235,16 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
         comps.add(JpegComponent(id: body[6+3*i], h: h, v: v,
           tq: int(body[6+3*i+2]), dcPred: 0, blocks: @[]))
       sofFound = true
-    of 0xC2:
-      return err[DynamicImage](unsupportedError(ukGenericFeature,
-        "jpeg: progressive not supported"))
+      if m == 0xC2:
+        progressive = true
+        pMaxH = 1; pMaxV = 1
+        for c in comps: pMaxH = max(pMaxH, c.h); pMaxV = max(pMaxV, c.v)
+        let mcuW = 8 * pMaxH; let mcuH = 8 * pMaxV
+        pMcuX = (width + mcuW - 1) div mcuW
+        pMcuY = (height + mcuH - 1) div mcuH
+        pcoef = @[]
+        for c in comps:
+          pcoef.add(newSeq[array[64, int]](pMcuX * c.h * pMcuY * c.v))
     of 0xC4:
       var q = 0
       while q < body.len:
@@ -244,7 +278,7 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
       if body.len < 3:
         return err[DynamicImage](decodingError("jpeg: truncated SOS"))
       let ns = int(body[0])
-      if ns != comps.len or body.len < 1 + ns * 2 + 3:
+      if ns < 1 or ns > comps.len or body.len < 1 + ns * 2 + 3:
         return err[DynamicImage](decodingError("jpeg: bad SOS"))
       scanComps = @[]
       for i in 0..<ns:
@@ -255,40 +289,247 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
         if ci < 0:
           return err[DynamicImage](decodingError("jpeg: SOS unknown component"))
         scanComps.add((ci, int(body[1+2*i+1] shr 4), int(body[1+2*i+1] and 15)))
-      if int(body[1+ns*2]) != 0 or int(body[1+ns*2+1]) != 63 or
-          body[1+ns*2+2] != 0:
-        return err[DynamicImage](unsupportedError(ukGenericFeature,
-          "jpeg: only baseline scans"))
-      for sc in scanComps:
-        if not dcSet[sc.dc] or not acSet[sc.ac]:
-          return err[DynamicImage](decodingError("jpeg: missing Huffman table"))
+      let ss = int(body[1+ns*2]); let se = int(body[1+ns*2+1])
+      let ah = int(body[1+ns*2+2] shr 4); let al = int(body[1+ns*2+2] and 15)
+      if not progressive:
+        if ns != comps.len or ss != 0 or se != 63 or ah != 0 or al != 0:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "jpeg: only baseline scans"))
+        for sc in scanComps:
+          if not dcSet[sc.dc] or not acSet[sc.ac]:
+            return err[DynamicImage](decodingError("jpeg: missing Huffman table"))
+        for c in comps:
+          if not qtsSet[c.tq]:
+            return err[DynamicImage](decodingError("jpeg: missing quant table"))
+        pos += segLen - 2
+        scanStart = pos
+        break
+      # ---- progressive scan: accumulate coefficients, continue to next scan
+      if se > 63 or ss > se:
+        return err[DynamicImage](decodingError("jpeg: bad spectral band"))
+      if se > 0 and ns != 1:
+        return err[DynamicImage](decodingError("jpeg: interleaved AC scan"))
+      if ss == 0 and se == 0:
+        for sc in scanComps:
+          if not dcSet[sc.dc]:
+            return err[DynamicImage](decodingError("jpeg: missing Huffman table"))
+      else:
+        for sc in scanComps:
+          if not acSet[sc.ac]:
+            return err[DynamicImage](decodingError("jpeg: missing Huffman table"))
       for c in comps:
         if not qtsSet[c.tq]:
           return err[DynamicImage](decodingError("jpeg: missing quant table"))
+      # per-coefficient continuity: a first scan (ah == 0) must cover only
+      # fresh positions; a refinement must cover positions all coded at
+      # exactly ah, stepping down to ah - 1.
+      if ah == 0:
+        for sc in scanComps:
+          let ci = sc.comp
+          for k in ss..se:
+            if coefAl[ci][k] >= 0:
+              return err[DynamicImage](decodingError("jpeg: band recoded"))
+          for k in ss..se: coefAl[ci][k] = al
+      else:
+        if al != ah - 1:
+          return err[DynamicImage](decodingError("jpeg: bad approximation"))
+        for sc in scanComps:
+          let ci = sc.comp
+          for k in ss..se:
+            if coefAl[ci][k] != ah:
+              return err[DynamicImage](decodingError("jpeg: bad band refine"))
+          for k in ss..se: coefAl[ci][k] = al
       pos += segLen - 2
-      scanStart = pos
+      let (cleanS, nextPos) = buildCleanScan(pos)
+      var reader = BitReader(data: cleanS, pos: 0, buf: 0, nbits: 0)
+      for i in 0..<comps.len: comps[i].dcPred = 0
+      var eobrun = 0
+      let isDc = ss == 0 and se == 0
+      let isFirst = ah == 0
+      # Non-interleaved scans visit one block per MCU in plain raster order
+      # over the component's block grid (T.81: a single-component scan MCU
+      # is a single block; libjpeg-turbo jdinput.c per_scan_setup,
+      # zune-jpeg parse_*_non_interleaved). Emulate with 1x1 effective
+      # blocks; the formulas below then yield blk == mcuIdx.
+      let nonInter = scanComps.len == 1
+      var totalMcus = pMcuX * pMcuY
+      if nonInter:
+        totalMcus = pcoef[scanComps[0].comp].len
+      var mcuIdx = 0
+      var scanErr = ""
+      while mcuIdx < totalMcus and scanErr == "":
+        for sc in scanComps:
+          let ci = sc.comp
+          let bh = if nonInter: 1 else: comps[ci].h
+          let bv = if nonInter: 1 else: comps[ci].v
+          let emx = if nonInter: pMcuX * comps[ci].h else: pMcuX
+          let nb = bh * bv
+          let cols = emx * bh
+          for b in 0..<nb:
+            let bx = (mcuIdx mod emx) * bh + (b mod bh)
+            let by = (mcuIdx div emx) * bv + (b div bv)
+            let blk = by * cols + bx
+            if isDc:
+              if isFirst:
+                let (okD, sym) = decodeHuff(reader, dcTables[sc.dc])
+                if not okD: scanErr = "jpeg: bad DC code"; break
+                let (okV, diff) = receiveExtend(reader, sym)
+                if not okV: scanErr = "jpeg: truncated DC"; break
+                comps[ci].dcPred += diff
+                pcoef[ci][blk][0] = comps[ci].dcPred shl al
+              else:
+                let (okB, bit) = reader.readBits(1)
+                if not okB: scanErr = "jpeg: truncated DC refine"; break
+                pcoef[ci][blk][0] += bit shl al
+            else:
+              if eobrun > 0:
+                dec(eobrun)
+                if not isFirst:
+                  for k in ss..se:
+                    let p = Unzigzag[k]
+                    if pcoef[ci][blk][p] != 0:
+                      let (okB, bit) = reader.readBits(1)
+                      if not okB: scanErr = "jpeg: truncated AC refine"; break
+                      if bit == 1 and (pcoef[ci][blk][p] and (1 shl al)) == 0:
+                        if pcoef[ci][blk][p] > 0:
+                          pcoef[ci][blk][p] += bit shl al
+                        else:
+                          pcoef[ci][blk][p] -= bit shl al
+                  if scanErr != "": break
+                continue
+              var k = ss
+              var done = false
+              while k <= se and not done:
+                let (okA, rs) = decodeHuff(reader, acTables[sc.ac])
+                if not okA:
+                  when defined(progDebug):
+                    scanErr = "jpeg: bad AC code mcu=" & $mcuIdx & " b=" & $b & " k=" & $k
+                  else:
+                    scanErr = "jpeg: bad AC code"
+                  break
+                let r = rs shr 4; let s = rs and 15
+                if isFirst:
+                  if s == 0:
+                    if r == 15: k += 16
+                    else:
+                      eobrun = (1 shl r) - 1
+                      if r > 0:
+                        let (okE, e) = reader.readBits(r)
+                        if not okE: scanErr = "jpeg: truncated EOB"; break
+                        eobrun += e
+                      done = true
+                  else:
+                    # NOTE: encoders emit coefficients past the declared band
+                    # end (e.g. band 1-5 holding a coeff at zigzag 6); like
+                    # zune-jpeg, store it (clamped to the block).
+                    k += r
+                    let (okC, v) = receiveExtend(reader, s)
+                    if not okC: scanErr = "jpeg: truncated AC"; break
+                    pcoef[ci][blk][Unzigzag[min(k, 63)]] = v shl al
+                    inc(k)
+                else:
+                  if s == 0:
+                    if r == 15:
+                      # ZRL: 16 zeros; significant coeffs passed over are
+                      # refined but NOT counted toward the 16.
+                      var zeros = 0
+                      while zeros < 16:
+                        if k > se: break
+                        let p = Unzigzag[k]
+                        if pcoef[ci][blk][p] != 0:
+                          let (okB, bit) = reader.readBits(1)
+                          if not okB: scanErr = "jpeg: truncated AC refine"; break
+                          if bit == 1 and (pcoef[ci][blk][p] and (1 shl al)) == 0:
+                            if pcoef[ci][blk][p] > 0:
+                              pcoef[ci][blk][p] += bit shl al
+                            else:
+                              pcoef[ci][blk][p] -= bit shl al
+                        else: inc(zeros)
+                        inc(k)
+                      if scanErr != "": break
+                    else:
+                      eobrun = (1 shl r) - 1
+                      if r > 0:
+                        let (okE, e) = reader.readBits(r)
+                        if not okE: scanErr = "jpeg: truncated EOB"; break
+                        eobrun += e
+                      while k <= se:
+                        let p = Unzigzag[k]
+                        if pcoef[ci][blk][p] != 0:
+                          let (okB, bit) = reader.readBits(1)
+                          if not okB: scanErr = "jpeg: truncated AC refine"; break
+                          if bit == 1 and (pcoef[ci][blk][p] and (1 shl al)) == 0:
+                            if pcoef[ci][blk][p] > 0:
+                              pcoef[ci][blk][p] += bit shl al
+                            else:
+                              pcoef[ci][blk][p] -= bit shl al
+                        inc(k)
+                      if scanErr != "": break
+                      done = true
+                  elif s == 1:
+                    # newly significant at this bit plane; the sign bit comes
+                    # immediately after the symbol (libjpeg-turbo jdphuff.c,
+                    # zune-jpeg bitstream.rs), BEFORE the skipped-coeff
+                    # refinement bits. r counts zeros; significant coeffs
+                    # passed over are refined, not counted.
+                    # k is capped at the band end like zune-jpeg.
+                    let (okS, sb) = reader.readBits(1)
+                    if not okS: scanErr = "jpeg: truncated AC"; break
+                    let nv = if sb == 1: 1 shl al else: -(1 shl al)
+                    # Turbo do-while: always process k first; nonzero coeffs
+                    # are refined without counting toward r, zeros count
+                    # down, stop at the (r+1)-th zero. (A plain
+                    # `while zeros < r` loop skips refinement entirely when
+                    # r == 0 and the current coeff is already significant.)
+                    var rr = r
+                    while true:
+                      if k > se: break
+                      let p = Unzigzag[k]
+                      if pcoef[ci][blk][p] != 0:
+                        let (okB, bit) = reader.readBits(1)
+                        if not okB: scanErr = "jpeg: truncated AC refine"; break
+                        if bit == 1 and (pcoef[ci][blk][p] and (1 shl al)) == 0:
+                          if pcoef[ci][blk][p] > 0:
+                            pcoef[ci][blk][p] += bit shl al
+                          else:
+                            pcoef[ci][blk][p] -= bit shl al
+                      else:
+                        if rr == 0: break
+                        dec(rr)
+                      inc(k)
+                    if scanErr != "": break
+                    let kk = min(k, se)
+                    pcoef[ci][blk][Unzigzag[kk]] = nv
+                    k = kk + 1
+                  else:
+                    scanErr = "jpeg: bad AC refine symbol"; break
+            if scanErr != "": break
+          if scanErr != "": break
+        inc(mcuIdx)
+        if restartInterval > 0 and mcuIdx mod restartInterval == 0:
+          for i in 0..<comps.len: comps[i].dcPred = 0
+          eobrun = 0
+      if scanErr != "":
+        when defined(progDebug):
+          echo "scan ", scanCount, " ss=", ss, " se=", se, " err=", scanErr
+        return err[DynamicImage](decodingError(scanErr))
+      inc(scanCount)
+      when defined(progDebug):
+        echo "scan ", scanCount, " done ss=", ss, " se=", se, " al=", al, " pos=", pos, "->", nextPos
+      pos = nextPos
+      continue
     else:
       if m >= 0xC0 and m <= 0xCF:
         return err[DynamicImage](unsupportedError(ukGenericFeature,
           "jpeg: SOF marker " & $m))
       discard
-    if scanStart < 0:
-      pos += segLen - 2
+    pos += segLen - 2
   # Build cleaned entropy stream: strip RSTn, stop at next marker.
-  var clean: seq[uint8] = @[]
-  var qq = scanStart
-  while qq + 1 < data.len:
-    if data[qq] == 0xFF:
-      let c2 = data[qq+1]
-      if c2 == 0x00:
-        clean.add([0xFF'u8, 0x00]); qq += 2
-      elif c2 >= 0xD0 and c2 <= 0xD7:
-        qq += 2
-      else:
-        break
-    else:
-      clean.add(data[qq]); inc(qq)
-  var reader = BitReader(data: clean, pos: 0, buf: 0, nbits: 0)
+  # (progressive finish needs no BitReader; blocks come from pcoef.)
+  var reader = BitReader(data: @[], pos: 0, buf: 0, nbits: 0)
+  if not progFinish:
+    let (clean, _) = buildCleanScan(scanStart)
+    reader = BitReader(data: clean, pos: 0, buf: 0, nbits: 0)
   var maxH = 1; var maxV = 1
   for c in comps:
     maxH = max(maxH, c.h); maxV = max(maxV, c.v)
@@ -301,46 +542,56 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
   var coef: array[64, float64]
   let totalMcus = mcuCountX * mcuCountY
   var mcuIdx = 0
-  while mcuIdx < totalMcus:
-    for sc in scanComps:
-      let ci = sc.comp
-      let nb = comps[ci].h * comps[ci].v
-      let cols = mcuCountX * comps[ci].h
-      for b in 0..<nb:
-        let (okD, sym) = decodeHuff(reader, dcTables[sc.dc])
-        if not okD:
-          return err[DynamicImage](decodingError("jpeg: bad DC code"))
-        let (okV, diff) = receiveExtend(reader, sym)
-        if not okV:
-          return err[DynamicImage](decodingError("jpeg: truncated DC"))
-        comps[ci].dcPred += diff
-        for i in 0..63: coef[i] = 0.0
-        coef[0] = float64(comps[ci].dcPred)
-        var k = 1
-        var eob = false
-        while k < 64 and not eob:
-          let (okA, rs) = decodeHuff(reader, acTables[sc.ac])
-          if not okA:
-            return err[DynamicImage](decodingError("jpeg: bad AC code"))
-          let r = rs shr 4; let s = rs and 15
-          if s == 0:
-            if r == 15: k += 16
-            else: eob = true
-          else:
-            k += r
-            if k >= 64:
-              return err[DynamicImage](decodingError("jpeg: AC overflow"))
-            let (okC, v) = receiveExtend(reader, s)
-            if not okC:
-              return err[DynamicImage](decodingError("jpeg: truncated AC"))
-            coef[Unzigzag[k]] = float64(v)
-            inc(k)
-        let bx = (mcuIdx mod mcuCountX) * comps[ci].h + (b mod comps[ci].h)
-        let by = (mcuIdx div mcuCountX) * comps[ci].v + (b div comps[ci].h)
-        comps[ci].blocks[by * cols + bx] = idctBlock(coef, qts[comps[ci].tq])
-    inc(mcuIdx)
-    if restartInterval > 0 and mcuIdx mod restartInterval == 0:
-      for i in 0..<comps.len: comps[i].dcPred = 0
+  if progFinish:
+    # progressive: dequant accumulated coefficients, IDCT every block
+    for ci in 0..<comps.len:
+      for bi in 0..<comps[ci].blocks.len:
+        for k in 0..63: coef[k] = float64(pcoef[ci][bi][k])
+        comps[ci].blocks[bi] = idctBlock(coef, qts[comps[ci].tq])
+    when defined(progDebug):
+      for k in 0..63:
+        echo "coef[", k, "]=", pcoef[0][0][k]
+  else:
+    while mcuIdx < totalMcus:
+      for sc in scanComps:
+        let ci = sc.comp
+        let nb = comps[ci].h * comps[ci].v
+        let cols = mcuCountX * comps[ci].h
+        for b in 0..<nb:
+          let (okD, sym) = decodeHuff(reader, dcTables[sc.dc])
+          if not okD:
+            return err[DynamicImage](decodingError("jpeg: bad DC code"))
+          let (okV, diff) = receiveExtend(reader, sym)
+          if not okV:
+            return err[DynamicImage](decodingError("jpeg: truncated DC"))
+          comps[ci].dcPred += diff
+          for i in 0..63: coef[i] = 0.0
+          coef[0] = float64(comps[ci].dcPred)
+          var k = 1
+          var eob = false
+          while k < 64 and not eob:
+            let (okA, rs) = decodeHuff(reader, acTables[sc.ac])
+            if not okA:
+              return err[DynamicImage](decodingError("jpeg: bad AC code"))
+            let r = rs shr 4; let s = rs and 15
+            if s == 0:
+              if r == 15: k += 16
+              else: eob = true
+            else:
+              k += r
+              if k >= 64:
+                return err[DynamicImage](decodingError("jpeg: AC overflow"))
+              let (okC, v) = receiveExtend(reader, s)
+              if not okC:
+                return err[DynamicImage](decodingError("jpeg: truncated AC"))
+              coef[Unzigzag[k]] = float64(v)
+              inc(k)
+          let bx = (mcuIdx mod mcuCountX) * comps[ci].h + (b mod comps[ci].h)
+          let by = (mcuIdx div mcuCountX) * comps[ci].v + (b div comps[ci].h)
+          comps[ci].blocks[by * cols + bx] = idctBlock(coef, qts[comps[ci].tq])
+      inc(mcuIdx)
+      if restartInterval > 0 and mcuIdx mod restartInterval == 0:
+        for i in 0..<comps.len: comps[i].dcPred = 0
   # assemble pixels with upsampling (replication)
   if comps.len == 1:
     var px = newSeq[Luma[uint8]](width * height)
@@ -354,6 +605,34 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
   elif comps.len == 3 or comps.len == 4:
     let isYcck = adobeTransform == 2
     var px = newSeq[Rgb[uint8]](width * height)
+    if comps.len == 3:
+      # 3-component fast path: hoist the runtime upsample divisions into
+      # per-column maps, gather planar rows, convert whole rows via SIMD.
+      var xmaps: array[3, seq[int]]
+      for ci in 0..2:
+        xmaps[ci] = newSeq[int](width)
+        for x in 0..<width: xmaps[ci][x] = (x * comps[ci].h) div maxH
+      var yRow = newSeq[uint8](width)
+      var cbRow = newSeq[uint8](width)
+      var crRow = newSeq[uint8](width)
+      for y in 0..<height:
+        for ci in 0..2:
+          let c = comps[ci]
+          let cols = mcuCountX * c.h
+          let sy = (y * c.v) div maxV
+          let by = sy div 8; let my = (sy mod 8) * 8
+          var dst: ptr UncheckedArray[uint8]
+          if ci == 0: dst = cast[ptr UncheckedArray[uint8]](addr yRow[0])
+          elif ci == 1: dst = cast[ptr UncheckedArray[uint8]](addr cbRow[0])
+          else: dst = cast[ptr UncheckedArray[uint8]](addr crRow[0])
+          let xm = xmaps[ci]
+          for x in 0..<width:
+            let sx = xm[x]
+            dst[x] = c.blocks[by * cols + (sx div 8)][my + (sx mod 8)]
+        ycbcrRowSimd(addr yRow[0], addr cbRow[0], addr crRow[0],
+          cast[ptr uint8](addr px[y*width]), width)
+      return ok(DynamicImage(kind: dkRgb8, rgb8:
+        RgbImage(width: uint32(width), height: uint32(height), pixels: px)))
     for y in 0..<height:
       for x in 0..<width:
         var samp: array[4, uint8]
@@ -362,21 +641,17 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
           let sx = (x * c.h) div maxH; let sy = (y * c.v) div maxV
           let cols = mcuCountX * c.h
           samp[ci] = c.blocks[(sy div 8) * cols + (sx div 8)][(sy mod 8)*8 + (sx mod 8)]
-        if comps.len == 4:
-          var cc, mm, yy, kk: uint8
-          if isYcck:
-            let (r, g, b) = ycbcrToRgb(samp[0], samp[1], samp[2])
-            cc = 255 - r; mm = 255 - g; yy = 255 - b; kk = samp[3]
-          else:
-            cc = 255 - samp[0]; mm = 255 - samp[1]
-            yy = 255 - samp[2]; kk = 255 - samp[3]
-          px[y*width+x] = Rgb[uint8](data: [
-            uint8(255 - min(255, int(cc) + int(kk))),
-            uint8(255 - min(255, int(mm) + int(kk))),
-            uint8(255 - min(255, int(yy) + int(kk)))])
-        else:
+        var cc, mm, yy, kk: uint8
+        if isYcck:
           let (r, g, b) = ycbcrToRgb(samp[0], samp[1], samp[2])
-          px[y*width+x] = Rgb[uint8](data: [r, g, b])
+          cc = 255 - r; mm = 255 - g; yy = 255 - b; kk = samp[3]
+        else:
+          cc = 255 - samp[0]; mm = 255 - samp[1]
+          yy = 255 - samp[2]; kk = 255 - samp[3]
+        px[y*width+x] = Rgb[uint8](data: [
+          uint8(255 - min(255, int(cc) + int(kk))),
+          uint8(255 - min(255, int(mm) + int(kk))),
+          uint8(255 - min(255, int(yy) + int(kk)))])
     return ok(DynamicImage(kind: dkRgb8, rgb8:
       RgbImage(width: uint32(width), height: uint32(height), pixels: px)))
   err[DynamicImage](unsupportedError(ukGenericFeature, "jpeg: components"))

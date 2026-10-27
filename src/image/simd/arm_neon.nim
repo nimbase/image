@@ -9,8 +9,52 @@ when defined(arm64):
   func vld1q_f64*(p: ptr float64): float64x2 {.importc: "vld1q_f64".}
   func vst1q_f64*(p: ptr float64, v: float64x2) {.importc: "vst1q_f64".}
   func vaddq_f64*(a, b: float64x2): float64x2 {.importc: "vaddq_f64".}
+  func vsubq_f64*(a, b: float64x2): float64x2 {.importc: "vsubq_f64".}
   func vmulq_f64*(a, b: float64x2): float64x2 {.importc: "vmulq_f64".}
   {.pop.}
+
+  proc ycbcrRowNeon*(yP, cbP, crP, rgbP: ptr uint8, n2: int) =
+    ## YCbCr to interleaved RGB over `n2` pixels (`n2` even).
+    ## Same op order/grouping as the scalar converter: bit-identical.
+    ## Conversion to int stays scalar (nimsimd 1.3.2 lacks vcvt f64).
+    let Y = cast[ptr UncheckedArray[uint8]](yP)
+    let Cb = cast[ptr UncheckedArray[uint8]](cbP)
+    let Cr = cast[ptr UncheckedArray[uint8]](crP)
+    let Rgb = cast[ptr UncheckedArray[uint8]](rgbP)
+    var cc = [128.0, 128.0]
+    var k1 = [1.402, 1.402]
+    var k2 = [0.344136, 0.344136]
+    var k3 = [0.714136, 0.714136]
+    var k4 = [1.772, 1.772]
+    var hh = [0.5, 0.5]
+    let c128 = vld1q_f64(addr cc[0])
+    let k1402 = vld1q_f64(addr k1[0])
+    let k0344 = vld1q_f64(addr k2[0])
+    let k0714 = vld1q_f64(addr k3[0])
+    let k1772 = vld1q_f64(addr k4[0])
+    let half = vld1q_f64(addr hh[0])
+    var o: array[2, float64]
+    var i = 0
+    while i < n2:
+      var yy = [float64(Y[i]), float64(Y[i+1])]
+      var cb = [float64(Cb[i]), float64(Cb[i+1])]
+      var cr = [float64(Cr[i]), float64(Cr[i+1])]
+      let yv = vld1q_f64(addr yy[0])
+      let cbv = vsubq_f64(vld1q_f64(addr cb[0]), c128)
+      let crv = vsubq_f64(vld1q_f64(addr cr[0]), c128)
+      vst1q_f64(addr o[0],
+        vaddq_f64(vaddq_f64(yv, vmulq_f64(k1402, crv)), half))
+      Rgb[3*i] = uint8(clamp(int(o[0]), 0, 255))
+      Rgb[3*i+3] = uint8(clamp(int(o[1]), 0, 255))
+      vst1q_f64(addr o[0], vaddq_f64(vsubq_f64(vsubq_f64(yv,
+        vmulq_f64(k0344, cbv)), vmulq_f64(k0714, crv)), half))
+      Rgb[3*i+1] = uint8(clamp(int(o[0]), 0, 255))
+      Rgb[3*i+4] = uint8(clamp(int(o[1]), 0, 255))
+      vst1q_f64(addr o[0],
+        vaddq_f64(vaddq_f64(yv, vmulq_f64(k1772, cbv)), half))
+      Rgb[3*i+2] = uint8(clamp(int(o[0]), 0, 255))
+      Rgb[3*i+5] = uint8(clamp(int(o[1]), 0, 255))
+      i += 2
 
   template f64p(p: ptr float64, i: int): ptr float64 =
     cast[ptr float64](cast[int](p) + i * 8)

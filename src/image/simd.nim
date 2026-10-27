@@ -26,6 +26,67 @@ proc paeth*(a, b, c: int): int =
   let pa = abs(p - a); let pb = abs(p - b); let pc = abs(p - c)
   if pa <= pb and pa <= pc: a elif pb <= pc: b else: c
 
+proc ycbcrToRgb*(y, cb, cr: uint8): tuple[r, g, b: uint8] =
+  ## Scalar YCbCr converter (JFIF levels). Vectorized row paths must match
+  ## this exactly, including op grouping and truncation.
+  let fY = float64(y); let fCb = float64(cb) - 128.0; let fCr = float64(cr) - 128.0
+  (uint8(clamp(int(fY + 1.402 * fCr + 0.5), 0, 255)),
+   uint8(clamp(int(fY - 0.344136 * fCb - 0.714136 * fCr + 0.5), 0, 255)),
+   uint8(clamp(int(fY + 1.772 * fCb + 0.5), 0, 255)))
+
+proc u8p(p: ptr uint8, i: int): ptr uint8 {.inline.} =
+  cast[ptr uint8](cast[int](p) + i)
+
+proc ycbcrRowScalar*(yP, cbP, crP, rgbP: ptr uint8, n: int) =
+  ## Scalar oracle: planar Y/Cb/Cr rows to interleaved RGB bytes.
+  let Y = cast[ptr UncheckedArray[uint8]](yP)
+  let Cb = cast[ptr UncheckedArray[uint8]](cbP)
+  let Cr = cast[ptr UncheckedArray[uint8]](crP)
+  let Rgb = cast[ptr UncheckedArray[uint8]](rgbP)
+  for i in 0..<n:
+    let (r, g, b) = ycbcrToRgb(Y[i], Cb[i], Cr[i])
+    Rgb[3*i] = r; Rgb[3*i+1] = g; Rgb[3*i+2] = b
+
+proc ycbcrRowSimd*(yP, cbP, crP, rgbP: ptr uint8, n: int) =
+  ## YCbCr row converter with runtime dispatch. Fully parallel per pixel.
+  if n <= 0: return
+  when defined(amd64):
+    if useAvx2 and n >= 8:
+      let m = (n div 4) * 4
+      ycbcrRowAvx(yP, cbP, crP, rgbP, m)
+      let m2 = ((n - m) div 2) * 2
+      if m2 > 0:
+        ycbcrRowSse2(u8p(yP, m), u8p(cbP, m), u8p(crP, m), u8p(rgbP, m*3), m2)
+      for i in (m + m2)..<n:
+        let (r, g, b) = ycbcrToRgb(
+          cast[ptr UncheckedArray[uint8]](yP)[i],
+          cast[ptr UncheckedArray[uint8]](cbP)[i],
+          cast[ptr UncheckedArray[uint8]](crP)[i])
+        let Rgb = cast[ptr UncheckedArray[uint8]](rgbP)
+        Rgb[3*i] = r; Rgb[3*i+1] = g; Rgb[3*i+2] = b
+    else:
+      let m = (n div 2) * 2
+      if m > 0: ycbcrRowSse2(yP, cbP, crP, rgbP, m)
+      for i in m..<n:
+        let (r, g, b) = ycbcrToRgb(
+          cast[ptr UncheckedArray[uint8]](yP)[i],
+          cast[ptr UncheckedArray[uint8]](cbP)[i],
+          cast[ptr UncheckedArray[uint8]](crP)[i])
+        let Rgb = cast[ptr UncheckedArray[uint8]](rgbP)
+        Rgb[3*i] = r; Rgb[3*i+1] = g; Rgb[3*i+2] = b
+  elif defined(arm64):
+    let m = (n div 2) * 2
+    if m > 0: ycbcrRowNeon(yP, cbP, crP, rgbP, m)
+    for i in m..<n:
+      let (r, g, b) = ycbcrToRgb(
+        cast[ptr UncheckedArray[uint8]](yP)[i],
+        cast[ptr UncheckedArray[uint8]](cbP)[i],
+        cast[ptr UncheckedArray[uint8]](crP)[i])
+      let Rgb = cast[ptr UncheckedArray[uint8]](rgbP)
+      Rgb[3*i] = r; Rgb[3*i+1] = g; Rgb[3*i+2] = b
+  else:
+    ycbcrRowScalar(yP, cbP, crP, rgbP, n)
+
 proc unfilterRowScalar*(filter: uint8, cur, prev: var seq[uint8],
     bpp: int): bool =
   ## Scalar reference and fallback. All SIMD paths must match this exactly.
@@ -101,7 +162,7 @@ proc initJpegTables() =
 
 initJpegTables()
 
-proc fptr(p: ptr float64, i: int): ptr float64 {.inline.} =
+proc fptr(p: ptr float64, i: int): ptr float64 {.inline, used.} =
   cast[ptr float64](cast[int](p) + i * sizeof(float64))
 
 proc idctPass1*(tmpP, midP, cosP, cfacP: ptr float64) {.inline.} =

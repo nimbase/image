@@ -20,6 +20,40 @@ when defined(amd64):
   template g(p: ptr float64, i: int): ptr float64 =
     cast[ptr float64](cast[int](p) + i * 8)
 
+  proc ycbcrRowAvx*(yP, cbP, crP, rgbP: ptr uint8, n4: int) =
+    ## YCbCr to interleaved RGB over `n4` pixels (`n4` a multiple of 4).
+    ## Same op order/grouping as the scalar converter: bit-identical.
+    let Y = cast[ptr UncheckedArray[uint8]](yP)
+    let Cb = cast[ptr UncheckedArray[uint8]](cbP)
+    let Cr = cast[ptr UncheckedArray[uint8]](crP)
+    let Rgb = cast[ptr UncheckedArray[uint8]](rgbP)
+    let c128 = mm256_set1_pd(128.0)
+    let k1402 = mm256_set1_pd(1.402)
+    let k0344 = mm256_set1_pd(0.344136)
+    let k0714 = mm256_set1_pd(0.714136)
+    let k1772 = mm256_set1_pd(1.772)
+    let half = mm256_set1_pd(0.5)
+    var o: array[4, int32]
+    var i = 0
+    while i < n4:
+      let yv = mm256_set_pd(float64(Y[i+3]), float64(Y[i+2]),
+        float64(Y[i+1]), float64(Y[i]))
+      let cbv = mm256_sub_pd(mm256_set_pd(float64(Cb[i+3]), float64(Cb[i+2]),
+        float64(Cb[i+1]), float64(Cb[i])), c128)
+      let crv = mm256_sub_pd(mm256_set_pd(float64(Cr[i+3]), float64(Cr[i+2]),
+        float64(Cr[i+1]), float64(Cr[i])), c128)
+      let rv = mm256_add_pd(mm256_add_pd(yv, mm256_mul_pd(k1402, crv)), half)
+      let gv = mm256_add_pd(mm256_sub_pd(mm256_sub_pd(yv,
+        mm256_mul_pd(k0344, cbv)), mm256_mul_pd(k0714, crv)), half)
+      let bv = mm256_add_pd(mm256_add_pd(yv, mm256_mul_pd(k1772, cbv)), half)
+      mm_storeu_si128(addr o[0], mm256_cvttpd_epi32(rv))
+      for k in 0..3: Rgb[3*i+3*k] = uint8(clamp(int(o[k]), 0, 255))
+      mm_storeu_si128(addr o[0], mm256_cvttpd_epi32(gv))
+      for k in 0..3: Rgb[3*i+1+3*k] = uint8(clamp(int(o[k]), 0, 255))
+      mm_storeu_si128(addr o[0], mm256_cvttpd_epi32(bv))
+      for k in 0..3: Rgb[3*i+2+3*k] = uint8(clamp(int(o[k]), 0, 255))
+      i += 4
+
   proc idctPass1Avx*(tmpP, midP, cosP, cfacP: ptr float64) =
     ## First IDCT pass: `mid[y][x] += (Cfac[u] * tmp[y][u]) * CosT[u][x]`.
     for y in 0..7:
