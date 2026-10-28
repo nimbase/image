@@ -13,7 +13,11 @@
 </p>
 
 > [!NOTE]
-> This is an LLM-accelerated Nim package 
+> This is an LLM-accelerated Nim package, a pure-Nim port of the Rust
+> [`image`](https://github.com/image-rs/image) crate (v0.25.9), mirroring its
+> API (`DynamicImage`, `ImageBuffer`, `ImageReader`, `ImageFormat`). Zero C
+> bindings (deflate via pure-Nim `pkg/archive`); `imageops` processing
+> functions are out of scope for v1.
 
 
 ## Features
