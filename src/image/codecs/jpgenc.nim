@@ -10,6 +10,14 @@ import ../buffer
 import ../dynamic
 import ../math
 import ../simd
+when defined(decodeProfile):
+  import std/times
+  import std/posix
+  proc peakMb(): float64 =
+    var ru: Rusage
+    discard getrusage(RUSAGE_SELF, addr ru)
+    when defined(macosx): float64(ru.ru_maxrss) / 1e6
+    else: float64(ru.ru_maxrss) / 1e3
 
 const
   LumaQBase = [16,11,10,16,24,40,51,61,12,12,14,19,26,58,60,55,
@@ -511,16 +519,26 @@ proc writeScan(s: JpegSrc, img: DynamicImage, w: var BitWriter,
 
 proc encodeJpeg*(img: DynamicImage, quality = 90,
     subsample = true, optimize = false): ImageResult[seq[uint8]] =
+  when defined(decodeProfile):
+    let tEnc0 = cpuTime()
   let pp = prepareSource(img, quality, subsample)
   if not pp.ok: return err[seq[uint8]](pp.err)
   let p = pp.value
+  when defined(decodeProfile):
+    let tEncPrep = cpuTime() - tEnc0
+    echo "encProfile afterPrepare peak=", peakMb(), "MB"
   let w = p.w; let h = p.h
   var dcY, dcC, acY, acC: HuffCode
   var dcYBits, dcCBits, acYBits, acCBits: array[16, int]
   var dcYVals, dcCVals, acYVals, acCVals: seq[int]
   if optimize:
     var dcYF, acYF, dcCF, acCF: array[256, int]
+    when defined(decodeProfile):
+      let tEncFreq0 = cpuTime()
     countFrequencies(p, img, dcYF, acYF, dcCF, acCF)
+    when defined(decodeProfile):
+      echo "encProfile afterFreq peak=", peakMb(), "MB freqT=",
+        cpuTime() - tEncFreq0, "s"
     let t0 = genOptimalTable(dcYF)
     let t1 = genOptimalTable(dcCF)
     let t2 = genOptimalTable(acYF)
@@ -591,8 +609,14 @@ proc encodeJpeg*(img: DynamicImage, quality = 90,
   else: sos = @[3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]
   output.add(seg(0xDA, sos))
   var writer = BitWriter()
+  when defined(decodeProfile):
+    let tEncScan0 = cpuTime()
   writeScan(p, img, writer, dcY, acY, dcC, acC)
   writer.flushBits()
+  when defined(decodeProfile):
+    echo "encProfile afterScan peak=", peakMb(), "MB scanT=",
+      cpuTime() - tEncScan0, "s totalT=", cpuTime() - tEnc0,
+      "s prepT=", tEncPrep, "s outBytes=", writer.data.len
   for b in writer.data: output.add(b)
   output.add([0xFF'u8, 0xD9])
   ok(output)

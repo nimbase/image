@@ -20,6 +20,13 @@ proc readBytes(path: string): seq[uint8] =
   if s.len > 0:
     copyMem(addr result[0], unsafeAddr s[0], s.len)
 
+proc readProf(name: string): seq[uint8] =
+  ## Profiling decode fixtures live in /tmp (see benches/genjpgprof.nim).
+  let path = "/tmp/jpgprof/" & name
+  if not fileExists(path):
+    quit("missing fixture " & path & "; run: clue build benches/genjpgprof.nim --release -o:/tmp/genjpgprof && /tmp/genjpgprof", 1)
+  readBytes(path)
+
 proc gradRgb(w, h: int): seq[Rgb[uint8]] =
   result = newSeq[Rgb[uint8]](w * h)
   for y in 0..<h:
@@ -28,7 +35,12 @@ proc gradRgb(w, h: int): seq[Rgb[uint8]] =
         uint8((y * 255) div h), uint8(((x + y) * 255) div (w + h))])
 
 proc report(caseName: string, info: string, t0: float64) =
-  echo fmt"{caseName} {info} elapsed={cpuTime()-t0:.1f}s peak={peakMb():.1f}MB"
+  let pk = peakMb()
+  let el = cpuTime() - t0
+  # Steady live set after transient buffers are released (munmap'd JPEG
+  # grids don't count here; GC freelists do NOT — occupied is live only).
+  GC_fullCollect()
+  echo fmt"{caseName} {info} elapsed={el:.1f}s peak={pk:.1f}MB steadyLive={float64(getOccupiedMem())/1e6:.1f}MB"
 
 when isMainModule:
   let c = paramStr(1)
@@ -114,5 +126,106 @@ when isMainModule:
     let rgba = r.value.toRgba8()
     doAssert rgba.width > 0
     report(c, $r.value.dimensions() & " rgbaBytes=" & $(rgba.pixels.len * 4), t0)
+  of "jpgbase24":
+    let px = readProf("base24.jpg")
+    let r = decodeJpeg(px)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgbase24d4":
+    let px = readProf("base24.jpg")
+    let r = decodeJpeg(px, 4)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpggray24":
+    let px = readProf("gray24.jpg")
+    let r = decodeJpeg(px)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpg444":
+    let px = readProf("c444_24.jpg")
+    let r = decodeJpeg(px)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgodd":
+    let px = readProf("odd.jpg")
+    let r = decodeJpeg(px)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgprog24d4":
+    let px = readBytes("tests/fixtures/pawel-czerwinski-dz4Kpq_8xRg-unsplash.jpg")
+    let r = decodeJpeg(px, 4)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgprog24d8":
+    let px = readBytes("tests/fixtures/pawel-czerwinski-dz4Kpq_8xRg-unsplash.jpg")
+    let r = decodeJpeg(px, 8)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgprogsmall":
+    let px = readBytes("tests/fixtures/jpg/progressive/cat.jpg")
+    let r = decodeJpeg(px)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgphone15":
+    let px = readBytes("tests/fixtures/img20250220_18534209.jpg")
+    let r = decodeJpeg(px)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgphone15d4":
+    let px = readBytes("tests/fixtures/img20250220_18534209.jpg")
+    let r = decodeJpeg(px, 4)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgphone139":
+    let px = readBytes("tests/fixtures/img20250218_20360309.jpg")
+    let r = decodeJpeg(px)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgphone139d4":
+    let px = readBytes("tests/fixtures/img20250218_20360309.jpg")
+    let r = decodeJpeg(px, 4)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "jpgphone139d8":
+    let px = readBytes("tests/fixtures/img20250218_20360309.jpg")
+    let r = decodeJpeg(px, 8)
+    doAssert r.ok, r.err.msg
+    report(c, $r.value.dimensions() & " in=" & $px.len, t0)
+  of "enc24q75":
+    var px = gradRgb(6000, 4000)
+    let img = DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: 6000,
+      height: 4000, pixels: move(px)))
+    let enc = encodeJpeg(img, 75)
+    doAssert enc.ok, enc.err.msg
+    report(c, "out=" & $enc.value.len, t0)
+  of "enc24q95":
+    var px = gradRgb(6000, 4000)
+    let img = DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: 6000,
+      height: 4000, pixels: move(px)))
+    let enc = encodeJpeg(img, 95)
+    doAssert enc.ok, enc.err.msg
+    report(c, "out=" & $enc.value.len, t0)
+  of "enc24nosub":
+    var px = gradRgb(6000, 4000)
+    let img = DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: 6000,
+      height: 4000, pixels: move(px)))
+    let enc = encodeJpeg(img, 90, subsample = false)
+    doAssert enc.ok, enc.err.msg
+    report(c, "out=" & $enc.value.len, t0)
+  of "enc24gray":
+    var gx = newSeq[Luma[uint8]](6000 * 4000)
+    for i in 0..<gx.len: gx[i] = Luma[uint8](data: [uint8(i mod 251)])
+    let img = DynamicImage(kind: dkLuma8,
+      luma8: GrayImage(width: 6000, height: 4000, pixels: move(gx)))
+    let enc = encodeJpeg(img, 90)
+    doAssert enc.ok, enc.err.msg
+    report(c, "out=" & $enc.value.len, t0)
+  of "encodd":
+    var ox = gradRgb(6017, 4023)
+    let img = DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: 6017,
+      height: 4023, pixels: move(ox)))
+    let enc = encodeJpeg(img, 90)
+    doAssert enc.ok, enc.err.msg
+    report(c, "out=" & $enc.value.len, t0)
   else:
     quit("unknown case: " & c, 1)
