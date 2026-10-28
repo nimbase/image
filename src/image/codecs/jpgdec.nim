@@ -7,6 +7,8 @@ import ../error
 import ../buffer
 import ../dynamic
 import ../simd
+when defined(linux) or defined(macosx):
+  import posix
 when defined(decodeProfile):
   import std/times
   import std/posix
@@ -142,15 +144,121 @@ proc decodeHuff(r: var BitReader, t: HuffTable): tuple[ok: bool, sym: int] =
 
 # ---------- frame structures ----------
 
+proc rawPages(bytes: int): pointer =
+  ## OS-page-backed zeroed memory for giant decode transients (144 MB
+  ## coefficient grid at 24 MP). Nim's allocator never returns freed
+  ## chunks to the OS (verified: 194 MB stays resident after the decode
+  ## buffers are freed), so a viewer would sit on ~200 MB per big photo.
+  ## munmap/rawFreePages returns pages deterministically. Zero-filled by
+  ## the OS, matching the newSeq semantics the progressive refinement
+  ## path relies on (unwritten coefficients read as zero).
+  if bytes <= 0: return nil
+  when defined(linux) or defined(macosx):
+    result = mmap(nil, bytes, PROT_READ or PROT_WRITE,
+      MAP_PRIVATE or MAP_ANONYMOUS, -1, 0)
+    if result == MAP_FAILED: result = nil
+  else:
+    result = alloc0(bytes) # fallback: zeroed, but retained by GC heap
+
+proc rawFreePages(p: pointer, bytes: int) =
+  if p == nil: return
+  when defined(linux) or defined(macosx):
+    discard munmap(p, bytes)
+  else:
+    dealloc(p)
+
+type
+  CoefGrid = object
+    ## Manually-allocated coefficient block grid (progressive JPEG state).
+    ## Same value semantics as `seq[array[64, int32]]` but bypasses the GC
+    ## heap: 144 MB on a 24 MP photo. GC freelists stay mapped (resident),
+    ## while munmap (via rawFreePages) returns pages to the OS, so a viewer
+    ## decoding one big photo no longer sits on ~200 MB after the decode
+    ## finishes.
+    ## Copies are a compile error — index in place like JpegComponent.
+    p: ptr UncheckedArray[array[64, int32]]
+    n: int
+  PixBlocks = object
+    ## Same idea for IDCT output blocks (36 MB at 24 MP).
+    p: ptr UncheckedArray[array[64, uint8]]
+    n: int
+
+proc `=destroy`(g: var CoefGrid) =
+  if g.p != nil:
+    rawFreePages(g.p, g.n * sizeof(array[64, int32]))
+    g.p = nil
+    g.n = 0
+
+proc `=copy`(dst: var CoefGrid, src: CoefGrid) {.
+    error: "CoefGrid must not be copied; index in place".}
+
+proc `=sink`(dst: var CoefGrid, src: CoefGrid) =
+  if dst.p != nil: rawFreePages(dst.p, dst.n * sizeof(array[64, int32]))
+  wasMoved(dst)
+  dst.p = src.p
+  dst.n = src.n
+
+proc `=destroy`(b: var PixBlocks) =
+  if b.p != nil:
+    rawFreePages(b.p, b.n * sizeof(array[64, uint8]))
+    b.p = nil
+    b.n = 0
+
+proc `=copy`(dst: var PixBlocks, src: PixBlocks) {.
+    error: "PixBlocks must not be copied; index in place".}
+
+proc `=sink`(dst: var PixBlocks, src: PixBlocks) =
+  if dst.p != nil: rawFreePages(dst.p, dst.n * sizeof(array[64, uint8]))
+  wasMoved(dst)
+  dst.p = src.p
+  dst.n = src.n
+
+proc newCoefGrid(n: int): CoefGrid =
+  ## Zero-initialized like newSeq (progressive refinement reads unwritten
+  ## coefficients as zero, e.g. the eobrun skip path).
+  result.n = n
+  if n > 0:
+    result.p = cast[ptr UncheckedArray[array[64, int32]]](
+      rawPages(n * sizeof(array[64, int32])))
+    if result.p == nil:
+      raise newException(OutOfMemDefect, "jpeg: out of memory")
+
+proc newPixBlocks(n: int): PixBlocks =
+  result.n = n
+  if n > 0:
+    result.p = cast[ptr UncheckedArray[array[64, uint8]]](
+      rawPages(n * sizeof(array[64, uint8])))
+    if result.p == nil:
+      raise newException(OutOfMemDefect, "jpeg: out of memory")
+
+proc len(g: var CoefGrid): int = g.n
+proc len(b: var PixBlocks): int = b.n
+
+proc `[]`(g: var CoefGrid, i: int): var array[64, int32] =
+  assert i >= 0 and i < g.n
+  g.p[i]
+
+proc `[]=`(g: var CoefGrid, i: int, v: array[64, int32]) =
+  assert i >= 0 and i < g.n
+  g.p[i] = v
+
+proc `[]`(b: var PixBlocks, i: int): var array[64, uint8] =
+  assert i >= 0 and i < b.n
+  b.p[i]
+
+proc `[]=`(b: var PixBlocks, i: int, v: array[64, uint8]) =
+  assert i >= 0 and i < b.n
+  b.p[i] = v
+
 type JpegComponent = object
-  ## NOTE: copying a JpegComponent deep-copies the whole blocks seq
-  ## (24 MB for Y at 24 MP). Never `let c = comps[i]` / `for c in comps`
-  ## in any loop — always index `comps[i]` in place.
+  ## NOTE: copying a JpegComponent is a compile error (its `blocks`
+  ## buffer is manually managed). Never `let c = comps[i]` /
+  ## `for c in comps` in any loop — always index `comps[i]` in place.
   id: uint8
   h*, v*: int
   tq*: int
   dcPred*: int
-  blocks*: seq[array[64, uint8]]
+  blocks*: PixBlocks
 
 proc jpegDimensions*(data: seq[uint8]): ImageResult[tuple[w, h: uint32]] =
   ## SOF-only header scan: image dimensions without decoding pixels.
@@ -212,7 +320,7 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
   var scanStart = -1
   # progressive state (SOF2 only; baseline path below is untouched)
   var progressive = false
-  var pcoef: seq[seq[array[64, int32]]] = @[] # per comp: raw coeff blocks
+  var pcoef: seq[CoefGrid] = @[] # per comp: raw coeff blocks (manual)
   var scanCount = 0
   var pMaxH = 1; var pMaxV = 1
   var pMcuX = 0; var pMcuY = 0
@@ -312,7 +420,7 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
           return err[DynamicImage](unsupportedError(ukGenericFeature,
             "jpeg: sampling factors"))
         comps.add(JpegComponent(id: body[6+3*i], h: h, v: v,
-          tq: int(body[6+3*i+2]), dcPred: 0, blocks: @[]))
+          tq: int(body[6+3*i+2]), dcPred: 0, blocks: PixBlocks()))
       sofFound = true
       if m == 0xC2:
         progressive = true
@@ -323,7 +431,7 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
         pMcuY = (height + mcuH - 1) div mcuH
         pcoef = @[]
         for i in 0..<comps.len:
-          pcoef.add(newSeq[array[64, int32]](pMcuX * comps[i].h * pMcuY * comps[i].v))
+          pcoef.add(newCoefGrid(pMcuX * comps[i].h * pMcuY * comps[i].v))
     of 0xC4:
       var q = 0
       while q < body.len:
@@ -625,7 +733,7 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
   let mcuCountX = (width + mcuW - 1) div mcuW
   let mcuCountY = (height + mcuH - 1) div mcuH
   for i in 0..<comps.len:
-    comps[i].blocks = newSeq[array[64, uint8]](
+    comps[i].blocks = newPixBlocks(
       mcuCountX * comps[i].h * mcuCountY * comps[i].v)
   var coef: array[64, float64]
   let totalMcus = mcuCountX * mcuCountY
@@ -726,9 +834,8 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
         when defined(decodeProfile):
           let tProfG0 = cpuTime()
         for ci in 0..2:
-          # NOTE: never `let c = comps[ci]` here — JpegComponent's =copy
-          # deep-copies the whole blocks seq (24 MB for Y at 24 MP),
-          # turning this loop into ~144 GB of memmove. Index in place.
+          # NOTE: `let c = comps[ci]` is a compile error (PixBlocks is
+          # non-copyable) — always index `comps[ci]` in place.
           let cols = mcuCountX * comps[ci].h
           let sy = (y * comps[ci].v) div maxV
           let by = sy div blk; let my = (sy mod blk) * blk
