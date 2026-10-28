@@ -167,27 +167,42 @@ when isMainModule:
     doAssert r.ok, r.err.msg
     report(c, $r.value.dimensions() & " in=" & $px.len, t0)
   of "jpgphone15":
-    let px = readBytes("tests/fixtures/img20250220_18534209.jpg")
+    const phone15 = "/tmp/jpgprof/phone/img20250220_18534209.jpg"
+    if not fileExists(phone15):
+      quit("jpgphone15 skipped: missing " & phone15 & " (local-only fixture, not vendored)", 0)
+    let px = readBytes(phone15)
     let r = decodeJpeg(px)
     doAssert r.ok, r.err.msg
     report(c, $r.value.dimensions() & " in=" & $px.len, t0)
   of "jpgphone15d4":
-    let px = readBytes("tests/fixtures/img20250220_18534209.jpg")
+    const phone15d4 = "/tmp/jpgprof/phone/img20250220_18534209.jpg"
+    if not fileExists(phone15d4):
+      quit("jpgphone15d4 skipped: missing " & phone15d4 & " (local-only fixture, not vendored)", 0)
+    let px = readBytes(phone15d4)
     let r = decodeJpeg(px, 4)
     doAssert r.ok, r.err.msg
     report(c, $r.value.dimensions() & " in=" & $px.len, t0)
   of "jpgphone139":
-    let px = readBytes("tests/fixtures/img20250218_20360309.jpg")
+    const phone139 = "/tmp/jpgprof/phone/img20250218_20360309.jpg"
+    if not fileExists(phone139):
+      quit("jpgphone139 skipped: missing " & phone139 & " (local-only fixture, not vendored)", 0)
+    let px = readBytes(phone139)
     let r = decodeJpeg(px)
     doAssert r.ok, r.err.msg
     report(c, $r.value.dimensions() & " in=" & $px.len, t0)
   of "jpgphone139d4":
-    let px = readBytes("tests/fixtures/img20250218_20360309.jpg")
+    const phone139d4 = "/tmp/jpgprof/phone/img20250218_20360309.jpg"
+    if not fileExists(phone139d4):
+      quit("jpgphone139d4 skipped: missing " & phone139d4 & " (local-only fixture, not vendored)", 0)
+    let px = readBytes(phone139d4)
     let r = decodeJpeg(px, 4)
     doAssert r.ok, r.err.msg
     report(c, $r.value.dimensions() & " in=" & $px.len, t0)
   of "jpgphone139d8":
-    let px = readBytes("tests/fixtures/img20250218_20360309.jpg")
+    const phone139d8 = "/tmp/jpgprof/phone/img20250218_20360309.jpg"
+    if not fileExists(phone139d8):
+      quit("jpgphone139d8 skipped: missing " & phone139d8 & " (local-only fixture, not vendored)", 0)
+    let px = readBytes(phone139d8)
     let r = decodeJpeg(px, 8)
     doAssert r.ok, r.err.msg
     report(c, $r.value.dimensions() & " in=" & $px.len, t0)
