@@ -94,7 +94,7 @@ proc decodeQoi*(data: seq[uint8]): ImageResult[RgbaImage] =
           return err[RgbaImage](decodingError("qoi: run overflow"))
         for _ in 0..<run:
           emit(pr, pg, pb, pa)
-  ok(RgbaImage(width: h.width, height: h.height, pixels: px))
+  ok(RgbaImage(width: h.width, height: h.height, pixels: move(px)))
 
 proc encodeQoi*(img: RgbaImage, channels = 4'u8, colorspace = 0'u8): seq[uint8] =
   result = newSeqOfCap[uint8](14 + img.pixels.len * 4 + 8)

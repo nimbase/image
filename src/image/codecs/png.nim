@@ -29,6 +29,178 @@ proc chunkCrc*(typ: array[4, uint8], data: openArray[uint8]): uint32 =
 proc bitVal(row: openArray[uint8], bitpos: int): int =
   int((row[bitpos div 8] shr uint8(7 - (bitpos mod 8))) and 1)
 
+proc buildFromSamplesStreamed(colorType, bitDepth: uint8, w, h: int,
+    rowBytes, channels, sampBytes: int,
+    plte: seq[tuple[r, g, b: uint8]], trnsAlpha: seq[uint8], trnsGray: int,
+    trnsRgb: tuple[r, g, b: int],
+    nextRow: proc(y: int): seq[uint8]): ImageResult[DynamicImage] =
+  ## Row-streamed twin of buildFromSamples for the non-interlaced path:
+  ## unfilters and converts one row at a time (Up/Paeth need only the
+  ## previous row), so no full-image raw buffer is retained. Callers
+  ## must invoke `nextRow` for strictly increasing y starting at 0;
+  ## the returned buffer is reused across calls, so each row is
+  ## consumed immediately. Pixel math mirrors buildFromSamples exactly.
+  if colorType == 3:
+    if trnsAlpha.len > 0:
+      var px = newSeq[Rgba[uint8]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let bitpos = x * int(bitDepth)
+          var v = 0
+          for k in 0..<int(bitDepth):
+            v = (v shl 1) or bitVal(row, bitpos + k)
+          if v >= plte.len:
+            return err[DynamicImage](decodingError("png: palette index OOB"))
+          let c = plte[v]
+          px[y*w+x] = Rgba[uint8](data: [c.r, c.g, c.b,
+            if v < trnsAlpha.len: trnsAlpha[v] else: 255'u8])
+      return ok(DynamicImage(kind: dkRgba8,
+        rgba8: RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
+    else:
+      var px = newSeq[Rgb[uint8]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let bitpos = x * int(bitDepth)
+          var v = 0
+          for k in 0..<int(bitDepth):
+            v = (v shl 1) or bitVal(row, bitpos + k)
+          if v >= plte.len:
+            return err[DynamicImage](decodingError("png: palette index OOB"))
+          let c = plte[v]
+          px[y*w+x] = Rgb[uint8](data: [c.r, c.g, c.b])
+      return ok(DynamicImage(kind: dkRgb8,
+        rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
+  elif colorType == 0:
+    if bitDepth == 16:
+      var px = newSeq[Luma[uint16]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let o = x * 2
+          px[y*w+x] = Luma[uint16](data: [(uint16(row[o]) shl 8) or uint16(row[o+1])])
+      if trnsGray >= 0:
+        var pxa = newSeq[LumaA[uint16]](w * h)
+        for i, p in px:
+          pxa[i] = LumaA[uint16](data: [p.data[0],
+            if int(p.data[0]) == trnsGray: 0'u16 else: 65535'u16])
+        return ok(DynamicImage(kind: dkLumaA16, lumaA16:
+          GrayAlpha16Image(width: uint32(w), height: uint32(h), pixels: move(pxa))))
+      return ok(DynamicImage(kind: dkLuma16,
+        luma16: Gray16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
+    else:
+      let maxv = (1 shl int(bitDepth)) - 1
+      if trnsGray >= 0:
+        var pxa = newSeq[LumaA[uint8]](w * h)
+        for y in 0..<h:
+          let row = nextRow(y)
+          for x in 0..<w:
+            let bitpos = x * int(bitDepth)
+            var v = 0
+            for k in 0..<int(bitDepth):
+              v = (v shl 1) or bitVal(row, bitpos + k)
+            pxa[y*w+x] = LumaA[uint8](data: [uint8((v * 255 + maxv div 2) div maxv),
+              if (v * 65535) div maxv == trnsGray: 0'u8 else: 255'u8])
+        return ok(DynamicImage(kind: dkLumaA8, lumaA8:
+          GrayAlphaImage(width: uint32(w), height: uint32(h), pixels: move(pxa))))
+      var px = newSeq[Luma[uint8]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let bitpos = x * int(bitDepth)
+          var v = 0
+          for k in 0..<int(bitDepth):
+            v = (v shl 1) or bitVal(row, bitpos + k)
+          px[y*w+x] = Luma[uint8](data: [uint8((v * 255 + maxv div 2) div maxv)])
+      return ok(DynamicImage(kind: dkLuma8,
+        luma8: GrayImage(width: uint32(w), height: uint32(h), pixels: move(px))))
+  elif colorType == 2:
+    if bitDepth == 16:
+      var px = newSeq[Rgb[uint16]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let o = x * 6
+          px[y*w+x] = Rgb[uint16](data: [
+            (uint16(row[o]) shl 8) or uint16(row[o+1]),
+            (uint16(row[o+2]) shl 8) or uint16(row[o+3]),
+            (uint16(row[o+4]) shl 8) or uint16(row[o+5])])
+      if trnsRgb.r >= 0:
+        var pxa = newSeq[Rgba[uint16]](w * h)
+        for i, p in px:
+          let a = if int(p.data[0]) == trnsRgb.r and int(p.data[1]) == trnsRgb.g and
+              int(p.data[2]) == trnsRgb.b: 0'u16 else: 65535'u16
+          pxa[i] = Rgba[uint16](data: [p.data[0], p.data[1], p.data[2], a])
+        return ok(DynamicImage(kind: dkRgba16, rgba16:
+          Rgba16Image(width: uint32(w), height: uint32(h), pixels: move(pxa))))
+      return ok(DynamicImage(kind: dkRgb16,
+        rgb16: Rgb16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
+    else:
+      if trnsRgb.r >= 0:
+        var pxa = newSeq[Rgba[uint8]](w * h)
+        for y in 0..<h:
+          let row = nextRow(y)
+          for x in 0..<w:
+            let o = x * 3
+            let a = if int(row[o]) == trnsRgb.r and int(row[o+1]) == trnsRgb.g and
+                int(row[o+2]) == trnsRgb.b: 0'u8 else: 255'u8
+            pxa[y*w+x] = Rgba[uint8](data: [row[o], row[o+1], row[o+2], a])
+        return ok(DynamicImage(kind: dkRgba8, rgba8:
+          RgbaImage(width: uint32(w), height: uint32(h), pixels: move(pxa))))
+      var px = newSeq[Rgb[uint8]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let o = x * 3
+          px[y*w+x] = Rgb[uint8](data: [row[o], row[o+1], row[o+2]])
+      return ok(DynamicImage(kind: dkRgb8,
+        rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
+  elif colorType == 4:
+    if bitDepth == 16:
+      var px = newSeq[LumaA[uint16]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let o = x * 4
+          px[y*w+x] = LumaA[uint16](data: [
+            (uint16(row[o]) shl 8) or uint16(row[o+1]),
+            (uint16(row[o+2]) shl 8) or uint16(row[o+3])])
+      return ok(DynamicImage(kind: dkLumaA16, lumaA16:
+        GrayAlpha16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
+    else:
+      var px = newSeq[LumaA[uint8]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let o = x * 2
+          px[y*w+x] = LumaA[uint8](data: [row[o], row[o+1]])
+      return ok(DynamicImage(kind: dkLumaA8, lumaA8:
+        GrayAlphaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
+  else: # colorType 6
+    if bitDepth == 16:
+      var px = newSeq[Rgba[uint16]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let o = x * 8
+          px[y*w+x] = Rgba[uint16](data: [
+            (uint16(row[o]) shl 8) or uint16(row[o+1]),
+            (uint16(row[o+2]) shl 8) or uint16(row[o+3]),
+            (uint16(row[o+4]) shl 8) or uint16(row[o+5]),
+            (uint16(row[o+6]) shl 8) or uint16(row[o+7])])
+      return ok(DynamicImage(kind: dkRgba16, rgba16:
+        Rgba16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
+    else:
+      var px = newSeq[Rgba[uint8]](w * h)
+      for y in 0..<h:
+        let row = nextRow(y)
+        for x in 0..<w:
+          let o = x * 4
+          px[y*w+x] = Rgba[uint8](data: [row[o], row[o+1], row[o+2], row[o+3]])
+      return ok(DynamicImage(kind: dkRgba8, rgba8:
+        RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
+
 proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
     get: proc(x, y, c: int): uint16,
     plte: seq[tuple[r, g, b: uint8]], trnsAlpha: seq[uint8],
@@ -46,7 +218,7 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
           px[y*w+x] = Rgba[uint8](data: [c.r, c.g, c.b,
             if v < trnsAlpha.len: trnsAlpha[v] else: 255'u8])
       return ok(DynamicImage(kind: dkRgba8,
-        rgba8: RgbaImage(width: uint32(w), height: uint32(h), pixels: px)))
+        rgba8: RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       var px = newSeq[Rgb[uint8]](w * h)
       for y in 0..<h:
@@ -57,7 +229,7 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
           let c = plte[v]
           px[y*w+x] = Rgb[uint8](data: [c.r, c.g, c.b])
       return ok(DynamicImage(kind: dkRgb8,
-        rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+        rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   elif colorType == 0:
     if bitDepth == 16:
       var px = newSeq[Luma[uint16]](w * h)
@@ -69,9 +241,9 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
           pxa[i] = LumaA[uint16](data: [p.data[0],
             if int(p.data[0]) == trnsGray: 0'u16 else: 65535'u16])
         return ok(DynamicImage(kind: dkLumaA16, lumaA16:
-          GrayAlpha16Image(width: uint32(w), height: uint32(h), pixels: pxa)))
+          GrayAlpha16Image(width: uint32(w), height: uint32(h), pixels: move(pxa))))
       return ok(DynamicImage(kind: dkLuma16,
-        luma16: Gray16Image(width: uint32(w), height: uint32(h), pixels: px)))
+        luma16: Gray16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       let maxv = (1 shl int(bitDepth)) - 1
       var px = newSeq[Luma[uint8]](w * h)
@@ -87,9 +259,9 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
             pxa[y*w+x] = LumaA[uint8](data: [px[y*w+x].data[0],
               if (v * 65535) div maxv == trnsGray: 0'u8 else: 255'u8])
         return ok(DynamicImage(kind: dkLumaA8, lumaA8:
-          GrayAlphaImage(width: uint32(w), height: uint32(h), pixels: pxa)))
+          GrayAlphaImage(width: uint32(w), height: uint32(h), pixels: move(pxa))))
       return ok(DynamicImage(kind: dkLuma8,
-        luma8: GrayImage(width: uint32(w), height: uint32(h), pixels: px)))
+        luma8: GrayImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   elif colorType == 2:
     if bitDepth == 16:
       var px = newSeq[Rgb[uint16]](w * h)
@@ -103,9 +275,9 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
               int(p.data[2]) == trnsRgb.b: 0'u16 else: 65535'u16
           pxa[i] = Rgba[uint16](data: [p.data[0], p.data[1], p.data[2], a])
         return ok(DynamicImage(kind: dkRgba16, rgba16:
-          Rgba16Image(width: uint32(w), height: uint32(h), pixels: pxa)))
+          Rgba16Image(width: uint32(w), height: uint32(h), pixels: move(pxa))))
       return ok(DynamicImage(kind: dkRgb16,
-        rgb16: Rgb16Image(width: uint32(w), height: uint32(h), pixels: px)))
+        rgb16: Rgb16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       var px = newSeq[Rgb[uint8]](w * h)
       for y in 0..<h:
@@ -119,9 +291,9 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
               int(p.data[2]) == trnsRgb.b: 0'u8 else: 255'u8
           pxa[i] = Rgba[uint8](data: [p.data[0], p.data[1], p.data[2], a])
         return ok(DynamicImage(kind: dkRgba8, rgba8:
-          RgbaImage(width: uint32(w), height: uint32(h), pixels: pxa)))
+          RgbaImage(width: uint32(w), height: uint32(h), pixels: move(pxa))))
       return ok(DynamicImage(kind: dkRgb8,
-        rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+        rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   elif colorType == 4:
     if bitDepth == 16:
       var px = newSeq[LumaA[uint16]](w * h)
@@ -129,14 +301,14 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
         for x in 0..<w:
           px[y*w+x] = LumaA[uint16](data: [get(x, y, 0), get(x, y, 1)])
       return ok(DynamicImage(kind: dkLumaA16, lumaA16:
-        GrayAlpha16Image(width: uint32(w), height: uint32(h), pixels: px)))
+        GrayAlpha16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       var px = newSeq[LumaA[uint8]](w * h)
       for y in 0..<h:
         for x in 0..<w:
           px[y*w+x] = LumaA[uint8](data: [uint8(get(x, y, 0)), uint8(get(x, y, 1))])
       return ok(DynamicImage(kind: dkLumaA8, lumaA8:
-        GrayAlphaImage(width: uint32(w), height: uint32(h), pixels: px)))
+        GrayAlphaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   else: # colorType 6
     if bitDepth == 16:
       var px = newSeq[Rgba[uint16]](w * h)
@@ -145,7 +317,7 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
           px[y*w+x] = Rgba[uint16](data: [get(x, y, 0), get(x, y, 1),
             get(x, y, 2), get(x, y, 3)])
       return ok(DynamicImage(kind: dkRgba16, rgba16:
-        Rgba16Image(width: uint32(w), height: uint32(h), pixels: px)))
+        Rgba16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       var px = newSeq[Rgba[uint8]](w * h)
       for y in 0..<h:
@@ -153,7 +325,7 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
           px[y*w+x] = Rgba[uint8](data: [uint8(get(x, y, 0)), uint8(get(x, y, 1)),
             uint8(get(x, y, 2)), uint8(get(x, y, 3))])
       return ok(DynamicImage(kind: dkRgba8, rgba8:
-        RgbaImage(width: uint32(w), height: uint32(h), pixels: px)))
+        RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
 
 proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
   if data.len < 8:
@@ -235,45 +407,46 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
     of 6: 4
     else: 0
   let w = int(width); let h = int(height)
-  let r = inflateZlibGrow(idat)
-  if not r.ok: return err[DynamicImage](r.err)
-  var inflated = r.value
+  let rowBytes = (w * channels * int(bitDepth) + 7) div 8
+  # Non-interlaced size is exact upfront (filter byte per row), so the
+  # output is pre-sized: no doubling growth. Adam7 stays on Grow.
+  var inflatedStr = ""
+  var inflated: seq[uint8] = @[]
+  if interlace == 0:
+    var rs = inflateZlibStr(idat, h * (rowBytes + 1))
+    if not rs.ok: return err[DynamicImage](rs.err)
+    inflatedStr = move(rs.value)
+  else:
+    var rg = inflateZlibGrow(idat)
+    if not rg.ok: return err[DynamicImage](rg.err)
+    inflated = move(rg.value)
   var p = 0
   let sampBytes = if bitDepth == 16: 2 else: 1
   var fbpp = (channels * int(bitDepth)) div 8
   if fbpp == 0: fbpp = 1
   if interlace == 0:
-    let rowBytes = (w * channels * int(bitDepth) + 7) div 8
+    # Streamed: unfilter + convert one row at a time (Up/Paeth need only
+    # the previous row), so no full-image raw buffer is retained. Rows
+    # are requested strictly increasing and consumed immediately.
+    if inflatedStr.len < h * (rowBytes + 1):
+      return err[DynamicImage](decodingError("png: truncated IDAT"))
     var prev = newSeq[uint8](rowBytes)
-    var rawRows = newSeq[uint8](h * rowBytes)
-    for y in 0..<h:
-      if p + 1 + rowBytes > inflated.len:
-        return err[DynamicImage](decodingError("png: truncated IDAT"))
-      let f = inflated[p]; inc(p)
-      var cur = inflated[p..<p+rowBytes]; p += rowBytes
+    var cur = newSeq[uint8](rowBytes)
+    var p2 = 0
+    var filterErr = false
+    proc nextRow(y: int): seq[uint8] =
+      let f = uint8(inflatedStr[p2]); inc(p2)
+      copyMem(addr cur[0], unsafeAddr inflatedStr[p2], rowBytes)
+      p2 += rowBytes
       if not simdUnfilterRow(f, cur, prev, fbpp):
-        return err[DynamicImage](decodingError("png: bad filter"))
-      for i in 0..<rowBytes: rawRows[y*rowBytes+i] = cur[i]
-      prev = cur
-    if bitDepth >= 8:
-      let bpc = channels * sampBytes
-      proc get(x, y, c: int): uint16 =
-        if sampBytes == 2:
-          let o = y*rowBytes + x*bpc + c*2
-          (uint16(rawRows[o]) shl 8) or uint16(rawRows[o+1])
-        else:
-          uint16(rawRows[y*rowBytes + x*bpc + c])
-      return buildFromSamples(colorType, bitDepth, w, h, get, plte,
-        trnsAlpha, trnsGray, trnsRgb)
-    else:
-      proc get(x, y, c: int): uint16 =
-        let bitpos = (x * channels + c) * int(bitDepth)
-        var v = 0
-        for k in 0..<int(bitDepth):
-          v = (v shl 1) or bitVal(rawRows.toOpenArray(y*rowBytes, y*rowBytes+rowBytes-1), bitpos + k)
-        uint16(v)
-      return buildFromSamples(colorType, bitDepth, w, h, get, plte,
-        trnsAlpha, trnsGray, trnsRgb)
+        filterErr = true
+      copyMem(addr prev[0], addr cur[0], rowBytes)
+      cur
+    let rs = buildFromSamplesStreamed(colorType, bitDepth, w, h, rowBytes,
+      channels, sampBytes, plte, trnsAlpha, trnsGray, trnsRgb, nextRow)
+    if filterErr:
+      return err[DynamicImage](decodingError("png: bad filter"))
+    return rs
   else:
     # Adam7
     var full = newSeq[uint8](h * w * channels * sampBytes)
@@ -281,17 +454,17 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
       let pw = (w - Adam7X[pass] + Adam7DX[pass] - 1) div Adam7DX[pass]
       let ph = (h - Adam7Y[pass] + Adam7DY[pass] - 1) div Adam7DY[pass]
       if pw == 0 or ph == 0: continue
-      let rowBytes = (pw * channels * int(bitDepth) + 7) div 8
-      var prev = newSeq[uint8](rowBytes)
-      var passRows = newSeq[uint8](ph * rowBytes)
+      let passBytes = (pw * channels * int(bitDepth) + 7) div 8
+      var prev = newSeq[uint8](passBytes)
+      var passRows = newSeq[uint8](ph * passBytes)
       for y in 0..<ph:
-        if p + 1 + rowBytes > inflated.len:
+        if p + 1 + passBytes > inflated.len:
           return err[DynamicImage](decodingError("png: truncated Adam7"))
         let f = inflated[p]; inc(p)
-        var cur = inflated[p..<p+rowBytes]; p += rowBytes
+        var cur = inflated[p..<p+passBytes]; p += passBytes
         if not simdUnfilterRow(f, cur, prev, fbpp):
           return err[DynamicImage](decodingError("png: bad filter"))
-        for i in 0..<rowBytes: passRows[y*rowBytes+i] = cur[i]
+        for i in 0..<passBytes: passRows[y*passBytes+i] = cur[i]
         prev = cur
       if bitDepth >= 8:
         let bpc = channels * sampBytes
@@ -300,7 +473,7 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
             let dx = Adam7X[pass] + x * Adam7DX[pass]
             let dy = Adam7Y[pass] + y * Adam7DY[pass]
             for k in 0..<bpc:
-              full[(dy*w+dx)*bpc+k] = passRows[y*rowBytes + x*bpc + k]
+              full[(dy*w+dx)*bpc+k] = passRows[y*passBytes + x*bpc + k]
       else:
         let maxv = (1 shl int(bitDepth)) - 1
         for y in 0..<ph:
@@ -311,7 +484,7 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
               var v = 0
               for k in 0..<int(bitDepth):
                 v = (v shl 1) or bitVal(passRows.toOpenArray(
-                  y*rowBytes, y*rowBytes+rowBytes-1),
+                  y*passBytes, y*passBytes+passBytes-1),
                   (x*channels+c)*int(bitDepth)+k)
               full[(dy*w+dx)*channels+c] = uint8((v * 255 + maxv div 2) div maxv)
     if bitDepth >= 8:
@@ -348,71 +521,94 @@ proc encodePng*(img: DynamicImage): ImageResult[seq[uint8]] =
   ## La8/L16/Rgb16/Rgba16/La16. Palette input must already be expanded.
   var colorType = 0'u8; var bitDepth = 8'u8
   var w, h: int
-  var samples: seq[uint8] # packed 8/16-bit samples row-major
-  var channels = 0
+  var raw: seq[uint8] # filter-prefixed rows (None), deflate input
   case img.kind
   of dkLuma8:
-    (colorType, bitDepth, channels) = (0'u8, 8'u8, 1)
+    (colorType, bitDepth) = (0'u8, 8'u8)
     w = int(img.luma8.width); h = int(img.luma8.height)
-    samples = newSeq[uint8](w*h)
-    for i, p in img.luma8.pixels: samples[i] = p.data[0]
+    raw = newSeq[uint8](h * (w + 1))
+    for y in 0..<h:
+      raw[y*(w+1)] = 0
+      for x in 0..<w: raw[y*(w+1)+1+x] = img.luma8.pixels[y*w+x].data[0]
   of dkRgb8:
-    (colorType, bitDepth, channels) = (2'u8, 8'u8, 3)
+    (colorType, bitDepth) = (2'u8, 8'u8)
     w = int(img.rgb8.width); h = int(img.rgb8.height)
-    samples = newSeq[uint8](w*h*3)
-    for i, p in img.rgb8.pixels:
-      samples[3*i]=p.data[0]; samples[3*i+1]=p.data[1]; samples[3*i+2]=p.data[2]
+    raw = newSeq[uint8](h * (w*3 + 1))
+    for y in 0..<h:
+      raw[y*(w*3+1)] = 0
+      for x in 0..<w:
+        let p = img.rgb8.pixels[y*w+x]
+        raw[y*(w*3+1)+1+3*x] = p.data[0]
+        raw[y*(w*3+1)+1+3*x+1] = p.data[1]
+        raw[y*(w*3+1)+1+3*x+2] = p.data[2]
   of dkRgba8:
-    (colorType, bitDepth, channels) = (6'u8, 8'u8, 4)
+    (colorType, bitDepth) = (6'u8, 8'u8)
     w = int(img.rgba8.width); h = int(img.rgba8.height)
-    samples = newSeq[uint8](w*h*4)
-    for i, p in img.rgba8.pixels:
-      samples[4*i]=p.data[0]; samples[4*i+1]=p.data[1]
-      samples[4*i+2]=p.data[2]; samples[4*i+3]=p.data[3]
+    raw = newSeq[uint8](h * (w*4 + 1))
+    for y in 0..<h:
+      raw[y*(w*4+1)] = 0
+      for x in 0..<w:
+        let p = img.rgba8.pixels[y*w+x]
+        raw[y*(w*4+1)+1+4*x] = p.data[0]
+        raw[y*(w*4+1)+1+4*x+1] = p.data[1]
+        raw[y*(w*4+1)+1+4*x+2] = p.data[2]
+        raw[y*(w*4+1)+1+4*x+3] = p.data[3]
   of dkLumaA8:
-    (colorType, bitDepth, channels) = (4'u8, 8'u8, 2)
+    (colorType, bitDepth) = (4'u8, 8'u8)
     w = int(img.lumaA8.width); h = int(img.lumaA8.height)
-    samples = newSeq[uint8](w*h*2)
-    for i, p in img.lumaA8.pixels:
-      samples[2*i]=p.data[0]; samples[2*i+1]=p.data[1]
+    raw = newSeq[uint8](h * (w*2 + 1))
+    for y in 0..<h:
+      raw[y*(w*2+1)] = 0
+      for x in 0..<w:
+        let p = img.lumaA8.pixels[y*w+x]
+        raw[y*(w*2+1)+1+2*x] = p.data[0]
+        raw[y*(w*2+1)+1+2*x+1] = p.data[1]
   of dkLuma16:
-    (colorType, bitDepth, channels) = (0'u8, 16'u8, 1)
+    (colorType, bitDepth) = (0'u8, 16'u8)
     w = int(img.luma16.width); h = int(img.luma16.height)
-    samples = newSeq[uint8](w*h*2)
-    for i, p in img.luma16.pixels:
-      samples[2*i]=uint8((p.data[0] shr 8) and 0xFF); samples[2*i+1]=uint8(p.data[0] and 0xFF)
+    raw = newSeq[uint8](h * (w*2 + 1))
+    for y in 0..<h:
+      raw[y*(w*2+1)] = 0
+      for x in 0..<w:
+        let v = img.luma16.pixels[y*w+x].data[0]
+        raw[y*(w*2+1)+1+2*x] = uint8((v shr 8) and 0xFF)
+        raw[y*(w*2+1)+1+2*x+1] = uint8(v and 0xFF)
   of dkRgb16:
-    (colorType, bitDepth, channels) = (2'u8, 16'u8, 3)
+    (colorType, bitDepth) = (2'u8, 16'u8)
     w = int(img.rgb16.width); h = int(img.rgb16.height)
-    samples = newSeq[uint8](w*h*6)
-    for i, p in img.rgb16.pixels:
-      for c in 0..2:
-        samples[6*i+2*c]=uint8((p.data[c] shr 8) and 0xFF)
-        samples[6*i+2*c+1]=uint8(p.data[c] and 0xFF)
+    raw = newSeq[uint8](h * (w*6 + 1))
+    for y in 0..<h:
+      raw[y*(w*6+1)] = 0
+      for x in 0..<w:
+        let p = img.rgb16.pixels[y*w+x]
+        for c in 0..2:
+          raw[y*(w*6+1)+1+6*x+2*c] = uint8((p.data[c] shr 8) and 0xFF)
+          raw[y*(w*6+1)+1+6*x+2*c+1] = uint8(p.data[c] and 0xFF)
   of dkRgba16:
-    (colorType, bitDepth, channels) = (6'u8, 16'u8, 4)
+    (colorType, bitDepth) = (6'u8, 16'u8)
     w = int(img.rgba16.width); h = int(img.rgba16.height)
-    samples = newSeq[uint8](w*h*8)
-    for i, p in img.rgba16.pixels:
-      for c in 0..3:
-        samples[8*i+2*c]=uint8((p.data[c] shr 8) and 0xFF)
-        samples[8*i+2*c+1]=uint8(p.data[c] and 0xFF)
+    raw = newSeq[uint8](h * (w*8 + 1))
+    for y in 0..<h:
+      raw[y*(w*8+1)] = 0
+      for x in 0..<w:
+        let p = img.rgba16.pixels[y*w+x]
+        for c in 0..3:
+          raw[y*(w*8+1)+1+8*x+2*c] = uint8((p.data[c] shr 8) and 0xFF)
+          raw[y*(w*8+1)+1+8*x+2*c+1] = uint8(p.data[c] and 0xFF)
   of dkLumaA16:
-    (colorType, bitDepth, channels) = (4'u8, 16'u8, 2)
+    (colorType, bitDepth) = (4'u8, 16'u8)
     w = int(img.lumaA16.width); h = int(img.lumaA16.height)
-    samples = newSeq[uint8](w*h*4)
-    for i, p in img.lumaA16.pixels:
-      for c in 0..1:
-        samples[4*i+2*c]=uint8((p.data[c] shr 8) and 0xFF)
-        samples[4*i+2*c+1]=uint8(p.data[c] and 0xFF)
+    raw = newSeq[uint8](h * (w*4 + 1))
+    for y in 0..<h:
+      raw[y*(w*4+1)] = 0
+      for x in 0..<w:
+        let p = img.lumaA16.pixels[y*w+x]
+        for c in 0..1:
+          raw[y*(w*4+1)+1+4*x+2*c] = uint8((p.data[c] shr 8) and 0xFF)
+          raw[y*(w*4+1)+1+4*x+2*c+1] = uint8(p.data[c] and 0xFF)
   else:
     return err[seq[uint8]](unsupportedError(ukColor,
       "png: encode this DynamicImage variant via toRgba8/toRgb8/toLuma8 first"))
-  let rowBytes = w * channels * (if bitDepth == 16: 2 else: 1)
-  var raw = newSeq[uint8](h * (rowBytes + 1))
-  for y in 0..<h:
-    raw[y*(rowBytes+1)] = 0 # filter None
-    for i in 0..<rowBytes: raw[y*(rowBytes+1)+1+i] = samples[y*rowBytes+i]
   let comp = deflateZlib(raw)
   if not comp.ok: return err[seq[uint8]](comp.err)
   var output = @PngSig

@@ -238,14 +238,14 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
       for i in 0 ..< px.len: px[i] = Luma[uint8](data: [uint8(planes[0][i])])
       return ok(DynamicImage(kind: dkLuma8,
         luma8: GrayImage(width: uint32(width), height: uint32(height),
-          pixels: px)))
+          pixels: move(px))))
     else:
       var px = newSeq[Luma[uint16]](width * height)
       for i in 0 ..< px.len:
         px[i] = Luma[uint16](data: [scaleTo16(planes[0][i], depth)])
       return ok(DynamicImage(kind: dkLuma16,
         luma16: Gray16Image(width: uint32(width), height: uint32(height),
-          pixels: px)))
+          pixels: move(px))))
   let ri = findIdx(4)
   let gi = findIdx(5)
   let bi = findIdx(6)
@@ -260,7 +260,7 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
             uint8(planes[ai][i])])
         return ok(DynamicImage(kind: dkRgba8,
           rgba8: RgbaImage(width: uint32(width), height: uint32(height),
-            pixels: px)))
+            pixels: move(px))))
       else:
         var px = newSeq[Rgba[uint16]](width * height)
         for i in 0 ..< px.len:
@@ -269,7 +269,7 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
             scaleTo16(planes[ai][i], depth)])
         return ok(DynamicImage(kind: dkRgba16,
           rgba16: Rgba16Image(width: uint32(width), height: uint32(height),
-            pixels: px)))
+            pixels: move(px))))
     else:
       # no-alpha RGB: extra unknown-typed components (e.g. pad) are
       # consumed in layout but ignored here
@@ -280,7 +280,7 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
             uint8(planes[gi][i]), uint8(planes[bi][i])])
         return ok(DynamicImage(kind: dkRgb8,
           rgb8: RgbImage(width: uint32(width), height: uint32(height),
-            pixels: px)))
+            pixels: move(px))))
       else:
         var px = newSeq[Rgb[uint16]](width * height)
         for i in 0 ..< px.len:
@@ -288,7 +288,7 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
             scaleTo16(planes[gi][i], depth), scaleTo16(planes[bi][i], depth)])
         return ok(DynamicImage(kind: dkRgb16,
           rgb16: Rgb16Image(width: uint32(width), height: uint32(height),
-            pixels: px)))
+            pixels: move(px))))
   if isYuv:
     if depth != 8:
       return err[DynamicImage](unsupportedError(ukGenericFeature,

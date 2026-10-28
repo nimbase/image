@@ -158,7 +158,7 @@ proc decodeHdr*(data: seq[uint8]): ImageResult[Rgb32FImage] =
     for i in 0..<int(w):
       px[idx] = rgbeToHdr(scan[i])
       inc idx
-  ok(Rgb32FImage(width: w, height: h, pixels: px))
+  ok(Rgb32FImage(width: w, height: h, pixels: move(px)))
 
 proc rleCompressChannel(data: openArray[uint8]): seq[uint8] =
   result = @[]

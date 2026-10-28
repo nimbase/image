@@ -124,7 +124,7 @@ proc decodePnm*(data: seq[uint8]): ImageResult[DynamicImage] =
           let b = data[bodyOff + y * rowBytes + x div 8]
           let bit = (b shr (7 - (x mod 8))) and 1
           px[y * int(h.width) + x] = Luma[uint8](data: [if bit == 1: 255'u8 else: 0'u8])
-    ok(DynamicImage(kind: dkLuma8, luma8: GrayImage(width: h.width, height: h.height, pixels: px)))
+    ok(DynamicImage(kind: dkLuma8, luma8: GrayImage(width: h.width, height: h.height, pixels: move(px))))
   of psGraymap:
     if h.maxval <= 255:
       var px = newSeq[Luma[uint8]](n)
@@ -138,7 +138,7 @@ proc decodePnm*(data: seq[uint8]): ImageResult[DynamicImage] =
         if bodyOff + n > data.len:
           return err[DynamicImage](decodingError("pnm: truncated graymap"))
         for i in 0..<n: px[i] = Luma[uint8](data: [scaleToU8(uint32(data[bodyOff+i]), h.maxval)])
-      ok(DynamicImage(kind: dkLuma8, luma8: GrayImage(width: h.width, height: h.height, pixels: px)))
+      ok(DynamicImage(kind: dkLuma8, luma8: GrayImage(width: h.width, height: h.height, pixels: move(px))))
     else:
       var px = newSeq[Luma[uint16]](n)
       if h.encoding == peAscii:
@@ -153,7 +153,7 @@ proc decodePnm*(data: seq[uint8]): ImageResult[DynamicImage] =
         for i in 0..<n:
           let v = (uint32(data[bodyOff+2*i]) shl 8) or uint32(data[bodyOff+2*i+1])
           px[i] = Luma[uint16](data: [scaleToU16(v, h.maxval)])
-      ok(DynamicImage(kind: dkLuma16, luma16: Gray16Image(width: h.width, height: h.height, pixels: px)))
+      ok(DynamicImage(kind: dkLuma16, luma16: Gray16Image(width: h.width, height: h.height, pixels: move(px))))
   of psPixmap:
     if h.maxval <= 255:
       var px = newSeq[Rgb[uint8]](n)
@@ -171,7 +171,7 @@ proc decodePnm*(data: seq[uint8]): ImageResult[DynamicImage] =
           px[i] = Rgb[uint8](data: [scaleToU8(uint32(data[bodyOff+3*i]), h.maxval),
             scaleToU8(uint32(data[bodyOff+3*i+1]), h.maxval),
             scaleToU8(uint32(data[bodyOff+3*i+2]), h.maxval)])
-      ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: px)))
+      ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: move(px))))
     else:
       var px = newSeq[Rgb[uint16]](n)
       if h.encoding == peAscii:
@@ -189,21 +189,21 @@ proc decodePnm*(data: seq[uint8]): ImageResult[DynamicImage] =
           let g = (uint32(data[bodyOff+6*i+2]) shl 8) or uint32(data[bodyOff+6*i+3])
           let b = (uint32(data[bodyOff+6*i+4]) shl 8) or uint32(data[bodyOff+6*i+5])
           px[i] = Rgb[uint16](data: [scaleToU16(r, h.maxval), scaleToU16(g, h.maxval), scaleToU16(b, h.maxval)])
-      ok(DynamicImage(kind: dkRgb16, rgb16: Rgb16Image(width: h.width, height: h.height, pixels: px)))
+      ok(DynamicImage(kind: dkRgb16, rgb16: Rgb16Image(width: h.width, height: h.height, pixels: move(px))))
   of psArbitrary:
     if h.depth == 1 and h.maxval <= 255:
       var px = newSeq[Luma[uint8]](n)
       if bodyOff + n > data.len:
         return err[DynamicImage](decodingError("pnm: truncated pam"))
       for i in 0..<n: px[i] = Luma[uint8](data: [scaleToU8(uint32(data[bodyOff+i]), h.maxval)])
-      ok(DynamicImage(kind: dkLuma8, luma8: GrayImage(width: h.width, height: h.height, pixels: px)))
+      ok(DynamicImage(kind: dkLuma8, luma8: GrayImage(width: h.width, height: h.height, pixels: move(px))))
     elif h.depth == 3 and h.maxval <= 255:
       var px = newSeq[Rgb[uint8]](n)
       if bodyOff + n * 3 > data.len:
         return err[DynamicImage](decodingError("pnm: truncated pam"))
       for i in 0..<n:
         px[i] = Rgb[uint8](data: [data[bodyOff+3*i], data[bodyOff+3*i+1], data[bodyOff+3*i+2]])
-      ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: px)))
+      ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: move(px))))
     elif h.depth == 4 and h.maxval <= 255:
       var px = newSeq[Rgba[uint8]](n)
       if bodyOff + n * 4 > data.len:
@@ -211,7 +211,7 @@ proc decodePnm*(data: seq[uint8]): ImageResult[DynamicImage] =
       for i in 0..<n:
         px[i] = Rgba[uint8](data: [data[bodyOff+4*i], data[bodyOff+4*i+1],
           data[bodyOff+4*i+2], data[bodyOff+4*i+3]])
-      ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: h.width, height: h.height, pixels: px)))
+      ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: h.width, height: h.height, pixels: move(px))))
     else:
       err[DynamicImage](unsupportedError(ukColor, "pnm: PAM depth " & $h.depth & " maxval " & $h.maxval))
 

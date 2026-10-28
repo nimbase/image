@@ -183,11 +183,11 @@ proc decodeTga*(data: seq[uint8]): ImageResult[DynamicImage] =
     if cmapEntrySize == 3:
       var px = newSeq[Rgb[uint8]](n)
       for i in 0..<n: px[i] = Rgb[uint8](data: [outBytes[3*i], outBytes[3*i+1], outBytes[3*i+2]])
-      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: px)))
+      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: move(px))))
     elif cmapEntrySize == 4:
       var px = newSeq[Rgba[uint8]](n)
       for i in 0..<n: px[i] = Rgba[uint8](data: [outBytes[4*i], outBytes[4*i+1], outBytes[4*i+2], outBytes[4*i+3]])
-      return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: h.width, height: h.height, pixels: px)))
+      return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: h.width, height: h.height, pixels: move(px))))
     else:
       return err[DynamicImage](unsupportedError(ukGenericFeature, "tga: cmap output depth"))
   elif isRgb5x1 and not isGray:
@@ -199,19 +199,19 @@ proc decodeTga*(data: seq[uint8]): ImageResult[DynamicImage] =
       px[i] = Rgb[uint8](data: [b, g, r])
     # BGR->RGB already handled by swap above (we swapped raw LE bytes? no). Apply B/R swap:
     for i in 0..<n: swap(px[i].data[0], px[i].data[2])
-    return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: px)))
+    return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: move(px))))
   else:
     # direct; BGR->RGB swap for color
     if colorType == ctRgb8:
       for i in 0..<n: swap(raw[3*i], raw[3*i+2])
       var px = newSeq[Rgb[uint8]](n)
       for i in 0..<n: px[i] = Rgb[uint8](data: [raw[3*i], raw[3*i+1], raw[3*i+2]])
-      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: px)))
+      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: h.width, height: h.height, pixels: move(px))))
     elif colorType == ctRgba8:
       for i in 0..<n: swap(raw[4*i], raw[4*i+2])
       var px = newSeq[Rgba[uint8]](n)
       for i in 0..<n: px[i] = Rgba[uint8](data: [raw[4*i], raw[4*i+1], raw[4*i+2], raw[4*i+3]])
-      return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: h.width, height: h.height, pixels: px)))
+      return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: h.width, height: h.height, pixels: move(px))))
     elif colorType == ctL8:
       var px = newSeq[Luma[uint8]](n)
       if alphaOnlyAsLuma:
@@ -219,11 +219,11 @@ proc decodeTga*(data: seq[uint8]): ImageResult[DynamicImage] =
         for i in 0..<n: px[i] = Luma[uint8](data: [raw[i]])
       else:
         for i in 0..<n: px[i] = Luma[uint8](data: [raw[i]])
-      return ok(DynamicImage(kind: dkLuma8, luma8: GrayImage(width: h.width, height: h.height, pixels: px)))
+      return ok(DynamicImage(kind: dkLuma8, luma8: GrayImage(width: h.width, height: h.height, pixels: move(px))))
     elif colorType == ctLa8:
       var px = newSeq[LumaA[uint8]](n)
       for i in 0..<n: px[i] = LumaA[uint8](data: [raw[2*i], raw[2*i+1]])
-      return ok(DynamicImage(kind: dkLumaA8, lumaA8: GrayAlphaImage(width: h.width, height: h.height, pixels: px)))
+      return ok(DynamicImage(kind: dkLumaA8, lumaA8: GrayAlphaImage(width: h.width, height: h.height, pixels: move(px))))
   err[DynamicImage](unsupportedError(ukColor, "tga: unsupported output"))
 
 proc encodeTgaRgb8*(img: RgbImage): seq[uint8] =

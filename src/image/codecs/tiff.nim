@@ -268,13 +268,13 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
       for y in 0..<h:
         for x in 0..<w: px[y*w+x] = Luma[uint16](data: [65535'u16 - uint16(sampAt(x,y,0))])
       return ok(DynamicImage(kind: dkLuma16, luma16:
-        Gray16Image(width: uint32(w), height: uint32(h), pixels: px)))
+        Gray16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       var px = newSeq[Luma[uint8]](w*h)
       for y in 0..<h:
         for x in 0..<w: px[y*w+x] = Luma[uint8](data: [255'u8 - to8(sampAt(x,y,0))])
       return ok(DynamicImage(kind: dkLuma8, luma8:
-        GrayImage(width: uint32(w), height: uint32(h), pixels: px)))
+        GrayImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   of 1: # BlackIsZero
     if spp == 1:
       if isFloat:
@@ -282,19 +282,19 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
         for y in 0..<h:
           for x in 0..<w: px[y*w+x] = Luma[float32](data: [cast[float32](sampAt(x,y,0))])
         return ok(DynamicImage(kind: dkLuma32F, luma32f:
-          Gray32FImage(width: uint32(w), height: uint32(h), pixels: px)))
+          Gray32FImage(width: uint32(w), height: uint32(h), pixels: move(px))))
       elif bitDepth == 16:
         var px = newSeq[Luma[uint16]](w*h)
         for y in 0..<h:
           for x in 0..<w: px[y*w+x] = Luma[uint16](data: [uint16(sampAt(x,y,0))])
         return ok(DynamicImage(kind: dkLuma16, luma16:
-          Gray16Image(width: uint32(w), height: uint32(h), pixels: px)))
+          Gray16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
       else:
         var px = newSeq[Luma[uint8]](w*h)
         for y in 0..<h:
           for x in 0..<w: px[y*w+x] = Luma[uint8](data: [to8(sampAt(x,y,0))])
         return ok(DynamicImage(kind: dkLuma8, luma8:
-          GrayImage(width: uint32(w), height: uint32(h), pixels: px)))
+          GrayImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     elif spp == 2:
       if bitDepth == 16:
         var px = newSeq[LumaA[uint16]](w*h)
@@ -302,14 +302,14 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
           for x in 0..<w:
             px[y*w+x] = LumaA[uint16](data: [uint16(sampAt(x,y,0)), to16(sampAt(x,y,1))])
         return ok(DynamicImage(kind: dkLumaA16, lumaA16:
-          GrayAlpha16Image(width: uint32(w), height: uint32(h), pixels: px)))
+          GrayAlpha16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
       else:
         var px = newSeq[LumaA[uint8]](w*h)
         for y in 0..<h:
           for x in 0..<w:
             px[y*w+x] = LumaA[uint8](data: [to8(sampAt(x,y,0)), to8(uint16(sampAt(x,y,1)))])
         return ok(DynamicImage(kind: dkLumaA8, lumaA8:
-          GrayAlphaImage(width: uint32(w), height: uint32(h), pixels: px)))
+          GrayAlphaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       return err[DynamicImage](decodingError("tiff: gray spp"))
   of 2: # RGB
@@ -325,7 +325,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
               cast[float32](sampAt(x,y,1)), cast[float32](sampAt(x,y,2)),
               cast[float32](sampAt(x,y,3))])
         return ok(DynamicImage(kind: dkRgba32F, rgba32f:
-          Rgba32FImage(width: uint32(w), height: uint32(h), pixels: px)))
+          Rgba32FImage(width: uint32(w), height: uint32(h), pixels: move(px))))
       else:
         var px = newSeq[Rgb[float32]](w*h)
         for y in 0..<h:
@@ -333,7 +333,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
             px[y*w+x] = Rgb[float32](data: [cast[float32](sampAt(x,y,0)),
               cast[float32](sampAt(x,y,1)), cast[float32](sampAt(x,y,2))])
         return ok(DynamicImage(kind: dkRgb32F, rgb32f:
-          Rgb32FImage(width: uint32(w), height: uint32(h), pixels: px)))
+          Rgb32FImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     elif bitDepth == 16:
       if hasAlpha:
         var px = newSeq[Rgba[uint16]](w*h)
@@ -342,7 +342,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
             px[y*w+x] = Rgba[uint16](data: [uint16(sampAt(x,y,0)), uint16(sampAt(x,y,1)),
               uint16(sampAt(x,y,2)), to16(sampAt(x,y,3))])
         return ok(DynamicImage(kind: dkRgba16, rgba16:
-          Rgba16Image(width: uint32(w), height: uint32(h), pixels: px)))
+          Rgba16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
       else:
         var px = newSeq[Rgb[uint16]](w*h)
         for y in 0..<h:
@@ -350,7 +350,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
             px[y*w+x] = Rgb[uint16](data: [uint16(sampAt(x,y,0)), uint16(sampAt(x,y,1)),
               uint16(sampAt(x,y,2))])
         return ok(DynamicImage(kind: dkRgb16, rgb16:
-          Rgb16Image(width: uint32(w), height: uint32(h), pixels: px)))
+          Rgb16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       if hasAlpha:
         var px = newSeq[Rgba[uint8]](w*h)
@@ -359,7 +359,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
             px[y*w+x] = Rgba[uint8](data: [to8(sampAt(x,y,0)), to8(sampAt(x,y,1)),
               to8(sampAt(x,y,2)), to8(sampAt(x,y,3))])
         return ok(DynamicImage(kind: dkRgba8, rgba8:
-          RgbaImage(width: uint32(w), height: uint32(h), pixels: px)))
+          RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
       else:
         var px = newSeq[Rgb[uint8]](w*h)
         for y in 0..<h:
@@ -367,7 +367,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
             px[y*w+x] = Rgb[uint8](data: [to8(sampAt(x,y,0)), to8(sampAt(x,y,1)),
               to8(sampAt(x,y,2))])
         return ok(DynamicImage(kind: dkRgb8, rgb8:
-          RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+          RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   of 3: # Palette
     if spp != 1: return err[DynamicImage](decodingError("tiff: palette spp"))
     let (fMap, vMap) = ifd.find(320)
@@ -386,7 +386,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
         if v >= n: return err[DynamicImage](decodingError("tiff: cmap index OOB"))
         px[y*w+x] = Rgb[uint8](data: [pal[v].r, pal[v].g, pal[v].b])
     return ok(DynamicImage(kind: dkRgb8, rgb8:
-      RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+      RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   of 5: # CMYK -> RGB naive
     if spp < 4: return err[DynamicImage](decodingError("tiff: cmyk spp"))
     if bitDepth == 16:
@@ -400,7 +400,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
             uint16(65535 - min(65535'u32, m + k)),
             uint16(65535 - min(65535'u32, yy + k))])
       return ok(DynamicImage(kind: dkRgb16, rgb16:
-        Rgb16Image(width: uint32(w), height: uint32(h), pixels: px)))
+        Rgb16Image(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       var px = newSeq[Rgb[uint8]](w*h)
       for y in 0..<h:
@@ -412,7 +412,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
             255'u8 - min(255'u8, uint8(min(255, int(m)+int(k)))),
             255'u8 - min(255'u8, uint8(min(255, int(yy)+int(k))))])
       return ok(DynamicImage(kind: dkRgb8, rgb8:
-        RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+        RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   of 6: # YCbCr
     if spp < 3: return err[DynamicImage](decodingError("tiff: ycbcr spp"))
     let sub = getArray(ifd, 530, e, 2, 0)
@@ -440,7 +440,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
         let (r, g, b) = ycbcrToRgb(Y, Cb, Cr, coef)
         px[y*w+x] = Rgb[uint8](data: [r, g, b])
     return ok(DynamicImage(kind: dkRgb8, rgb8:
-      RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+      RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   else:
     return err[DynamicImage](unsupportedError(ukColor, "tiff: photometric " & $photo))
 

@@ -163,18 +163,41 @@ proc rgbToYcbcr(r, g, b: uint8): tuple[y, cb, cr: uint8] =
    uint8(clamp(int(-0.168736*fr - 0.331264*fg + 0.5*fb + 128.5), 0, 255)),
    uint8(clamp(int(0.5*fr - 0.418688*fg - 0.081312*fb + 128.5), 0, 255)))
 
-type JpegPlanes = object
-  isGray: bool
-  w, h, sw, sh: int
-  useSub: bool
-  yPlane, cbPlane, crPlane, gPlane: seq[uint8]
-  qY, qC: array[64, int]
+type JpegSrc = object
+  ## Encode parameters: derived dims and quant tables. Owns NO pixel
+  ## buffers AND no image reference — scan loops take the caller's
+  ## `img` as a separate proc argument (borrowing, never copied).
+  ## NOTE: storing a DynamicImage in an object field deep-copies its
+  ## pixel seq (measured 72 MB duplication on a 24 MP image); threading
+  ## `img` through `let` proc params borrows instead. Keep it that way.
+  isGray*: bool
+  w*, h*: int
+  useSub*: bool
+  qY*, qC*: array[64, int]
 
-proc sampBlock(plane: seq[uint8], bx, by, bw, bh, stride: int): array[64, float64] =
-  for y in 0..7:
-    for x in 0..7:
-      let sx = min(bx*8+x, bw-1); let sy = min(by*8+y, bh-1)
-      result[y*8+x] = float64(plane[sy*stride+sx]) - 128.0
+proc ycbcrAt(img: DynamicImage, s: JpegSrc, x, y: int): tuple[y, cb, cr: uint8] =
+  ## Converter with edge clamping (mirrors old plane + sampBlock).
+  ## Callers pass block-local coords (may exceed dims at edges).
+  let sx = min(x, s.w - 1); let sy = min(y, s.h - 1)
+  case img.kind
+  of dkRgb8:
+    let p = img.rgb8.pixels[sy * s.w + sx]
+    rgbToYcbcr(p.data[0], p.data[1], p.data[2])
+  of dkRgba8: # alpha explicitly dropped; JPEG has no alpha channel
+    let p = img.rgba8.pixels[sy * s.w + sx]
+    rgbToYcbcr(p.data[0], p.data[1], p.data[2])
+  else:
+    (0'u8, 128'u8, 128'u8) # unreachable: validated color input
+
+proc lumaAt(img: DynamicImage, s: JpegSrc, x, y: int): uint8 =
+  let sx = min(x, s.w - 1); let sy = min(y, s.h - 1)
+  case img.kind
+  of dkLuma8:
+    img.luma8.pixels[sy * s.w + sx].data[0]
+  of dkLumaA8: # alpha explicitly dropped
+    img.lumaA8.pixels[sy * s.w + sx].data[0]
+  else:
+    0'u8 # unreachable: validated gray input
 
 proc quantZig(d: array[64, float64], qnat: array[64, int]): array[64, int] =
   ## FDCT output d and qnat are both natural order; result is scan order.
@@ -182,73 +205,36 @@ proc quantZig(d: array[64, float64], qnat: array[64, int]): array[64, int] =
     let ni = UnzigzagEnc[k]
     result[k] = int(floor(d[ni] / float64(qnat[ni]) + 0.5))
 
-proc preparePlanes(img: DynamicImage, quality: int,
-    subsample: bool): ImageResult[JpegPlanes] =
+proc prepareSource(img: DynamicImage, quality: int,
+    subsample: bool): ImageResult[JpegSrc] =
+  ## Validate + derive dims/quant tables. Copies nothing: scan loops
+  ## sample `img` directly, so Rgba8/LumaA8 alpha-dropping also happens
+  ## on the fly instead of via a full-size intermediate copy.
   if quality < 1 or quality > 100:
-    return err[JpegPlanes](paramError(pkGeneric, "jpeg: quality 1..100"))
+    return err[JpegSrc](paramError(pkGeneric, "jpeg: quality 1..100"))
   var isGray = false
   var w, h: int
-  var rgb: seq[Rgb[uint8]] = @[]
-  var gray: seq[Luma[uint8]] = @[]
   case img.kind
   of dkRgb8:
-    w = int(img.rgb8.width); h = int(img.rgb8.height); rgb = img.rgb8.pixels
+    w = int(img.rgb8.width); h = int(img.rgb8.height)
   of dkRgba8:
-    # alpha is explicitly dropped; JPEG has no alpha channel
     w = int(img.rgba8.width); h = int(img.rgba8.height)
-    rgb = newSeq[Rgb[uint8]](img.rgba8.pixels.len)
-    for i, p in img.rgba8.pixels:
-      rgb[i] = Rgb[uint8](data: [p.data[0], p.data[1], p.data[2]])
   of dkLuma8:
     isGray = true
-    w = int(img.luma8.width); h = int(img.luma8.height); gray = img.luma8.pixels
+    w = int(img.luma8.width); h = int(img.luma8.height)
   of dkLumaA8:
-    # alpha is explicitly dropped
     isGray = true
     w = int(img.lumaA8.width); h = int(img.lumaA8.height)
-    gray = newSeq[Luma[uint8]](img.lumaA8.pixels.len)
-    for i, p in img.lumaA8.pixels:
-      gray[i] = Luma[uint8](data: [p.data[0]])
   else:
-    return err[JpegPlanes](unsupportedError(ukColor,
+    return err[JpegSrc](unsupportedError(ukColor,
       "jpeg: only 8-bit Luma/Rgb (+alpha dropped) supported"))
   if w == 0 or h == 0:
-    return err[JpegPlanes](paramError(pkDimensionMismatch, "jpeg: empty"))
+    return err[JpegSrc](paramError(pkDimensionMismatch, "jpeg: empty"))
   if w > 65535 or h > 65535:
-    return err[JpegPlanes](limitError(lkDimensionError, "jpeg: too large"))
-  var planes = JpegPlanes(isGray: isGray, w: w, h: h,
-    qY: scaleQuant(LumaQBase, quality), qC: scaleQuant(ChromaQBase, quality))
-  planes.useSub = subsample and not isGray
-  if isGray:
-    planes.gPlane = newSeq[uint8](w*h)
-    for i, p in gray: planes.gPlane[i] = p.data[0]
-    planes.sw = w; planes.sh = h
-  else:
-    planes.yPlane = newSeq[uint8](w*h)
-    planes.cbPlane = newSeq[uint8](w*h)
-    planes.crPlane = newSeq[uint8](w*h)
-    for i, p in rgb:
-      let (yy, cb, cr) = rgbToYcbcr(p.data[0], p.data[1], p.data[2])
-      planes.yPlane[i] = yy; planes.cbPlane[i] = cb; planes.crPlane[i] = cr
-    if planes.useSub:
-      planes.sw = (w + 1) div 2; planes.sh = (h + 1) div 2
-      var cbS = newSeq[uint8](planes.sw*planes.sh)
-      var crS = newSeq[uint8](planes.sw*planes.sh)
-      for y in 0..<planes.sh:
-        for x in 0..<planes.sw:
-          var sCb = 0; var sCr = 0; var n = 0
-          for dy in 0..1:
-            for dx in 0..1:
-              let sx = x*2+dx; let sy = y*2+dy
-              if sx < w and sy < h:
-                sCb += int(planes.cbPlane[sy*w+sx])
-                sCr += int(planes.crPlane[sy*w+sx]); inc(n)
-          cbS[y*planes.sw+x] = uint8((sCb + n div 2) div n)
-          crS[y*planes.sw+x] = uint8((sCr + n div 2) div n)
-      planes.cbPlane = cbS; planes.crPlane = crS
-    else:
-      planes.sw = w; planes.sh = h
-  ok(planes)
+    return err[JpegSrc](limitError(lkDimensionError, "jpeg: too large"))
+  ok(JpegSrc(isGray: isGray, w: w, h: h,
+    useSub: subsample and not isGray,
+    qY: scaleQuant(LumaQBase, quality), qC: scaleQuant(ChromaQBase, quality)))
 
 proc countBlockFreq(zz: array[64, int], prevDc: var int,
     dcFreq, acFreq: var array[256, int]) =
@@ -268,34 +254,83 @@ proc countBlockFreq(zz: array[64, int], prevDc: var int,
   if zeroRun > 0:
     acFreq[0x00] += 1
 
-proc countFrequencies(p: JpegPlanes,
+proc countFrequencies(s: JpegSrc, img: DynamicImage,
     dcYF, acYF, dcCF, acCF: var array[256, int]) =
-  if p.isGray:
-    let mcuX = (p.w + 7) div 8; let mcuY = (p.h + 7) div 8
+  if s.isGray:
+    let mcuX = (s.w + 7) div 8; let mcuY = (s.h + 7) div 8
     var prev = 0
     for my in 0..<mcuY:
       for mx in 0..<mcuX:
-        let d = fdctBlock(sampBlock(p.gPlane, mx, my, p.w, p.h, p.w))
-        countBlockFreq(quantZig(d, p.qY), prev, dcYF, acYF)
-  else:
-    let hY = if p.useSub: 2 else: 1
-    let vY = if p.useSub: 2 else: 1
-    let mcuX = (p.w + 8*hY - 1) div (8*hY)
-    let mcuY = (p.h + 8*vY - 1) div (8*vY)
+        var blk: array[64, float64]
+        for yy in 0..7:
+          for xx in 0..7:
+            blk[yy*8+xx] = float64(lumaAt(img, s, mx*8+xx, my*8+yy)) - 128.0
+        countBlockFreq(quantZig(fdctBlock(blk), s.qY), prev, dcYF, acYF)
+  elif not s.useSub:
+    let mcuX = (s.w + 7) div 8; let mcuY = (s.h + 7) div 8
     var prevY = 0; var prevCb = 0; var prevCr = 0
     for my in 0..<mcuY:
       for mx in 0..<mcuX:
-        for by in 0..<vY:
-          for bx in 0..<hY:
-            let d = fdctBlock(sampBlock(p.yPlane, mx*hY+bx, my*vY+by,
-              p.w, p.h, p.w))
-            countBlockFreq(quantZig(d, p.qY), prevY, dcYF, acYF)
+        var yb, cbb, crb: array[64, float64]
+        for yy in 0..7:
+          for xx in 0..7:
+            let (yyv, cbv, crv) = ycbcrAt(img, s, mx*8+xx, my*8+yy)
+            let i = yy*8+xx
+            yb[i] = float64(yyv) - 128.0
+            cbb[i] = float64(cbv) - 128.0
+            crb[i] = float64(crv) - 128.0
+        countBlockFreq(quantZig(fdctBlock(yb), s.qY), prevY, dcYF, acYF)
+        countBlockFreq(quantZig(fdctBlock(cbb), s.qC), prevCb, dcCF, acCF)
+        countBlockFreq(quantZig(fdctBlock(crb), s.qC), prevCr, dcCF, acCF)
+  else:
+    let mcuX = (s.w + 15) div 16; let mcuY = (s.h + 15) div 16
+    var prevY = 0; var prevCb = 0; var prevCr = 0
+    for my in 0..<mcuY:
+      for mx in 0..<mcuX:
+        var yb: array[4, array[64, float64]]
+        var cbPx, crPx: array[256, uint8]
+        for yy in 0..<16:
+          for xx in 0..<16:
+            let (yyv, cbv, crv) = ycbcrAt(img, s, mx*16+xx, my*16+yy)
+            yb[(yy div 8)*2 + (xx div 8)][(yy mod 8)*8 + (xx mod 8)] =
+              float64(yyv) - 128.0
+            cbPx[yy*16+xx] = cbv; crPx[yy*16+xx] = crv
+        for b in 0..<4:
+          countBlockFreq(quantZig(fdctBlock(yb[b]), s.qY), prevY,
+            dcYF, acYF)
         block:
-          let d = fdctBlock(sampBlock(p.cbPlane, mx, my, p.sw, p.sh, p.sw))
-          countBlockFreq(quantZig(d, p.qC), prevCb, dcCF, acCF)
+          var cbb: array[64, float64]
+          for oy in 0..<8:
+            for ox in 0..<8:
+              var sCb = 0; var n = 0
+              for dy in 0..1:
+                for dx in 0..1:
+                  let fx = mx*16+ox*2+dx; let fy = my*16+oy*2+dy
+                  if fx < s.w and fy < s.h:
+                    sCb += int(cbPx[(oy*2+dy)*16 + (ox*2+dx)]); inc(n)
+              # Fully out-of-image blocks (edge MCU padding) have no
+              # valid source pixels; the decoder never reads these
+              # samples (outside output dims), so emit neutral chroma.
+              # DC prediction still threads through them identically
+              # on both sides, keeping the stream consistent.
+              let vCb = if n == 0: 128 else: (sCb + n div 2) div n
+              cbb[oy*8+ox] = float64(uint8(vCb)) - 128.0
+          countBlockFreq(quantZig(fdctBlock(cbb), s.qC), prevCb,
+            dcCF, acCF)
         block:
-          let d = fdctBlock(sampBlock(p.crPlane, mx, my, p.sw, p.sh, p.sw))
-          countBlockFreq(quantZig(d, p.qC), prevCr, dcCF, acCF)
+          var crb: array[64, float64]
+          for oy in 0..<8:
+            for ox in 0..<8:
+              var sCr = 0; var n = 0
+              for dy in 0..1:
+                for dx in 0..1:
+                  let fx = mx*16+ox*2+dx; let fy = my*16+oy*2+dy
+                  if fx < s.w and fy < s.h:
+                    sCr += int(crPx[(oy*2+dy)*16 + (ox*2+dx)]); inc(n)
+              let vCr = if n == 0: 128 else: (sCr + n div 2) div n
+              crb[oy*8+ox] = float64(uint8(vCr)) - 128.0
+          countBlockFreq(quantZig(fdctBlock(crb), s.qC), prevCr,
+            dcCF, acCF)
 
 proc genOptimalTable(freq: array[256, int]): tuple[bits: array[16, int],
     vals: seq[int]] =
@@ -404,38 +439,79 @@ proc genOptimalTable(freq: array[256, int]): tuple[bits: array[16, int],
     if s != 256 and assigned[s] > 0:
       result.vals.add(s)
 
-proc writeScan(p: JpegPlanes, w: var BitWriter,
+proc writeScan(s: JpegSrc, img: DynamicImage, w: var BitWriter,
     dcY, acY, dcC, acC: HuffCode) =
-  if p.isGray:
-    let mcuX = (p.w + 7) div 8; let mcuY = (p.h + 7) div 8
+  if s.isGray:
+    let mcuX = (s.w + 7) div 8; let mcuY = (s.h + 7) div 8
     var prev = 0
     for my in 0..<mcuY:
       for mx in 0..<mcuX:
-        let d = fdctBlock(sampBlock(p.gPlane, mx, my, p.w, p.h, p.w))
-        encodeBlock(w, quantZig(d, p.qY), dcY, acY, prev)
-  else:
-    let hY = if p.useSub: 2 else: 1
-    let vY = if p.useSub: 2 else: 1
-    let mcuX = (p.w + 8*hY - 1) div (8*hY)
-    let mcuY = (p.h + 8*vY - 1) div (8*vY)
+        var blk: array[64, float64]
+        for yy in 0..7:
+          for xx in 0..7:
+            blk[yy*8+xx] = float64(lumaAt(img, s, mx*8+xx, my*8+yy)) - 128.0
+        encodeBlock(w, quantZig(fdctBlock(blk), s.qY), dcY, acY, prev)
+  elif not s.useSub:
+    let mcuX = (s.w + 7) div 8; let mcuY = (s.h + 7) div 8
     var prevY = 0; var prevCb = 0; var prevCr = 0
     for my in 0..<mcuY:
       for mx in 0..<mcuX:
-        for by in 0..<vY:
-          for bx in 0..<hY:
-            let d = fdctBlock(sampBlock(p.yPlane, mx*hY+bx, my*vY+by,
-              p.w, p.h, p.w))
-            encodeBlock(w, quantZig(d, p.qY), dcY, acY, prevY)
+        var yb, cbb, crb: array[64, float64]
+        for yy in 0..7:
+          for xx in 0..7:
+            let (yyv, cbv, crv) = ycbcrAt(img, s, mx*8+xx, my*8+yy)
+            let i = yy*8+xx
+            yb[i] = float64(yyv) - 128.0
+            cbb[i] = float64(cbv) - 128.0
+            crb[i] = float64(crv) - 128.0
+        encodeBlock(w, quantZig(fdctBlock(yb), s.qY), dcY, acY, prevY)
+        encodeBlock(w, quantZig(fdctBlock(cbb), s.qC), dcC, acC, prevCb)
+        encodeBlock(w, quantZig(fdctBlock(crb), s.qC), dcC, acC, prevCr)
+  else:
+    let mcuX = (s.w + 15) div 16; let mcuY = (s.h + 15) div 16
+    var prevY = 0; var prevCb = 0; var prevCr = 0
+    for my in 0..<mcuY:
+      for mx in 0..<mcuX:
+        var yb: array[4, array[64, float64]]
+        var cbPx, crPx: array[256, uint8]
+        for yy in 0..<16:
+          for xx in 0..<16:
+            let (yyv, cbv, crv) = ycbcrAt(img, s, mx*16+xx, my*16+yy)
+            yb[(yy div 8)*2 + (xx div 8)][(yy mod 8)*8 + (xx mod 8)] =
+              float64(yyv) - 128.0
+            cbPx[yy*16+xx] = cbv; crPx[yy*16+xx] = crv
+        for b in 0..<4:
+          encodeBlock(w, quantZig(fdctBlock(yb[b]), s.qY), dcY, acY, prevY)
         block:
-          let d = fdctBlock(sampBlock(p.cbPlane, mx, my, p.sw, p.sh, p.sw))
-          encodeBlock(w, quantZig(d, p.qC), dcC, acC, prevCb)
+          var cbb: array[64, float64]
+          for oy in 0..<8:
+            for ox in 0..<8:
+              var sCb = 0; var n = 0
+              for dy in 0..1:
+                for dx in 0..1:
+                  let fx = mx*16+ox*2+dx; let fy = my*16+oy*2+dy
+                  if fx < s.w and fy < s.h:
+                    sCb += int(cbPx[(oy*2+dy)*16 + (ox*2+dx)]); inc(n)
+              let vCb = if n == 0: 128 else: (sCb + n div 2) div n
+              cbb[oy*8+ox] = float64(uint8(vCb)) - 128.0
+          encodeBlock(w, quantZig(fdctBlock(cbb), s.qC), dcC, acC, prevCb)
         block:
-          let d = fdctBlock(sampBlock(p.crPlane, mx, my, p.sw, p.sh, p.sw))
-          encodeBlock(w, quantZig(d, p.qC), dcC, acC, prevCr)
+          var crb: array[64, float64]
+          for oy in 0..<8:
+            for ox in 0..<8:
+              var sCr = 0; var n = 0
+              for dy in 0..1:
+                for dx in 0..1:
+                  let fx = mx*16+ox*2+dx; let fy = my*16+oy*2+dy
+                  if fx < s.w and fy < s.h:
+                    sCr += int(crPx[(oy*2+dy)*16 + (ox*2+dx)]); inc(n)
+              let vCr = if n == 0: 128 else: (sCr + n div 2) div n
+              crb[oy*8+ox] = float64(uint8(vCr)) - 128.0
+          encodeBlock(w, quantZig(fdctBlock(crb), s.qC), dcC, acC, prevCr)
 
 proc encodeJpeg*(img: DynamicImage, quality = 90,
     subsample = true, optimize = false): ImageResult[seq[uint8]] =
-  let pp = preparePlanes(img, quality, subsample)
+  let pp = prepareSource(img, quality, subsample)
   if not pp.ok: return err[seq[uint8]](pp.err)
   let p = pp.value
   let w = p.w; let h = p.h
@@ -444,7 +520,7 @@ proc encodeJpeg*(img: DynamicImage, quality = 90,
   var dcYVals, dcCVals, acYVals, acCVals: seq[int]
   if optimize:
     var dcYF, acYF, dcCF, acCF: array[256, int]
-    countFrequencies(p, dcYF, acYF, dcCF, acCF)
+    countFrequencies(p, img, dcYF, acYF, dcCF, acCF)
     let t0 = genOptimalTable(dcYF)
     let t1 = genOptimalTable(dcCF)
     let t2 = genOptimalTable(acYF)
@@ -515,7 +591,7 @@ proc encodeJpeg*(img: DynamicImage, quality = 90,
   else: sos = @[3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]
   output.add(seg(0xDA, sos))
   var writer = BitWriter()
-  writeScan(p, writer, dcY, acY, dcC, acC)
+  writeScan(p, img, writer, dcY, acY, dcC, acC)
   writer.flushBits()
   for b in writer.data: output.add(b)
   output.add([0xFF'u8, 0xD9])

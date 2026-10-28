@@ -693,7 +693,7 @@ proc decodeVp8l*(payload: seq[uint8], wantW, wantH: int): ImageResult[RgbaImage]
   var px = newSeq[Rgba[uint8]](w * h)
   for i in 0..<w*h:
     px[i] = Rgba[uint8](data: [img[4*i], img[4*i+1], img[4*i+2], img[4*i+3]])
-  ok(RgbaImage(width: uint32(w), height: uint32(h), pixels: px))
+  ok(RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px)))
 
 # ---------- RIFF container ----------
 
@@ -745,7 +745,7 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
     for i, p in r.value.pixels:
       rgb[i] = Rgb[uint8](data: [p.data[0], p.data[1], p.data[2]])
     return ok(DynamicImage(kind: dkRgb8, rgb8:
-      RgbImage(width: r.value.width, height: r.value.height, pixels: rgb)))
+      RgbImage(width: r.value.width, height: r.value.height, pixels: move(rgb))))
   if hasVp8 and vp8body.len > 0:
     if hasAlph:
       return err[DynamicImage](unsupportedError(ukGenericFeature,
@@ -758,7 +758,7 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
       px[i] = Rgb[uint8](data: [rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]])
     return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(
       width: uint32(fr.value.width), height: uint32(fr.value.height),
-      pixels: px)))
+      pixels: move(px))))
   if hasVp8:
     return err[DynamicImage](decodingError("webp: missing VP8 data"))
   err[DynamicImage](decodingError("webp: no image chunk"))

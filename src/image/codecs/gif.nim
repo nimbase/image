@@ -182,7 +182,7 @@ proc gifFrameToRgba*(img: GifImage, fi: int): ImageResult[RgbaImage] =
       px[i] = Rgba[uint8](data: [c.r, c.g, c.b, 255'u8])
     else:
       return err[RgbaImage](decodingError("gif: palette index out of range"))
-  ok(RgbaImage(width: uint32(f.width), height: uint32(f.height), pixels: px))
+  ok(RgbaImage(width: uint32(f.width), height: uint32(f.height), pixels: move(px)))
 
 proc gifFirstToRgba*(data: seq[uint8]): ImageResult[RgbaImage] =
   let g = decodeGif(data)

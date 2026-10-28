@@ -300,15 +300,16 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
         return err[seq[DynamicImage]](decodingError("exr: short raw chunk"))
       blk = comp[0..<exp]
     of 1:
-      let r = rleDecompress(comp, exp)
+      var r = rleDecompress(comp, exp)
       if not r.ok: return err[seq[DynamicImage]](r.err)
-      blk = r.value
+      blk = move(r.value)
     of 2, 3:
-      let r = inflateZlib(comp, exp)
+      var r = inflateZlib(comp, exp)
       if not r.ok: return err[seq[DynamicImage]](r.err)
       if r.value.len < exp:
         return err[seq[DynamicImage]](decodingError("exr: short zip chunk"))
-      blk = r.value[0..<exp]
+      if r.value.len == exp: blk = move(r.value)
+      else: blk = r.value[0..<exp]
       differencesToSamples(blk)
       interleaveHalves(blk)
     else: discard
@@ -356,9 +357,9 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
           pxa[y*w+x] = Rgba[float32](data: [getF(lo, x, ri), getF(lo, x, gi),
             getF(lo, x, bi), getF(lo, x, ai)])
       return ok(@[DynamicImage(kind: dkRgba32F, rgba32f:
-        Rgba32FImage(width: uint32(w), height: uint32(h), pixels: pxa))])
+        Rgba32FImage(width: uint32(w), height: uint32(h), pixels: move(pxa)))])
     return ok(@[DynamicImage(kind: dkRgb32F, rgb32f:
-      Rgb32FImage(width: uint32(w), height: uint32(h), pixels: px))])
+      Rgb32FImage(width: uint32(w), height: uint32(h), pixels: move(px)))])
   elif yi >= 0:
     if ai >= 0:
       var px = newSeq[LumaA[float32]](w*h)
@@ -367,13 +368,13 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
         for x in 0..<w:
           px[y*w+x] = LumaA[float32](data: [getF(lo, x, yi), getF(lo, x, ai)])
       return ok(@[DynamicImage(kind: dkLumaA32F, lumaA32f:
-        GrayAlpha32FImage(width: uint32(w), height: uint32(h), pixels: px))])
+        GrayAlpha32FImage(width: uint32(w), height: uint32(h), pixels: move(px)))])
     var px = newSeq[Luma[float32]](w*h)
     for y in 0..<h:
       let lo = y * lineBytes
       for x in 0..<w: px[y*w+x] = Luma[float32](data: [getF(lo, x, yi)])
     return ok(@[DynamicImage(kind: dkLuma32F, luma32f:
-      Gray32FImage(width: uint32(w), height: uint32(h), pixels: px))])
+      Gray32FImage(width: uint32(w), height: uint32(h), pixels: move(px)))])
   elif ai >= 0 and ri < 0:
     # Alpha-only treated as luma (documented; matches TGA/BMP precedent).
     var pl = newSeq[Luma[float32]](w*h)
@@ -381,7 +382,7 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
       let lo = y * lineBytes
       for x in 0..<w: pl[y*w+x] = Luma[float32](data: [getF(lo, x, ai)])
     return ok(@[DynamicImage(kind: dkLuma32F, luma32f:
-      Gray32FImage(width: uint32(w), height: uint32(h), pixels: pl))])
+      Gray32FImage(width: uint32(w), height: uint32(h), pixels: move(pl)))])
   return err[seq[DynamicImage]](unsupportedError(ukColor,
     "exr: channel set " & $names))
 

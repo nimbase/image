@@ -145,8 +145,8 @@ proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
       if allZero:
         var rgb = newSeq[Rgb[uint8]](n)
         for i, p in px: rgb[i] = Rgb[uint8](data: [p.data[0], p.data[1], p.data[2]])
-        return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: rgb)))
-      return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: uint32(w), height: uint32(h), pixels: px)))
+        return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(rgb))))
+      return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     elif bpp == 32 and hasMasks:
       let (rs, rl) = maskInfo(rMask); let (gs, gl) = maskInfo(gMask)
       let (bs, bl) = maskInfo(bMask); let (alS, alL) = maskInfo(aMask)
@@ -164,7 +164,7 @@ proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
             px[y*w+x] = Rgba[uint8](data: [scaleBits((v and rMask) shr uint32(rs), rl),
               scaleBits((v and gMask) shr uint32(gs), gl),
               scaleBits((v and bMask) shr uint32(bs), bl), a])
-        return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: uint32(w), height: uint32(h), pixels: px)))
+        return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
       else:
         var px = newSeq[Rgb[uint8]](n)
         for y in 0..<h:
@@ -177,7 +177,7 @@ proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
             px[y*w+x] = Rgb[uint8](data: [scaleBits((v and rMask) shr uint32(rs), rl),
               scaleBits((v and gMask) shr uint32(gs), gl),
               scaleBits((v and bMask) shr uint32(bs), bl)])
-        return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+        return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     elif bpp == 24:
       var px = newSeq[Rgb[uint8]](n)
       for y in 0..<h:
@@ -188,7 +188,7 @@ proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
         for x in 0..<w:
           let o = rowOff + x * 3
           px[y*w+x] = Rgb[uint8](data: [data[o+2], data[o+1], data[o]])
-      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     elif bpp == 16:
       let (rs, rl) = maskInfo(rMask); let (gs, gl) = maskInfo(gMask)
       let (bs, bl) = maskInfo(bMask)
@@ -203,7 +203,7 @@ proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
           px[y*w+x] = Rgb[uint8](data: [scaleBits((v and rMask) shr uint32(rs), rl),
             scaleBits((v and gMask) shr uint32(gs), gl),
             scaleBits((v and bMask) shr uint32(bs), bl)])
-      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     elif bpp in [1'u16, 4, 8]:
       let bitsPerRow = int(bpp) * w
       var px = newSeq[Rgb[uint8]](n)
@@ -227,7 +227,7 @@ proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
             return err[DynamicImage](decodingError("bmp: bad palette index"))
           let c = palette[idx]
           px[y*w+x] = Rgb[uint8](data: [c.r, c.g, c.b])
-      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
     else:
       return err[DynamicImage](unsupportedError(ukColor, "bmp: bit depth " & $bpp))
   elif compression == BiRle8:
@@ -270,7 +270,7 @@ proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
         return err[DynamicImage](decodingError("bmp: bad palette index"))
       let c = palette[indices[i]]
       px[i] = Rgb[uint8](data: [c.r, c.g, c.b])
-    return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+    return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   elif compression == BiRle4:
     var indices = newSeq[uint8](n)
     var x = 0; var y = 0
@@ -313,7 +313,7 @@ proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
         return err[DynamicImage](decodingError("bmp: bad palette index"))
       let c = palette[indices[i]]
       px[i] = Rgb[uint8](data: [c.r, c.g, c.b])
-    return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: px)))
+    return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(width: uint32(w), height: uint32(h), pixels: move(px))))
   err[DynamicImage](unsupportedError(ukGenericFeature, "bmp: compression " & $compression))
 
 proc encodeBmpRgb8*(img: RgbImage): seq[uint8] =

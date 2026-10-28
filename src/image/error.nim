@@ -51,7 +51,12 @@ type
     of false:
       err*: ImageError
 
-func ok*[T](v: T): ImageResult[T] =
+func ok*[T](v: sink T): ImageResult[T] =
+  ## `sink` ownership: callers transfer the value (temporaries and
+  ## dead locals move, no copy). Storing a large pixel buffer into a
+  ## result via `ok` therefore does NOT duplicate it — critical for
+  ## peak memory on multi-megapixel images. Callers that still need
+  ## the value afterwards fail to compile; duplicate it explicitly.
   ImageResult[T](ok: true, value: v)
 
 func err*[T](e: ImageError): ImageResult[T] =

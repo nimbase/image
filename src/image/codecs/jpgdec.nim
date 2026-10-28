@@ -9,6 +9,12 @@ import ../dynamic
 import ../simd
 when defined(decodeProfile):
   import std/times
+  import std/posix
+  proc peakMb(): float64 =
+    var ru: Rusage
+    discard getrusage(RUSAGE_SELF, addr ru)
+    when defined(macosx): float64(ru.ru_maxrss) / 1e6
+    else: float64(ru.ru_maxrss) / 1e3
 
 # ---------- zigzag (natural order -> index) computed from diagonals ----------
 
@@ -37,6 +43,27 @@ initZigzag()
 
 proc idctBlock(coef: array[64, float64], qt: array[64, int]): array[64, uint8] =
   idctBlockSimd(coef, qt)
+
+proc idctScaledBlock(coef: array[64, float64], qt: array[64, int],
+    m: int): array[64, uint8] =
+  ## Reduced block output (m = 1, 2, 4) via the full SIMD IDCT followed
+  ## by an in-block DxD box average (d = 8 div m). m = 8 is the plain
+  ## full path. Matches libjpeg `-scale` output within its own integer
+  ## rounding noise, and is bit-exact vs full decode + identical box
+  ## downsample (the committed test oracle).
+  if m == 8:
+    return idctBlock(coef, qt)
+  let full = idctBlock(coef, qt)
+  let d = 8 div m
+  let n = d * d
+  let half = n div 2
+  for oy in 0..<m:
+    for ox in 0..<m:
+      var s = 0
+      for dy in 0..<d:
+        for dx in 0..<d:
+          s += int(full[(oy*d+dy)*8 + (ox*d+dx)])
+      result[oy*m+ox] = uint8((s + half) div n)
 
 # ---------- bit reader with stuffed bytes ----------
 
@@ -125,7 +152,48 @@ type JpegComponent = object
   dcPred*: int
   blocks*: seq[array[64, uint8]]
 
-proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc jpegDimensions*(data: seq[uint8]): ImageResult[tuple[w, h: uint32]] =
+  ## SOF-only header scan: image dimensions without decoding pixels.
+  ## Used to pick a scaled-decode denominator before the full decode.
+  if data.len < 2 or data[0] != 0xFF or data[1] != 0xD8:
+    return err[tuple[w, h: uint32]](decodingError("jpeg: bad SOI"))
+  var pos = 2
+  while true:
+    if pos + 4 > data.len:
+      return err[tuple[w, h: uint32]](decodingError("jpeg: truncated"))
+    if data[pos] != 0xFF:
+      return err[tuple[w, h: uint32]](decodingError("jpeg: expected marker"))
+    var m = data[pos+1]; pos += 2
+    while m == 0xFF:
+      if pos >= data.len:
+        return err[tuple[w, h: uint32]](decodingError("jpeg: truncated"))
+      m = data[pos]; inc(pos)
+    if m == 0xD8 or m in {0xD0..0xD7, 0x01}:
+      continue
+    if m == 0xD9:
+      return err[tuple[w, h: uint32]](decodingError("jpeg: no SOF"))
+    if pos + 2 > data.len:
+      return err[tuple[w, h: uint32]](decodingError("jpeg: truncated segment"))
+    let segLen = (int(data[pos]) shl 8) or int(data[pos+1]); pos += 2
+    if segLen < 2 or pos + segLen - 2 > data.len:
+      return err[tuple[w, h: uint32]](decodingError("jpeg: truncated segment"))
+    if m in {0xC0, 0xC1, 0xC2}:
+      if segLen < 7:
+        return err[tuple[w, h: uint32]](decodingError("jpeg: truncated SOF"))
+      let h = (int(data[pos+1]) shl 8) or int(data[pos+2])
+      let w = (int(data[pos+3]) shl 8) or int(data[pos+4])
+      return ok((uint32(w), uint32(h)))
+    if m == 0xDA:
+      return err[tuple[w, h: uint32]](decodingError("jpeg: SOS before SOF"))
+    pos += segLen - 2
+
+proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
+  ## Baseline / progressive JPEG decode. `denom` 2/4/8 emits a
+  ## 1/denom-scaled image (full IDCT + in-block box average,
+  ## libjpeg `-scale` style); 1 is full resolution. Output dims are
+  ## ceil(w/denom).
+  if denom notin [1, 2, 4, 8]:
+    return err[DynamicImage](paramError(pkGeneric, "jpeg: denom 1/2/4/8"))
   if data.len < 2 or data[0] != 0xFF or data[1] != 0xD8:
     return err[DynamicImage](decodingError("jpeg: bad SOI"))
   var pos = 2
@@ -144,7 +212,7 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
   var scanStart = -1
   # progressive state (SOF2 only; baseline path below is untouched)
   var progressive = false
-  var pcoef: seq[seq[array[64, int]]] = @[] # per comp: raw coeff blocks
+  var pcoef: seq[seq[array[64, int32]]] = @[] # per comp: raw coeff blocks
   var scanCount = 0
   var pMaxH = 1; var pMaxV = 1
   var pMcuX = 0; var pMcuY = 0
@@ -255,7 +323,7 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
         pMcuY = (height + mcuH - 1) div mcuH
         pcoef = @[]
         for i in 0..<comps.len:
-          pcoef.add(newSeq[array[64, int]](pMcuX * comps[i].h * pMcuY * comps[i].v))
+          pcoef.add(newSeq[array[64, int32]](pMcuX * comps[i].h * pMcuY * comps[i].v))
     of 0xC4:
       var q = 0
       while q < body.len:
@@ -389,11 +457,11 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
                 let (okV, diff) = receiveExtend(reader, sym)
                 if not okV: scanErr = "jpeg: truncated DC"; break
                 comps[ci].dcPred += diff
-                pcoef[ci][blk][0] = comps[ci].dcPred shl al
+                pcoef[ci][blk][0] = int32(comps[ci].dcPred shl al)
               else:
                 let (okB, bit) = reader.readBits(1)
                 if not okB: scanErr = "jpeg: truncated DC refine"; break
-                pcoef[ci][blk][0] += bit shl al
+                pcoef[ci][blk][0] += int32(bit shl al)
             else:
               if eobrun > 0:
                 dec(eobrun)
@@ -403,11 +471,11 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
                     if pcoef[ci][blk][p] != 0:
                       let (okB, bit) = reader.readBits(1)
                       if not okB: scanErr = "jpeg: truncated AC refine"; break
-                      if bit == 1 and (pcoef[ci][blk][p] and (1 shl al)) == 0:
+                      if bit == 1 and (pcoef[ci][blk][p] and int32(1 shl al)) == 0:
                         if pcoef[ci][blk][p] > 0:
-                          pcoef[ci][blk][p] += bit shl al
+                          pcoef[ci][blk][p] += int32(bit shl al)
                         else:
-                          pcoef[ci][blk][p] -= bit shl al
+                          pcoef[ci][blk][p] -= int32(bit shl al)
                   if scanErr != "": break
                 continue
               var k = ss
@@ -438,7 +506,7 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
                     k += r
                     let (okC, v) = receiveExtend(reader, s)
                     if not okC: scanErr = "jpeg: truncated AC"; break
-                    pcoef[ci][blk][Unzigzag[min(k, 63)]] = v shl al
+                    pcoef[ci][blk][Unzigzag[min(k, 63)]] = int32(v shl al)
                     inc(k)
                 else:
                   if s == 0:
@@ -452,11 +520,11 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
                         if pcoef[ci][blk][p] != 0:
                           let (okB, bit) = reader.readBits(1)
                           if not okB: scanErr = "jpeg: truncated AC refine"; break
-                          if bit == 1 and (pcoef[ci][blk][p] and (1 shl al)) == 0:
+                          if bit == 1 and (pcoef[ci][blk][p] and int32(1 shl al)) == 0:
                             if pcoef[ci][blk][p] > 0:
-                              pcoef[ci][blk][p] += bit shl al
+                              pcoef[ci][blk][p] += int32(bit shl al)
                             else:
-                              pcoef[ci][blk][p] -= bit shl al
+                              pcoef[ci][blk][p] -= int32(bit shl al)
                         else: inc(zeros)
                         inc(k)
                       if scanErr != "": break
@@ -471,11 +539,11 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
                         if pcoef[ci][blk][p] != 0:
                           let (okB, bit) = reader.readBits(1)
                           if not okB: scanErr = "jpeg: truncated AC refine"; break
-                          if bit == 1 and (pcoef[ci][blk][p] and (1 shl al)) == 0:
+                          if bit == 1 and (pcoef[ci][blk][p] and int32(1 shl al)) == 0:
                             if pcoef[ci][blk][p] > 0:
-                              pcoef[ci][blk][p] += bit shl al
+                              pcoef[ci][blk][p] += int32(bit shl al)
                             else:
-                              pcoef[ci][blk][p] -= bit shl al
+                              pcoef[ci][blk][p] -= int32(bit shl al)
                         inc(k)
                       if scanErr != "": break
                       done = true
@@ -501,18 +569,18 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
                       if pcoef[ci][blk][p] != 0:
                         let (okB, bit) = reader.readBits(1)
                         if not okB: scanErr = "jpeg: truncated AC refine"; break
-                        if bit == 1 and (pcoef[ci][blk][p] and (1 shl al)) == 0:
+                        if bit == 1 and (pcoef[ci][blk][p] and int32(1 shl al)) == 0:
                           if pcoef[ci][blk][p] > 0:
-                            pcoef[ci][blk][p] += bit shl al
+                            pcoef[ci][blk][p] += int32(bit shl al)
                           else:
-                            pcoef[ci][blk][p] -= bit shl al
+                            pcoef[ci][blk][p] -= int32(bit shl al)
                       else:
                         if rr == 0: break
                         dec(rr)
                       inc(k)
                     if scanErr != "": break
                     let kk = min(k, se)
-                    pcoef[ci][blk][Unzigzag[kk]] = nv
+                    pcoef[ci][blk][Unzigzag[kk]] = int32(nv)
                     k = kk + 1
                   else:
                     scanErr = "jpeg: bad AC refine symbol"; break
@@ -548,6 +616,11 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
   var maxH = 1; var maxV = 1
   for i in 0..<comps.len:
     maxH = max(maxH, comps[i].h); maxV = max(maxV, comps[i].v)
+  when defined(decodeProfile):
+    echo "decodeProfile afterEntropy peak=", peakMb(), "MB"
+  let blk = 8 div denom # scaled block edge (8/4/2/1)
+  let outW = (width + denom - 1) div denom
+  let outH = (height + denom - 1) div denom
   let mcuW = 8 * maxH; let mcuH = 8 * maxV
   let mcuCountX = (width + mcuW - 1) div mcuW
   let mcuCountY = (height + mcuH - 1) div mcuH
@@ -564,7 +637,7 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
     for ci in 0..<comps.len:
       for bi in 0..<comps[ci].blocks.len:
         for k in 0..63: coef[k] = float64(pcoef[ci][bi][k])
-        comps[ci].blocks[bi] = idctBlock(coef, qts[comps[ci].tq])
+        comps[ci].blocks[bi] = idctScaledBlock(coef, qts[comps[ci].tq], blk)
     when defined(decodeProfile):
       tProfIdct += cpuTime() - tProfIdct0
     when defined(progDebug):
@@ -609,7 +682,8 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
               inc(k)
           let bx = (mcuIdx mod mcuCountX) * comps[ci].h + (b mod comps[ci].h)
           let by = (mcuIdx div mcuCountX) * comps[ci].v + (b div comps[ci].h)
-          comps[ci].blocks[by * cols + bx] = idctBlock(coef, qts[comps[ci].tq])
+          comps[ci].blocks[by * cols + bx] =
+            idctScaledBlock(coef, qts[comps[ci].tq], blk)
       inc(mcuIdx)
       if restartInterval > 0 and mcuIdx mod restartInterval == 0:
         for i in 0..<comps.len: comps[i].dcPred = 0
@@ -618,33 +692,37 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
   # assemble pixels with upsampling (replication)
   when defined(decodeProfile):
     let tProfAsm0 = cpuTime()
+    echo "decodeProfile afterIdct peak=", peakMb(), "MB"
   if comps.len == 1:
-    var px = newSeq[Luma[uint8]](width * height)
+    var px = newSeq[Luma[uint8]](outW * outH)
     let cols = mcuCountX * comps[0].h
-    for y in 0..<height:
-      for x in 0..<width:
-        let bx = x div 8; let by = y div 8
-        px[y*width+x] = Luma[uint8](data: [comps[0].blocks[by*cols+bx][(y mod 8)*8 + (x mod 8)]])
+    for y in 0..<outH:
+      for x in 0..<outW:
+        let bx = x div blk; let by = y div blk
+        px[y*outW+x] = Luma[uint8](data: [comps[0].blocks[by*cols+bx][(y mod blk)*blk + (x mod blk)]])
     when defined(decodeProfile):
       tProfAsm += cpuTime() - tProfAsm0
       echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,
         "s asm=", tProfAsm, "s"
     return ok(DynamicImage(kind: dkLuma8, luma8:
-      GrayImage(width: uint32(width), height: uint32(height), pixels: px)))
+      GrayImage(width: uint32(outW), height: uint32(outH), pixels: move(px))))
   elif comps.len == 3 or comps.len == 4:
     let isYcck = adobeTransform == 2
-    var px = newSeq[Rgb[uint8]](width * height)
+    var px = newSeq[Rgb[uint8]](outW * outH)
+    when defined(decodeProfile):
+      echo "decodeProfile afterPxAlloc peak=", peakMb(), "MB"
     if comps.len == 3:
       # 3-component fast path: hoist the runtime upsample divisions into
       # per-column maps, gather planar rows, convert whole rows via SIMD.
       var xmaps: array[3, seq[int]]
       for ci in 0..2:
-        xmaps[ci] = newSeq[int](width)
-        for x in 0..<width: xmaps[ci][x] = (x * comps[ci].h) div maxH
-      var yRow = newSeq[uint8](width)
-      var cbRow = newSeq[uint8](width)
-      var crRow = newSeq[uint8](width)
-      for y in 0..<height:
+        xmaps[ci] = newSeq[int](outW)
+        for x in 0..<outW: xmaps[ci][x] = (x * comps[ci].h) div maxH
+      var yRow = newSeq[uint8](outW)
+      var cbRow = newSeq[uint8](outW)
+      var crRow = newSeq[uint8](outW)
+      let xm0 = xmaps[0]; let xm1 = xmaps[1]; let xm2 = xmaps[2]
+      for y in 0..<outH:
         when defined(decodeProfile):
           let tProfG0 = cpuTime()
         for ci in 0..2:
@@ -653,20 +731,20 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
           # turning this loop into ~144 GB of memmove. Index in place.
           let cols = mcuCountX * comps[ci].h
           let sy = (y * comps[ci].v) div maxV
-          let by = sy div 8; let my = (sy mod 8) * 8
+          let by = sy div blk; let my = (sy mod blk) * blk
           var dst: ptr UncheckedArray[uint8]
           if ci == 0: dst = cast[ptr UncheckedArray[uint8]](addr yRow[0])
           elif ci == 1: dst = cast[ptr UncheckedArray[uint8]](addr cbRow[0])
           else: dst = cast[ptr UncheckedArray[uint8]](addr crRow[0])
-          let xm = xmaps[ci]
-          for x in 0..<width:
+          let xm = if ci == 0: xm0 elif ci == 1: xm1 else: xm2
+          for x in 0..<outW:
             let sx = xm[x]
-            dst[x] = comps[ci].blocks[by * cols + (sx div 8)][my + (sx mod 8)]
+            dst[x] = comps[ci].blocks[by * cols + (sx div blk)][my + (sx mod blk)]
         when defined(decodeProfile):
           tProfGather += cpuTime() - tProfG0
           let tProfC0 = cpuTime()
         ycbcrRowSimd(addr yRow[0], addr cbRow[0], addr crRow[0],
-          cast[ptr uint8](addr px[y*width]), width)
+          cast[ptr uint8](addr px[y*outW]), outW)
         when defined(decodeProfile):
           tProfConvert += cpuTime() - tProfC0
       when defined(decodeProfile):
@@ -675,16 +753,16 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
           "s asm=", tProfAsm, "s gather=", tProfGather, "s convert=",
           tProfConvert, "s"
       return ok(DynamicImage(kind: dkRgb8, rgb8:
-        RgbImage(width: uint32(width), height: uint32(height), pixels: px)))
-    for y in 0..<height:
-      for x in 0..<width:
+        RgbImage(width: uint32(outW), height: uint32(outH), pixels: move(px))))
+    for y in 0..<outH:
+      for x in 0..<outW:
         var samp: array[4, uint8]
         for ci in 0..<comps.len:
           # NOTE: no `let c` copy here (see above) — index in place.
           let sx = (x * comps[ci].h) div maxH
           let sy = (y * comps[ci].v) div maxV
           let cols = mcuCountX * comps[ci].h
-          samp[ci] = comps[ci].blocks[(sy div 8) * cols + (sx div 8)][(sy mod 8)*8 + (sx mod 8)]
+          samp[ci] = comps[ci].blocks[(sy div blk) * cols + (sx div blk)][(sy mod blk)*blk + (sx mod blk)]
         var cc, mm, yy, kk: uint8
         if isYcck:
           let (r, g, b) = ycbcrToRgb(samp[0], samp[1], samp[2])
@@ -701,5 +779,5 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
       echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,
         "s asm=", tProfAsm, "s"
     return ok(DynamicImage(kind: dkRgb8, rgb8:
-      RgbImage(width: uint32(width), height: uint32(height), pixels: px)))
+      RgbImage(width: uint32(outW), height: uint32(outH), pixels: move(px))))
   err[DynamicImage](unsupportedError(ukGenericFeature, "jpeg: components"))

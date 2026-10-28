@@ -139,7 +139,7 @@ proc decodeBmpIcoPayload*(payload: seq[uint8]): ImageResult[DynamicImage] =
         px[y*wAct+x] = Rgba[uint8](data: [p.data[0], p.data[1], p.data[2],
           if andBit(x, y): 0'u8 else: 255'u8])
     ok(DynamicImage(kind: dkRgba8, rgba8:
-      RgbaImage(width: uint32(wAct), height: uint32(hAct), pixels: px)))
+      RgbaImage(width: uint32(wAct), height: uint32(hAct), pixels: move(px))))
   of dkRgba8:
     var s = dr.value.rgba8
     for y in 0..<hAct:

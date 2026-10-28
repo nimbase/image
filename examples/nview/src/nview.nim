@@ -73,6 +73,23 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
     return r.value
   of fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(IOError, name & ": 16-bit/float input not supported in v1")
+  of fmtJpeg:
+    # scaled decode for large photos: pick the largest denom that keeps
+    # the image usable on screen (decode-time win for pixels the viewer
+    # would downscale in GL anyway).
+    var denom = 1
+    let dd = jpegDimensions(bytes)
+    if dd.ok:
+      let m = max(dd.value.w, dd.value.h)
+      if m > 2400: denom = 4
+      elif m > 1200: denom = 2
+    let r = decodeJpeg(bytes, denom)
+    if not r.ok:
+      raise newException(IOError, name & ": " & r.err.msg)
+    result = r.value.toRgba8()
+    if result.width == 0 or result.height == 0:
+      raise newException(IOError, name & ": unsupported pixel type in v1")
+    return result
   else:
     let r = decodeDyn(fmt, bytes)
     if not r.ok:

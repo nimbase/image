@@ -70,7 +70,7 @@ proc decodeFarbfeld*(data: seq[uint8]): ImageResult[Rgba16Image] =
     let a = (uint16(data[off+6]) shl 8) or uint16(data[off+7])
     px[i] = Rgba[uint16](data: [r, g, b, a])
     off += 8
-  ok(Rgba16Image(width: w, height: h, pixels: px))
+  ok(Rgba16Image(width: w, height: h, pixels: move(px)))
 
 proc encodeFarbfeld*(img: Rgba16Image): seq[uint8] =
   result = newSeq[uint8](16 + img.pixels.len * 8)
