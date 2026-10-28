@@ -4,5 +4,5 @@ jobs:
   test:
     uses: nimbase/setup-nim-action/.github/workflows/test.yml@main
     with:
-      nim-version: stable
+      nim-version: '2.2.12'
       os: '[{"os":"ubuntu-latest"},{"os":"ubuntu-24.04-arm"},{"os":"macos-15"},{"os":"macos-15-intel"}]'
