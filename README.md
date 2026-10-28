@@ -17,7 +17,9 @@
 > [`image`](https://github.com/image-rs/image) crate (v0.25.9), mirroring its
 > API (`DynamicImage`, `ImageBuffer`, `ImageReader`, `ImageFormat`). Zero C
 > bindings (deflate via pure-Nim `pkg/archive`); `imageops` processing
-> functions are out of scope for v1.
+> functions are out of scope for v1, with one deliberate exception: a
+> strict width/height crop (`cropImage`, no resampling) needed by the JPEG
+> compression request builder.
 
 
 ## Features
@@ -35,7 +37,7 @@ Codec support (`o` = decode, `w` = encode):
 - GIF: o+w — animation, disposal, interlace, loop count, LZW
 - HDR: o+w — Radiance RGBE, flat + new/old RLE
 - ICO: o+w — PNG and BMP payloads, AND-mask transparency
-- JPEG: o+w — baseline + progressive (SOF2) DCT decode, 4:4:4/4:2:0, quality 1–100; encoder baseline-only
+- JPEG: o+w — baseline + progressive (SOF2) DCT decode, 4:4:4/4:2:0, quality 1–100; baseline encoder with optional optimized Huffman tables + fluent `compress().crop().encode()` API and strict `cropImage` (all 12 `DynamicImage` variants)
 - PNG: o+w — all color types, 1/2/4/8/16-bit, all 5 filters, Adam7, tRNS
 - PNM: o+w — P1–P6 plus PAM; writer emits P5/P6
 - QOI: o+w — full op-index/run/diff/luma/rgb/rgba codec
@@ -110,7 +112,11 @@ let dec = decodeIco(enc.value)    # largest entry wins
 ```nim
 let enc = encodeJpeg(img, 90)              # quality 1..100, 4:2:0 default
 let enc2 = encodeJpeg(img, 95, subsample = false)  # 4:4:4
+let enc3 = encodeJpeg(img, 75, optimize = true)    # smaller optimal Huffman tables
 let dec = decodeJpeg(enc.value)   # baseline DCT
+let req = img.compress(50).crop(300, 300, 20, 20).encode()  # fluent: strict crop + encode
+let opt = img.compress(90).subsampled(false).optimized().encode()
+let c = cropImage(img, 0, 0, 20, 20)  # strict, variant-preserving; 8-bit inputs only for JPEG
 ```
 
 ### PNG
@@ -195,7 +201,7 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] GIF (animation, interlace, loop count)
 - [x] HDR (flat + new/old RLE)
 - [x] ICO (PNG + BMP payloads, AND mask)
-- [x] JPEG baseline (DCT, 4:4:4/4:2:2/4:2:0, encoder with quality 1–100)
+- [x] JPEG baseline (DCT, 4:4:4/4:2:2/4:2:0, encoder with quality 1–100, optimized Huffman, fluent compress/crop API)
 - [x] PNG (all color types, filters, Adam7, tRNS, CRC)
 - [x] PNM (P1–P6 + PAM)
 - [x] QOI (full opcode set)

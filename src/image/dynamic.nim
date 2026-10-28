@@ -4,6 +4,7 @@ import ./color
 import ./error
 import ./buffer
 import ./format
+import ./math
 
 type
   DynamicKind* = enum
@@ -98,3 +99,55 @@ func toLuma8*(img: DynamicImage): GrayImage =
     GrayImage(width: s.width, height: s.height, pixels: outP)
   else:
     GrayImage(width: 0, height: 0, pixels: @[])
+
+proc cropBuffer[P](src: ImageBuffer[P], x, y, w, h: uint32): ImageBuffer[P] =
+  var outP = newSeq[P](int(w) * int(h))
+  let sw = int(src.width)
+  for yy in 0..<int(h):
+    for xx in 0..<int(w):
+      outP[yy * int(w) + xx] =
+        src.pixels[(int(y) + yy) * sw + (int(x) + xx)]
+  ImageBuffer[P](width: w, height: h, pixels: outP)
+
+proc cropImage*(img: DynamicImage, x, y, w, h: uint32): ImageResult[DynamicImage] =
+  ## Strict width/height crop. The rectangle must be fully inside the
+  ## source image (no clamping); the source variant is preserved and the
+  ## source itself is left unchanged.
+  if w == 0 or h == 0:
+    return err[DynamicImage](paramError(pkDimensionMismatch, "crop: empty"))
+  let (sw, sh) = img.dimensions()
+  if uint64(x) + uint64(w) > uint64(sw) or
+      uint64(y) + uint64(h) > uint64(sh):
+    return err[DynamicImage](paramError(pkDimensionMismatch,
+      "crop: out of bounds"))
+  case img.kind
+  of dkLuma8:
+    ok(DynamicImage(kind: dkLuma8, luma8: cropBuffer(img.luma8, x, y, w, h)))
+  of dkLumaA8:
+    ok(DynamicImage(kind: dkLumaA8, lumaA8: cropBuffer(img.lumaA8, x, y, w, h)))
+  of dkRgb8:
+    ok(DynamicImage(kind: dkRgb8, rgb8: cropBuffer(img.rgb8, x, y, w, h)))
+  of dkRgba8:
+    ok(DynamicImage(kind: dkRgba8, rgba8: cropBuffer(img.rgba8, x, y, w, h)))
+  of dkLuma16:
+    ok(DynamicImage(kind: dkLuma16, luma16: cropBuffer(img.luma16, x, y, w, h)))
+  of dkLumaA16:
+    ok(DynamicImage(kind: dkLumaA16,
+      lumaA16: cropBuffer(img.lumaA16, x, y, w, h)))
+  of dkRgb16:
+    ok(DynamicImage(kind: dkRgb16, rgb16: cropBuffer(img.rgb16, x, y, w, h)))
+  of dkRgba16:
+    ok(DynamicImage(kind: dkRgba16,
+      rgba16: cropBuffer(img.rgba16, x, y, w, h)))
+  of dkLuma32F:
+    ok(DynamicImage(kind: dkLuma32F,
+      luma32f: cropBuffer(img.luma32f, x, y, w, h)))
+  of dkLumaA32F:
+    ok(DynamicImage(kind: dkLumaA32F,
+      lumaA32f: cropBuffer(img.lumaA32f, x, y, w, h)))
+  of dkRgb32F:
+    ok(DynamicImage(kind: dkRgb32F,
+      rgb32f: cropBuffer(img.rgb32f, x, y, w, h)))
+  of dkRgba32F:
+    ok(DynamicImage(kind: dkRgba32F,
+      rgba32f: cropBuffer(img.rgba32f, x, y, w, h)))
