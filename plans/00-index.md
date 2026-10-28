@@ -19,6 +19,9 @@ Constraints (user-confirmed):
   See `06-excluded-imageops.md`.
 - `07-testing-release.md` — testing, fuzz, benches, CI, nimble tasks.
 - `08-simd-acceleration.md` — runtime-dispatched SIMD via nimsimd (PNG first).
+- `09-heif.md` — HEIF/HEIC container + uncompressed/JPEG-in-HEIF decode (clean-room,
+  spec-based; libheif is black-box oracle only, never ported; VVC/AVC/JPEG2000
+  decode stays Unsupported).
 
 ## Proposed Nim module tree
 

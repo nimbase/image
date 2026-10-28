@@ -19,6 +19,7 @@ type
     fmtFarbfeld
     fmtAvif
     fmtQoi
+    fmtHeif
 
 func fromExtension*(ext: string): tuple[found: bool, f: ImageFormat] =
   let e = ext.toLowerAscii()
@@ -37,6 +38,7 @@ func fromExtension*(ext: string): tuple[found: bool, f: ImageFormat] =
   of "pbm", "pam", "ppm", "pgm", "pnm": (true, fmtPnm)
   of "ff": (true, fmtFarbfeld)
   of "qoi": (true, fmtQoi)
+  of "heif", "heic", "hif": (true, fmtHeif)
   else: (false, fmtPng)
 
 func fromPath*(path: string): ImageResult[ImageFormat] =
@@ -64,6 +66,9 @@ func fromMimeType*(mime: string): tuple[found: bool, f: ImageFormat] =
   of "image/x-portable-bitmap", "image/x-portable-graymap",
      "image/x-portable-pixmap", "image/x-portable-anymap": (true, fmtPnm)
   of "image/x-qoi": (true, fmtQoi)
+  of "image/heif": (true, fmtHeif)
+  of "image/heic": (true, fmtHeif)
+  of "image/heif-sequence": (true, fmtHeif)
   else: (false, fmtPng)
 
 func toMimeType*(f: ImageFormat): string =
@@ -82,6 +87,7 @@ func toMimeType*(f: ImageFormat): string =
   of fmtPnm: "image/x-portable-anymap"
   of fmtQoi: "image/x-qoi"
   of fmtFarbfeld: "application/octet-stream"
+  of fmtHeif: "image/heif"
 
 func extensionsStr*(f: ImageFormat): seq[string] =
   case f
@@ -99,7 +105,8 @@ func extensionsStr*(f: ImageFormat): seq[string] =
   of fmtFarbfeld: @["ff"]
   of fmtAvif: @["avif"]
   of fmtQoi: @["qoi"]
+  of fmtHeif: @["heif", "heic", "hif"]
 
 func allFormats*(): seq[ImageFormat] =
   @[fmtGif, fmtIco, fmtJpeg, fmtPng, fmtBmp, fmtTiff, fmtTga, fmtPnm,
-    fmtFarbfeld, fmtAvif, fmtWebP, fmtOpenExr, fmtQoi, fmtHdr]
+    fmtFarbfeld, fmtAvif, fmtWebP, fmtOpenExr, fmtQoi, fmtHdr, fmtHeif]

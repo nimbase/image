@@ -5,9 +5,11 @@
 ## design: BMP (row padding), JPEG (missing EOI), QOI (end marker),
 ## WebP (1-byte VP8L padding tolerance) — probed 2026-10-27.
 import unittest
+import std/os
 import image
 import image/codecs/[bmp, png, jpeg, gif, tiff, ico, hdr, pnm, qoi, tga,
   farbfeld, openexr, webp, avif]
+import image/codecs/heif/heif
 
 template checkCuts(full: seq[uint8], decode: untyped) =
   ## All hard cuts fail; full input decodes fine.
@@ -105,3 +107,18 @@ test "truncate avif":
   check decodeAvif(@[0'u8, 1, 2]).ok == false
   check decodeAvif(@[0'u8, 1, 2, 3, 4, 5, 6, 7]).ok == false
   check decodeAvif(@[0xDE'u8, 0xAD, 0xBE, 0xEF]).ok == false
+
+test "truncate heif":
+  # no encoder in v1: cut a real fixture (uncompressed RGB still)
+  let p = currentSourcePath().parentDir() / "fixtures" / "heif" /
+    "unc-rgb-64x48.heif"
+  var f = open(p, fmRead)
+  var full = newSeq[uint8](getFileSize(f))
+  discard readBytes(f, full, 0, full.len)
+  close(f)
+  check decodeHeif(full).ok
+  for c in [0, 1, 2, 11, 12, full.len div 2]:
+    check decodeHeif(full[0..<c]).ok == false
+  check decodeHeif(full[0..^2]).ok == false
+  check decodeHeif(@[]).ok == false
+  check decodeHeif(@[0xDE'u8, 0xAD, 0xBE, 0xEF, 0x00, 0xFF, 0x12, 0x34]).ok == false

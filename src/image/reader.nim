@@ -30,4 +30,17 @@ func guessFormat*(data: openArray[uint8]): tuple[found: bool, f: ImageFormat] =
     return (true, fmtOpenExr)
   if data.len >= 11 and data[0]==uint8('#') and data[1]==uint8('?'):
     return (true, fmtHdr)
+  if data.len >= 12 and data[4]==uint8('f') and data[5]==uint8('t') and
+      data[6]==uint8('y') and data[7]==uint8('p'):
+    # ftyp major brand decides; keep the list aligned with heif/isobmff
+    var brand = ""
+    for i in 8..<12: brand.add(char(data[i]))
+    if brand == "mif1" or brand == "mif2" or brand == "msf1" or
+        brand == "mif3" or brand == "heic" or brand == "heix" or
+        brand == "hevc" or brand == "hevx" or brand == "vvic" or
+        brand == "vvis" or brand == "avic" or brand == "avis" or
+        brand == "jpeg" or brand == "j2ki" or brand == "unci" or
+        brand == "miaf" or brand == "miff" or brand == "1pic" or
+        brand == "pred":
+      return (true, fmtHeif)
   (false, fmtPng)
