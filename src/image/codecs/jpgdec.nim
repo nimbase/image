@@ -7,6 +7,8 @@ import ../error
 import ../buffer
 import ../dynamic
 import ../simd
+when defined(decodeProfile):
+  import std/times
 
 # ---------- zigzag (natural order -> index) computed from diagonals ----------
 
@@ -114,6 +116,9 @@ proc decodeHuff(r: var BitReader, t: HuffTable): tuple[ok: bool, sym: int] =
 # ---------- frame structures ----------
 
 type JpegComponent = object
+  ## NOTE: copying a JpegComponent deep-copies the whole blocks seq
+  ## (24 MB for Y at 24 MP). Never `let c = comps[i]` / `for c in comps`
+  ## in any loop — always index `comps[i]` in place.
   id: uint8
   h*, v*: int
   tq*: int
@@ -150,6 +155,12 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
   for ci in 0..3:
     for k in 0..63: coefAl[ci][k] = -1
   template need(n: int): bool = pos + n <= data.len
+  when defined(decodeProfile):
+    var tProfEntropy = 0.0
+    var tProfIdct = 0.0
+    var tProfAsm = 0.0
+    var tProfGather = 0.0
+    var tProfConvert = 0.0
 
   proc buildCleanScan(startPos: int): tuple[clean: seq[uint8], nextPos: int] =
     ## Entropy segment from startPos to the next marker; strips RSTn and
@@ -238,13 +249,13 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
       if m == 0xC2:
         progressive = true
         pMaxH = 1; pMaxV = 1
-        for c in comps: pMaxH = max(pMaxH, c.h); pMaxV = max(pMaxV, c.v)
+        for i in 0..<comps.len: pMaxH = max(pMaxH, comps[i].h); pMaxV = max(pMaxV, comps[i].v)
         let mcuW = 8 * pMaxH; let mcuH = 8 * pMaxV
         pMcuX = (width + mcuW - 1) div mcuW
         pMcuY = (height + mcuH - 1) div mcuH
         pcoef = @[]
-        for c in comps:
-          pcoef.add(newSeq[array[64, int]](pMcuX * c.h * pMcuY * c.v))
+        for i in 0..<comps.len:
+          pcoef.add(newSeq[array[64, int]](pMcuX * comps[i].h * pMcuY * comps[i].v))
     of 0xC4:
       var q = 0
       while q < body.len:
@@ -284,8 +295,8 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
       for i in 0..<ns:
         let cs = body[1+2*i]
         var ci = -1
-        for k, c in comps:
-          if c.id == cs: ci = k; break
+        for k in 0..<comps.len:
+          if comps[k].id == cs: ci = k; break
         if ci < 0:
           return err[DynamicImage](decodingError("jpeg: SOS unknown component"))
         scanComps.add((ci, int(body[1+2*i+1] shr 4), int(body[1+2*i+1] and 15)))
@@ -298,8 +309,8 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
         for sc in scanComps:
           if not dcSet[sc.dc] or not acSet[sc.ac]:
             return err[DynamicImage](decodingError("jpeg: missing Huffman table"))
-        for c in comps:
-          if not qtsSet[c.tq]:
+        for i in 0..<comps.len:
+          if not qtsSet[comps[i].tq]:
             return err[DynamicImage](decodingError("jpeg: missing quant table"))
         pos += segLen - 2
         scanStart = pos
@@ -317,8 +328,8 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
         for sc in scanComps:
           if not acSet[sc.ac]:
             return err[DynamicImage](decodingError("jpeg: missing Huffman table"))
-      for c in comps:
-        if not qtsSet[c.tq]:
+      for i in 0..<comps.len:
+        if not qtsSet[comps[i].tq]:
           return err[DynamicImage](decodingError("jpeg: missing quant table"))
       # per-coefficient continuity: a first scan (ah == 0) must cover only
       # fresh positions; a refinement must cover positions all coded at
@@ -340,6 +351,8 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
               return err[DynamicImage](decodingError("jpeg: bad band refine"))
           for k in ss..se: coefAl[ci][k] = al
       pos += segLen - 2
+      when defined(decodeProfile):
+        let tProfScan0 = cpuTime()
       let (cleanS, nextPos) = buildCleanScan(pos)
       var reader = BitReader(data: cleanS, pos: 0, buf: 0, nbits: 0)
       for i in 0..<comps.len: comps[i].dcPred = 0
@@ -517,6 +530,8 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
       when defined(progDebug):
         echo "scan ", scanCount, " done ss=", ss, " se=", se, " al=", al, " pos=", pos, "->", nextPos
       pos = nextPos
+      when defined(decodeProfile):
+        tProfEntropy += cpuTime() - tProfScan0
       continue
     else:
       if m >= 0xC0 and m <= 0xCF:
@@ -531,8 +546,8 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
     let (clean, _) = buildCleanScan(scanStart)
     reader = BitReader(data: clean, pos: 0, buf: 0, nbits: 0)
   var maxH = 1; var maxV = 1
-  for c in comps:
-    maxH = max(maxH, c.h); maxV = max(maxV, c.v)
+  for i in 0..<comps.len:
+    maxH = max(maxH, comps[i].h); maxV = max(maxV, comps[i].v)
   let mcuW = 8 * maxH; let mcuH = 8 * maxV
   let mcuCountX = (width + mcuW - 1) div mcuW
   let mcuCountY = (height + mcuH - 1) div mcuH
@@ -544,14 +559,20 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
   var mcuIdx = 0
   if progFinish:
     # progressive: dequant accumulated coefficients, IDCT every block
+    when defined(decodeProfile):
+      let tProfIdct0 = cpuTime()
     for ci in 0..<comps.len:
       for bi in 0..<comps[ci].blocks.len:
         for k in 0..63: coef[k] = float64(pcoef[ci][bi][k])
         comps[ci].blocks[bi] = idctBlock(coef, qts[comps[ci].tq])
+    when defined(decodeProfile):
+      tProfIdct += cpuTime() - tProfIdct0
     when defined(progDebug):
       for k in 0..63:
         echo "coef[", k, "]=", pcoef[0][0][k]
   else:
+    when defined(decodeProfile):
+      let tProfBase0 = cpuTime()
     while mcuIdx < totalMcus:
       for sc in scanComps:
         let ci = sc.comp
@@ -592,7 +613,11 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
       inc(mcuIdx)
       if restartInterval > 0 and mcuIdx mod restartInterval == 0:
         for i in 0..<comps.len: comps[i].dcPred = 0
+    when defined(decodeProfile):
+      tProfIdct += cpuTime() - tProfBase0
   # assemble pixels with upsampling (replication)
+  when defined(decodeProfile):
+    let tProfAsm0 = cpuTime()
   if comps.len == 1:
     var px = newSeq[Luma[uint8]](width * height)
     let cols = mcuCountX * comps[0].h
@@ -600,6 +625,10 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
       for x in 0..<width:
         let bx = x div 8; let by = y div 8
         px[y*width+x] = Luma[uint8](data: [comps[0].blocks[by*cols+bx][(y mod 8)*8 + (x mod 8)]])
+    when defined(decodeProfile):
+      tProfAsm += cpuTime() - tProfAsm0
+      echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,
+        "s asm=", tProfAsm, "s"
     return ok(DynamicImage(kind: dkLuma8, luma8:
       GrayImage(width: uint32(width), height: uint32(height), pixels: px)))
   elif comps.len == 3 or comps.len == 4:
@@ -616,10 +645,14 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
       var cbRow = newSeq[uint8](width)
       var crRow = newSeq[uint8](width)
       for y in 0..<height:
+        when defined(decodeProfile):
+          let tProfG0 = cpuTime()
         for ci in 0..2:
-          let c = comps[ci]
-          let cols = mcuCountX * c.h
-          let sy = (y * c.v) div maxV
+          # NOTE: never `let c = comps[ci]` here — JpegComponent's =copy
+          # deep-copies the whole blocks seq (24 MB for Y at 24 MP),
+          # turning this loop into ~144 GB of memmove. Index in place.
+          let cols = mcuCountX * comps[ci].h
+          let sy = (y * comps[ci].v) div maxV
           let by = sy div 8; let my = (sy mod 8) * 8
           var dst: ptr UncheckedArray[uint8]
           if ci == 0: dst = cast[ptr UncheckedArray[uint8]](addr yRow[0])
@@ -628,19 +661,30 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
           let xm = xmaps[ci]
           for x in 0..<width:
             let sx = xm[x]
-            dst[x] = c.blocks[by * cols + (sx div 8)][my + (sx mod 8)]
+            dst[x] = comps[ci].blocks[by * cols + (sx div 8)][my + (sx mod 8)]
+        when defined(decodeProfile):
+          tProfGather += cpuTime() - tProfG0
+          let tProfC0 = cpuTime()
         ycbcrRowSimd(addr yRow[0], addr cbRow[0], addr crRow[0],
           cast[ptr uint8](addr px[y*width]), width)
+        when defined(decodeProfile):
+          tProfConvert += cpuTime() - tProfC0
+      when defined(decodeProfile):
+        tProfAsm += cpuTime() - tProfAsm0
+        echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,
+          "s asm=", tProfAsm, "s gather=", tProfGather, "s convert=",
+          tProfConvert, "s"
       return ok(DynamicImage(kind: dkRgb8, rgb8:
         RgbImage(width: uint32(width), height: uint32(height), pixels: px)))
     for y in 0..<height:
       for x in 0..<width:
         var samp: array[4, uint8]
         for ci in 0..<comps.len:
-          let c = comps[ci]
-          let sx = (x * c.h) div maxH; let sy = (y * c.v) div maxV
-          let cols = mcuCountX * c.h
-          samp[ci] = c.blocks[(sy div 8) * cols + (sx div 8)][(sy mod 8)*8 + (sx mod 8)]
+          # NOTE: no `let c` copy here (see above) — index in place.
+          let sx = (x * comps[ci].h) div maxH
+          let sy = (y * comps[ci].v) div maxV
+          let cols = mcuCountX * comps[ci].h
+          samp[ci] = comps[ci].blocks[(sy div 8) * cols + (sx div 8)][(sy mod 8)*8 + (sx mod 8)]
         var cc, mm, yy, kk: uint8
         if isYcck:
           let (r, g, b) = ycbcrToRgb(samp[0], samp[1], samp[2])
@@ -652,6 +696,10 @@ proc decodeJpeg*(data: seq[uint8]): ImageResult[DynamicImage] =
           uint8(255 - min(255, int(cc) + int(kk))),
           uint8(255 - min(255, int(mm) + int(kk))),
           uint8(255 - min(255, int(yy) + int(kk)))])
+    when defined(decodeProfile):
+      tProfAsm += cpuTime() - tProfAsm0
+      echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,
+        "s asm=", tProfAsm, "s"
     return ok(DynamicImage(kind: dkRgb8, rgb8:
       RgbImage(width: uint32(width), height: uint32(height), pixels: px)))
   err[DynamicImage](unsupportedError(ukGenericFeature, "jpeg: components"))
