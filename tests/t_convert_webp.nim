@@ -175,7 +175,7 @@ test "webp fluent quality bounds and first error wins":
   let img = fillRgb(8, 8)
   check img.toWebp(0).encode().ok == false
   check img.toWebp(101).encode().ok == false
-  check img.toWebp(50).encode().ok == false # lossy: Phase 2
+  check img.toWebp(50).encode().ok
   check img.toWebp(50).lossless().encode().ok
   let r1 = img.toWebp(0).crop(0, 0, 0, 0).encode()
   check r1.ok == false
@@ -191,6 +191,30 @@ test "webp fluent crop encode dimensions":
   let dec = decodeWebp(enc.value)
   require dec.ok
   check dec.value.dimensions() == (8'u32, 8'u32)
+
+test "convert lossy round-trips with bounded error":
+  let img = fillRgb(24, 16)
+  for q in [90, 75, 50]:
+    let c = convertToWebp(encodePng(img).value, quality = q)
+    require c.ok
+    let back = decodeWebp(c.value)
+    require back.ok
+    check back.value.dimensions() == (24'u32, 16'u32)
+    var sad = 0
+    for i, p in back.value.rgb8.pixels:
+      let o = img.rgb8.pixels[i]
+      sad += abs(int(p.data[0]) - int(o.data[0])) +
+        abs(int(p.data[1]) - int(o.data[1])) +
+        abs(int(p.data[2]) - int(o.data[2]))
+    # mean abs channel error stays small and grows as quality drops
+    check float(sad) / float(24 * 16 * 3) < (if q == 90: 12.0
+      elif q == 75: 20.0 else: 35.0)
+  # lossy is smaller than lossless on smooth content
+  let smooth = convertToWebp(encodePng(img).value, lossless = true)
+  let lossy = convertToWebp(encodePng(img).value, quality = 75)
+  require smooth.ok
+  require lossy.ok
+  check lossy.value.len < smooth.value.len
 
 test "webp rejects empty and oversize":
   let empty = DynamicImage(kind: dkRgb8,

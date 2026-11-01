@@ -240,8 +240,7 @@ proc encode*(req: WebpRequest): ImageResult[seq[uint8]] =
   if not n.ok: return err[seq[uint8]](n.err)
   if req.lossless:
     return encodeWebp(DynamicImage(kind: dkRgba8, rgba8: n.value))
-  err[seq[uint8]](unsupportedError(ukGenericFeature,
-    "webp lossy encode: not yet implemented"))
+  encodeWebpLossy(n.value, req.quality)
 
 proc convertToWebp*(data: seq[uint8], quality = 75,
     lossless = false): ImageResult[seq[uint8]] =

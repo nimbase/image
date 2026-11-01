@@ -20,11 +20,11 @@ proc vp8err(msg: string): ref Vp8DecodeError =
 # ---------- prediction mode enums (RFC 6386 prediction modes) ----------
 
 type
-  LumaMode = enum
+  LumaMode* = enum
     lmDc = 0, lmV = 1, lmH = 2, lmTm = 3, lmB = 4
-  ChromaMode = enum
+  ChromaMode* = enum
     cmDc = 0, cmV = 1, cmH = 2, cmTm = 3
-  IntraMode = enum
+  IntraMode* = enum
     imDc = 0, imTm = 1, imVe = 2, imHe = 3, imLd = 4,
     imRd = 5, imVr = 6, imVl = 7, imHd = 8, imHu = 9
 
@@ -76,7 +76,7 @@ func lumaIntoIntra(m: LumaMode): tuple[ok: bool, m: IntraMode] =
 # defaults and each section raises via checkEof, mirroring BitResult+check.
 
 type
-  BoolDec = object
+  BoolDec* = object
     data: seq[uint8]
     pos: int
     value: uint64
@@ -85,7 +85,7 @@ type
     freeLeft: int
     pastEof: bool
 
-proc initBoolDec(data: seq[uint8]): BoolDec =
+proc initBoolDec*(data: seq[uint8]): BoolDec =
   BoolDec(data: data, pos: 0, value: 0, range: 255, bitCount: -8,
     freeLeft: 1, pastEof: false)
 
@@ -102,7 +102,7 @@ proc refill(d: var BoolDec) =
     else:
       d.pastEof = true
 
-proc readBit(d: var BoolDec, prob: uint8): bool =
+proc readBit*(d: var BoolDec, prob: uint8): bool =
   refill(d)
   if d.pastEof: return false
   let split = 1'u32 + (((d.range - 1) * uint32(prob)) shr 8)
@@ -120,10 +120,10 @@ proc readBit(d: var BoolDec, prob: uint8): bool =
     d.range = d.range shl shift
     d.bitCount -= int32(shift)
 
-proc readFlag(d: var BoolDec): bool =
+proc readFlag*(d: var BoolDec): bool =
   readBit(d, 128)
 
-proc readLiteral(d: var BoolDec, n: int): uint8 =
+proc readLiteral*(d: var BoolDec, n: int): uint8 =
   var v = 0'u8
   for _ in 0..<n:
     v = (v shl 1) or (if readFlag(d): 1'u8 else: 0'u8)
@@ -137,8 +137,9 @@ proc readOptionalSigned(d: var BoolDec, n: int): int32 =
 # ---------- tree decoding (tree_nodes_from + read_with_tree) ----------
 
 type
-  TreeNode = object
-    left, right, prob, index: uint8
+  TreeNode* = object
+    left*, right*, prob*: uint8
+    index: uint8
 
 func prepareBranch(t: int8): uint8 =
   if t > 0: uint8(t) div 2
@@ -147,14 +148,14 @@ func prepareBranch(t: int8): uint8 =
 func valueFromBranch(t: uint8): int8 =
   int8(t and 0x7F'u8)
 
-proc buildNodes(tree: openArray[int8], probs: openArray[uint8]): seq[TreeNode] =
+proc buildNodes*(tree: openArray[int8], probs: openArray[uint8]): seq[TreeNode] =
   assert(tree.len == 2 * probs.len)
   result = newSeq[TreeNode](probs.len)
   for i in 0..<probs.len:
     result[i] = TreeNode(left: prepareBranch(tree[2 * i]),
       right: prepareBranch(tree[2 * i + 1]), prob: probs[i], index: uint8(i))
 
-proc readWithTree(d: var BoolDec, tree: openArray[TreeNode],
+proc readWithTree*(d: var BoolDec, tree: openArray[TreeNode],
     startIdx: int): int8 =
   var index = startIdx
   while true:
@@ -176,7 +177,7 @@ const
   IdctConst1 = 20091'i64
   IdctConst2 = 35468'i64
 
-proc idct4x4(blk: var array[16, int32]) =
+proc idct4x4*(blk: var array[16, int32]) =
   for i in 0..<4:
     let a1 = int64(blk[i]) + int64(blk[8 + i])
     let b1 = int64(blk[i]) - int64(blk[8 + i])
@@ -206,7 +207,7 @@ proc idct4x4(blk: var array[16, int32]) =
     blk[4 * i + 1] = int32((b1 + c1 + 4) shr 3)
     blk[4 * i + 2] = int32((b1 - c1 + 4) shr 3)
 
-proc iwht4x4(blk: var array[16, int32]) =
+proc iwht4x4*(blk: var array[16, int32]) =
   for i in 0..<4:
     let a1 = blk[i] + blk[12 + i]
     let b1 = blk[4 + i] + blk[8 + i]
@@ -481,7 +482,7 @@ func avg3(l, t, r: uint8): uint8 =
 func avg2(t, r: uint8): uint8 =
   uint8((uint16(t) + uint16(r) + 1) shr 1)
 
-proc addResidue(pblock: var seq[uint8], rblock: array[16, int32],
+proc addResidue*(pblock: var seq[uint8], rblock: array[16, int32],
     y0, x0, stride: int) =
   var pos = y0 * stride + x0
   for r in 0..<4:
@@ -490,20 +491,20 @@ proc addResidue(pblock: var seq[uint8], rblock: array[16, int32],
         int32(pblock[pos + c]))))
     pos += stride
 
-proc predictVpred(a: var seq[uint8], size, x0, y0, stride: int) =
+proc predictVpred*(a: var seq[uint8], size, x0, y0, stride: int) =
   let aboveLen = y0 * stride - x0
   let n = min(stride - 1, aboveLen)
   for r in 0..<size:
     for c in 0..<n:
       a[(y0 + r) * stride + 1 + c] = a[(y0 - 1) * stride + x0 + c]
 
-proc predictHpred(a: var seq[uint8], size, x0, y0, stride: int) =
+proc predictHpred*(a: var seq[uint8], size, x0, y0, stride: int) =
   for r in 0..<size:
     let left = a[(y0 + r) * stride + x0 - 1]
     for c in x0..<stride:
       a[(y0 + r) * stride + c] = left
 
-proc predictDcpred(a: var seq[uint8], size, stride: int, above, left: bool) =
+proc predictDcpred*(a: var seq[uint8], size, stride: int, above, left: bool) =
   var sum = 0'u32
   var shf = if size == 8: 2 else: 3
   if left:
@@ -521,7 +522,7 @@ proc predictDcpred(a: var seq[uint8], size, stride: int, above, left: bool) =
     for x in 0..<size:
       a[1 + stride * (y + 1) + x] = uint8(dcval)
 
-proc predictTmpred(a: var seq[uint8], size, x0, y0, stride: int) =
+proc predictTmpred*(a: var seq[uint8], size, x0, y0, stride: int) =
   let p = int32(a[(y0 - 1) * stride + x0 - 1])
   for y in 0..<size:
     let lm = int32(a[(y0 + y) * stride + x0 - 1]) - p
@@ -529,7 +530,7 @@ proc predictTmpred(a: var seq[uint8], size, x0, y0, stride: int) =
       a[(y0 + y) * stride + x0 + j] =
         uint8(max(0, min(255, lm + int32(a[(y0 - 1) * stride + x0 + j]))))
 
-proc predictBdcpred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBdcpred*(a: var seq[uint8], x0, y0, stride: int) =
   var v = 4'u32
   for i in 0..<4:
     v += uint32(a[(y0 - 1) * stride + x0 + i])
@@ -559,7 +560,7 @@ proc edgePx(a: seq[uint8], x0, y0, stride: int): array[9, uint8] =
   result[3] = a[pos + stride]
   for i in 0..<5: result[4 + i] = a[pos + i]
 
-proc predictBvepred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBvepred*(a: var seq[uint8], x0, y0, stride: int) =
   let p = topleftPx(a, x0, y0, stride)
   let t = topPx(a, x0, y0, stride)
   let avgs = [avg3(p, t[0], t[1]), avg3(t[0], t[1], t[2]),
@@ -569,7 +570,7 @@ proc predictBvepred(a: var seq[uint8], x0, y0, stride: int) =
     for c in 0..<4: a[pos + c] = avgs[c]
     pos += stride
 
-proc predictBhepred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBhepred*(a: var seq[uint8], x0, y0, stride: int) =
   let p = topleftPx(a, x0, y0, stride)
   let l = leftPx(a, x0, y0, stride)
   let avgs = [avg3(p, l[0], l[1]), avg3(l[0], l[1], l[2]),
@@ -579,7 +580,7 @@ proc predictBhepred(a: var seq[uint8], x0, y0, stride: int) =
     for c in 0..<4: a[pos + c] = avgs[r]
     pos += stride
 
-proc predictBldpred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBldpred*(a: var seq[uint8], x0, y0, stride: int) =
   let t = topPx(a, x0, y0, stride)
   let avgs = [avg3(t[0], t[1], t[2]), avg3(t[1], t[2], t[3]),
     avg3(t[2], t[3], t[4]), avg3(t[3], t[4], t[5]), avg3(t[4], t[5], t[6]),
@@ -589,7 +590,7 @@ proc predictBldpred(a: var seq[uint8], x0, y0, stride: int) =
     for c in 0..<4: a[pos + c] = avgs[i + c]
     pos += stride
 
-proc predictBrdpred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBrdpred*(a: var seq[uint8], x0, y0, stride: int) =
   let e = edgePx(a, x0, y0, stride)
   let avgs = [avg3(e[0], e[1], e[2]), avg3(e[1], e[2], e[3]),
     avg3(e[2], e[3], e[4]), avg3(e[3], e[4], e[5]), avg3(e[4], e[5], e[6]),
@@ -599,7 +600,7 @@ proc predictBrdpred(a: var seq[uint8], x0, y0, stride: int) =
     for c in 0..<4: a[pos + c] = avgs[3 - i + c]
     pos += stride
 
-proc predictBvrpred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBvrpred*(a: var seq[uint8], x0, y0, stride: int) =
   let e = edgePx(a, x0, y0, stride)
   a[(y0 + 3) * stride + x0] = avg3(e[1], e[2], e[3])
   a[(y0 + 2) * stride + x0] = avg3(e[2], e[3], e[4])
@@ -618,7 +619,7 @@ proc predictBvrpred(a: var seq[uint8], x0, y0, stride: int) =
   a[(y0 + 1) * stride + x0 + 3] = avg3(e[6], e[7], e[8])
   a[y0 * stride + x0 + 3] = avg2(e[7], e[8])
 
-proc predictBvlpred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBvlpred*(a: var seq[uint8], x0, y0, stride: int) =
   let t = topPx(a, x0, y0, stride)
   a[y0 * stride + x0] = avg2(t[0], t[1])
   a[(y0 + 1) * stride + x0] = avg3(t[0], t[1], t[2])
@@ -637,7 +638,7 @@ proc predictBvlpred(a: var seq[uint8], x0, y0, stride: int) =
   a[(y0 + 2) * stride + x0 + 3] = avg3(t[4], t[5], t[6])
   a[(y0 + 3) * stride + x0 + 3] = avg3(t[5], t[6], t[7])
 
-proc predictBhdpred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBhdpred*(a: var seq[uint8], x0, y0, stride: int) =
   let e = edgePx(a, x0, y0, stride)
   a[(y0 + 3) * stride + x0] = avg2(e[0], e[1])
   a[(y0 + 3) * stride + x0 + 1] = avg3(e[0], e[1], e[2])
@@ -656,7 +657,7 @@ proc predictBhdpred(a: var seq[uint8], x0, y0, stride: int) =
   a[y0 * stride + x0 + 2] = avg3(e[4], e[5], e[6])
   a[y0 * stride + x0 + 3] = avg3(e[5], e[6], e[7])
 
-proc predictBhupred(a: var seq[uint8], x0, y0, stride: int) =
+proc predictBhupred*(a: var seq[uint8], x0, y0, stride: int) =
   let l = leftPx(a, x0, y0, stride)
   a[y0 * stride + x0] = avg2(l[0], l[1])
   a[y0 * stride + x0 + 1] = avg3(l[0], l[1], l[2])
@@ -697,7 +698,7 @@ proc predict4x4(ws: var seq[uint8], stride: int, modes: array[16, IntraMode],
       for k in 0..<16: rb[k] = resdata[i * 16 + k]
       addResidue(ws, rb, y0, x0, stride)
 
-proc createBorderLuma(mbx, mby, mbw: int, top, left: seq[uint8]): seq[uint8] =
+proc createBorderLuma*(mbx, mby, mbw: int, top, left: seq[uint8]): seq[uint8] =
   let stride = 21
   result = newSeq[uint8](357)
   # above row (1 + 20)
@@ -725,7 +726,7 @@ proc createBorderLuma(mbx, mby, mbw: int, top, left: seq[uint8]): seq[uint8] =
     elif mbx == 0: 129'u8
     else: left[0]
 
-proc createBorderChroma(mbx, mby: int, top, left: seq[uint8]): seq[uint8] =
+proc createBorderChroma*(mbx, mby: int, top, left: seq[uint8]): seq[uint8] =
   let stride = 9
   result = newSeq[uint8](81)
   if mby == 0:
@@ -741,7 +742,7 @@ proc createBorderChroma(mbx, mby: int, top, left: seq[uint8]): seq[uint8] =
     elif mbx == 0: 129'u8
     else: left[0]
 
-proc setChromaBorder(leftB, topB: var seq[uint8], cb: seq[uint8],
+proc setChromaBorder*(leftB, topB: var seq[uint8], cb: seq[uint8],
     mbx: int) =
   let stride = 9
   leftB[0] = cb[8]
@@ -750,9 +751,9 @@ proc setChromaBorder(leftB, topB: var seq[uint8], cb: seq[uint8],
 
 # ---------- static trees (const probs; built once) ----------
 
-let YmodeNodes = buildNodes(KeyframeYmodeTree, KeyframeYmodeProbs)
-let UvNodes = buildNodes(KeyframeUvModeTree, KeyframeUvModeProbs)
-let BpredNodes: array[10, array[10, seq[TreeNode]]] = block:
+let YmodeNodes* = buildNodes(KeyframeYmodeTree, KeyframeYmodeProbs)
+let UvNodes* = buildNodes(KeyframeUvModeTree, KeyframeUvModeProbs)
+let BpredNodes*: array[10, array[10, seq[TreeNode]]] = block:
   var o: array[10, array[10, seq[TreeNode]]]
   for i in 0..<10:
     for j in 0..<10:
@@ -977,6 +978,13 @@ proc readFrameHeader(dec: var Vp8Decoder) =
     if mbNoSkip == 1: (true, dec.b.readLiteral(8))
     else: (false, 0'u8)
   checkEof(dec.b)
+  when defined(vp8decTrace):
+    echo "hdr segs=", dec.segmentsEnabled, " fSimple=", dec.filterSimple,
+      " fLvl=", dec.filterLevel, " np=", dec.numPartitions,
+      " yac=", dec.segs[0].yac, " ydc=", dec.segs[0].ydc,
+      " y2dc=", dec.segs[0].y2dc, " y2ac=", dec.segs[0].y2ac,
+      " uvdc=", dec.segs[0].uvdc, " uvac=", dec.segs[0].uvac,
+      " skip=", dec.probSkip
 
 # ---------- macroblocks, coefficients, residual ----------
 
@@ -1018,6 +1026,9 @@ proc readMacroblockHeader(dec: var Vp8Decoder, mbx: int): MacroBlock =
   dec.top[mbx].lumaMode = lm
   dec.top[mbx].bpred = result.bpred
   checkEof(dec.b)
+  when defined(vp8decTrace):
+    echo "mb", mbx, " skip=", result.coeffsSkipped, " luma=", result.lumaMode,
+      " chroma=", result.chromaMode
 
 proc readCoefficients(dec: var Vp8Decoder, blk: var array[16, int32],
     p, plane, complexity: int, dcq, acq: int16): bool =
@@ -1025,10 +1036,14 @@ proc readCoefficients(dec: var Vp8Decoder, blk: var array[16, int32],
   var cx = complexity
   var hasCoeffs = false
   var skip = false
+  when defined(vp8decTrace):
+    var dbg = "plane=" & $plane & " cx0=" & $complexity & " toks="
   for i in first..<16:
     let band = int(CoeffBands[i])
     let tok = dec.partitions[p].readWithTree(dec.tokenProbs[plane][band][cx],
       if skip: 1 else: 0)
+    when defined(vp8decTrace):
+      dbg.add($tok & ",")
     var absVal: int32
     case tok
     of 11: break # DCT_EOB
@@ -1056,6 +1071,8 @@ proc readCoefficients(dec: var Vp8Decoder, blk: var array[16, int32],
     let zz = int(Zigzag[i])
     blk[zz] = absVal * int32(if zz > 0: acq else: dcq)
     hasCoeffs = true
+  when defined(vp8decTrace):
+    echo dbg & " blk0=" & $blk[0] & " blk1=" & $blk[1]
   checkEof(dec.partitions[p])
   hasCoeffs
 
