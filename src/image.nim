@@ -8,6 +8,7 @@ import ./image/decoder as decoderApi
 import ./image/buffer as bufferApi
 import ./image/dynamic as dynamicApi
 import ./image/reader as readerApi
+import ./image/convert as convertApi
 import ./image/math as mathApi
 import ./image/animation as animationApi
 import ./image/metadata as metadataApi
@@ -36,6 +37,7 @@ export decoderApi
 export bufferApi
 export dynamicApi
 export readerApi
+export convertApi
 export mathApi
 export animationApi
 export metadataApi

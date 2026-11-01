@@ -22,6 +22,21 @@ Constraints (user-confirmed):
 - `09-heif.md` — HEIF/HEIC container + uncompressed/JPEG-in-HEIF decode (clean-room,
   spec-based; libheif is black-box oracle only, never ported; VVC/AVC/JPEG2000
   decode stays Unsupported).
+- `10-jpeg-crop-compress.md` — fluent JPEG compression request builder
+  (`compress().crop().encode()`), strict variant-preserving `cropImage`
+  (deliberate imageops scope exception), standard 8-bit input policy, and
+  optional optimized Huffman encoding (djpeg-validated, sentinel avoids
+  all-ones codewords).
+- `11-jpeg-decode-perf.md` — ordered JPEG decode speed plan (24 MP
+  progressive is ~19 s release): profile first, scaled IDCT, fast
+  integer IDCT + SIMD, Huffman/bit-reader, DC-only preview, threads
+  deferred.
+- `12-memory-footprint.md` — peak-memory reduction: pipeline map,
+  Nim value-semantics copy rules (measured), per-case before/after
+  ru_maxrss table, deferred items with rationale.
+- `13-webp-converter.md` — any-supported-format → WebP converter
+  (decode dispatcher, input normalization, `convertToWebp` + fluent
+  `WebpRequest`, new VP8 lossy encoder).
 
 ## Proposed Nim module tree
 

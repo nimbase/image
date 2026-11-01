@@ -86,5 +86,25 @@ test "webp lossy alpha unsupported":
   close(f)
   check decodeWebp(raw).ok == false
 
+test "webp vp8l leading repeat run":
+  # Regression: channels whose code lengths open with a run of >=3 equal
+  # nonzero lengths used to emit code 16 ("repeat previous") against the
+  # decoder's initial prev of 8, rebuilding a different tree ("bad image
+  # data"). Smooth gradients hit this constantly.
+  var px = @[Rgba[uint8](data: [0'u8, 0, 0, 255]),
+    Rgba[uint8](data: [1'u8, 2, 3, 255]),
+    Rgba[uint8](data: [2'u8, 4, 6, 255]),
+    Rgba[uint8](data: [3'u8, 6, 9, 255])]
+  let img = DynamicImage(kind: dkRgba8,
+    rgba8: RgbaImage(width: 2, height: 2, pixels: px))
+  let enc = encodeWebp(img)
+  check enc.ok
+  let dec = decodeWebp(enc.value)
+  check dec.ok
+  check dec.value.kind == dkRgb8
+  for i, p in dec.value.rgb8.pixels:
+    check [p.data[0], p.data[1], p.data[2]] ==
+      [px[i].data[0], px[i].data[1], px[i].data[2]]
+
 test "webp bad riff":
   check decodeWebp(@[0'u8, 1, 2, 3]).ok == false

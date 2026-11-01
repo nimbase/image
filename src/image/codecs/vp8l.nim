@@ -858,18 +858,26 @@ proc writeCodeLengths(w: var Vp8lBitWriter, lens: openArray[uint16], numSyms: in
   ## 18 = zeros 11..138 (+7). Extra values stored inline after the code.
   var seq16: seq[int] = @[]
   var i = 0
+  # Mirror the decoder's `prev` (init 8, updated only by nonzero
+  # literals): code 16 repeats it, so it may only be emitted when it
+  # actually equals the run value. A leading 16-run (or one after a
+  # zero run) would decode to 8, rebuilding a different tree than the
+  # one used for emission.
+  var encPrev = 8
   while i < numSyms:
     let v = int(lens[i])
     var run = 1
     while i + run < numSyms and int(lens[i+run]) == v: inc(run)
     if v != 0:
       var left = run
-      while left >= 3:
-        let take = min(left, 6)
-        seq16.add(16); seq16.add(take - 3)
-        i += take; left -= take
+      if encPrev == v:
+        while left >= 3:
+          let take = min(left, 6)
+          seq16.add(16); seq16.add(take - 3)
+          i += take; left -= take
       for _ in 0..<left:
         seq16.add(v); inc(i)
+      encPrev = v
     else:
       var left = run
       while left >= 11:

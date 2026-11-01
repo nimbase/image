@@ -5,6 +5,10 @@ import ./format
 import ./limits
 import ./dynamic
 
+const
+  TgaImgTypes = {1'u8, 2'u8, 3'u8, 9'u8, 10'u8, 11'u8}
+  TgaDepths = {8'u8, 15'u8, 16'u8, 24'u8, 32'u8}
+
 func guessFormat*(data: openArray[uint8]): tuple[found: bool, f: ImageFormat] =
   if data.len >= 8 and data[0]==137 and data[1]==80 and data[2]==78 and
       data[3]==71 and data[4]==13 and data[5]==10 and data[6]==26 and data[7]==10:
@@ -25,8 +29,8 @@ func guessFormat*(data: openArray[uint8]): tuple[found: bool, f: ImageFormat] =
   if data.len >= 4 and data[0]==uint8('q') and data[1]==uint8('o') and
       data[2]==uint8('i') and data[3]==uint8('f'):
     return (true, fmtQoi)
-  if data.len >= 4 and data[0]==0x52 and data[1]==0x45 and data[2]==0x44 and
-      data[3]==0x20:
+  if data.len >= 4 and data[0]==0x76 and data[1]==0x2F and data[2]==0x31 and
+      data[3]==0x01:
     return (true, fmtOpenExr)
   if data.len >= 11 and data[0]==uint8('#') and data[1]==uint8('?'):
     return (true, fmtHdr)
@@ -43,4 +47,25 @@ func guessFormat*(data: openArray[uint8]): tuple[found: bool, f: ImageFormat] =
         brand == "miaf" or brand == "miff" or brand == "1pic" or
         brand == "pred":
       return (true, fmtHeif)
+  if data.len >= 4 and
+      ((data[0]==uint8('I') and data[1]==uint8('I') and data[2]==42 and data[3]==0) or
+       (data[0]==uint8('M') and data[1]==uint8('M') and data[2]==0 and data[3]==42)):
+    return (true, fmtTiff)
+  if data.len >= 6 and data[0]==0 and data[1]==0 and data[2]==1 and data[3]==0 and
+      (uint16(data[4]) or (uint16(data[5]) shl 8)) >= 1:
+    return (true, fmtIco)
+  if data.len >= 3 and data[0]==uint8('P') and data[1] >= uint8('1') and
+      data[1] <= uint8('7') and
+      (data[2]==32 or data[2]==9 or data[2]==10 or data[2]==13):
+    return (true, fmtPnm)
+  # TGA has no file magic; structural match only (bare v1 headers,
+  # including our own encoder output, carry no "TRUEVISION-XFILE"
+  # footer). decodeTga re-validates strictly, so a false positive
+  # still fails clean.
+  if data.len >= 18 and data[2] in TgaImgTypes and data[1] <= 1 and
+      data[16] in TgaDepths:
+    let tgaW = uint16(data[12]) or (uint16(data[13]) shl 8)
+    let tgaH = uint16(data[14]) or (uint16(data[15]) shl 8)
+    if tgaW != 0 and tgaH != 0:
+      return (true, fmtTga)
   (false, fmtPng)
