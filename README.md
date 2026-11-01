@@ -21,6 +21,9 @@
 > strict width/height crop (`cropImage`, no resampling) needed by the JPEG
 > compression request builder.
 
+> [!TIP]
+> In-depth guides live in [docs/](docs/README.md).
+
 
 ## Features
 
