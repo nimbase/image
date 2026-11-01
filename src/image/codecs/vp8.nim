@@ -978,13 +978,6 @@ proc readFrameHeader(dec: var Vp8Decoder) =
     if mbNoSkip == 1: (true, dec.b.readLiteral(8))
     else: (false, 0'u8)
   checkEof(dec.b)
-  when defined(vp8decTrace):
-    echo "hdr segs=", dec.segmentsEnabled, " fSimple=", dec.filterSimple,
-      " fLvl=", dec.filterLevel, " np=", dec.numPartitions,
-      " yac=", dec.segs[0].yac, " ydc=", dec.segs[0].ydc,
-      " y2dc=", dec.segs[0].y2dc, " y2ac=", dec.segs[0].y2ac,
-      " uvdc=", dec.segs[0].uvdc, " uvac=", dec.segs[0].uvac,
-      " skip=", dec.probSkip
 
 # ---------- macroblocks, coefficients, residual ----------
 
@@ -1026,9 +1019,6 @@ proc readMacroblockHeader(dec: var Vp8Decoder, mbx: int): MacroBlock =
   dec.top[mbx].lumaMode = lm
   dec.top[mbx].bpred = result.bpred
   checkEof(dec.b)
-  when defined(vp8decTrace):
-    echo "mb", mbx, " skip=", result.coeffsSkipped, " luma=", result.lumaMode,
-      " chroma=", result.chromaMode
 
 proc readCoefficients(dec: var Vp8Decoder, blk: var array[16, int32],
     p, plane, complexity: int, dcq, acq: int16): bool =
@@ -1036,14 +1026,10 @@ proc readCoefficients(dec: var Vp8Decoder, blk: var array[16, int32],
   var cx = complexity
   var hasCoeffs = false
   var skip = false
-  when defined(vp8decTrace):
-    var dbg = "plane=" & $plane & " cx0=" & $complexity & " toks="
   for i in first..<16:
     let band = int(CoeffBands[i])
     let tok = dec.partitions[p].readWithTree(dec.tokenProbs[plane][band][cx],
       if skip: 1 else: 0)
-    when defined(vp8decTrace):
-      dbg.add($tok & ",")
     var absVal: int32
     case tok
     of 11: break # DCT_EOB
@@ -1071,8 +1057,6 @@ proc readCoefficients(dec: var Vp8Decoder, blk: var array[16, int32],
     let zz = int(Zigzag[i])
     blk[zz] = absVal * int32(if zz > 0: acq else: dcq)
     hasCoeffs = true
-  when defined(vp8decTrace):
-    echo dbg & " blk0=" & $blk[0] & " blk1=" & $blk[1]
   checkEof(dec.partitions[p])
   hasCoeffs
 

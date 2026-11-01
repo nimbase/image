@@ -4,6 +4,7 @@
 ## Animation / ALPH-with-VP8 return Unsupported.
 ## Bitstream: LSB-first. Pixels in buffer order [R,G,B,A].
 import std/math
+import std/algorithm
 import ../color
 import ../error
 import ../buffer
@@ -381,6 +382,7 @@ proc readCodeLengths(r: var LsbReader, numSyms: int): tuple[ok: bool, lens: seq[
 
 proc readHuffTree(r: var LsbReader, alphabet: int): tuple[ok: bool, t: HuffTree] =
   let (okS, simple) = r.readBits(1)
+  if not okS: return (false, HuffTree())
   if not okS: return (false, HuffTree())
   if simple == 1:
     let (okN, nn) = r.readBits(1)
@@ -765,9 +767,10 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
 
 # ---------- literal-only VP8L encoder ----------
 
-proc buildLens(freqs: openArray[int], maxLen = 15): seq[uint16] =
-  ## Simple package-merge-free Huffman lengths: two-queue method on sorted freqs.
-  ## Falls back to fixed lengths if skewed beyond maxLen.
+proc buildLens*(freqs: openArray[int], maxLen = 15): seq[uint16] =
+  ## Classic Huffman lengths with a libjpeg-style length-limit adjustment
+  ## (cf. jpgenc genOptimalTable): deterministic, Kraft-valid, and capped
+  ## at maxLen so the decoder's buildImplicit always accepts the table.
   var n = freqs.len
   var lens = newSeq[uint16](n)
   var present: seq[tuple[f, s: int]] = @[]
@@ -805,14 +808,47 @@ proc buildLens(freqs: openArray[int], maxLen = 15): seq[uint16] =
   var over = false
   for d in depth:
     if d > maxLen: over = true
-  if over:
-    # fall back: fixed 9-bit-ish lengths for present symbols is invalid;
-    # use uniform length covering present count
-    var k = 1
-    while (1 shl k) < present.len: inc(k)
-    for p in present: lens[p.s] = uint16(k)
+  if not over:
+    for i in 0..<n: lens[i] = uint16(depth[i])
     return lens
-  for i in 0..<n: lens[i] = uint16(depth[i])
+  # Length-limit enforcement: cap counting at the true max depth, then
+  # push over-long codes down (two at L become one at L-1 plus two at a
+  # shorter level), preserving Kraft validity.
+  var cap = maxLen + 1
+  for d in depth:
+    if d > cap: cap = d
+  var codesize = newSeq[int](n)
+  for i in 0..<n:
+    codesize[i] = min(depth[i], cap)
+  var bitsCap = newSeq[int](cap + 1)
+  for s in 0..<n:
+    if freqs[s] > 0: bitsCap[codesize[s]] += 1
+  for i in countdown(cap, maxLen + 1):
+    while bitsCap[i] > 0:
+      var j = i - 2
+      while j > 0 and bitsCap[j] == 0: dec(j)
+      if j <= 0:
+        bitsCap[maxLen] += bitsCap[i]
+        bitsCap[i] = 0
+        break
+      bitsCap[i] -= 2
+      bitsCap[i-1] += 1
+      bitsCap[j+1] += 2
+      bitsCap[j] -= 1
+  # Reassign lengths sequentially to symbols sorted by (old depth, sym).
+  var order: seq[int] = @[]
+  for ln in 1..cap:
+    var group: seq[int] = @[]
+    for s in 0..<n:
+      if freqs[s] > 0 and codesize[s] == ln: group.add(s)
+    group.sort(proc(a, b: int): int = cmp(a, b))
+    for s in group: order.add(s)
+  var p = 0
+  for ln in 1..maxLen:
+    for _ in 0..<bitsCap[ln]:
+      if p < order.len:
+        lens[order[p]] = uint16(ln)
+        inc(p)
   lens
 
 proc canonCodes(lens: openArray[uint16]): tuple[code: seq[int], ln: seq[int]] =
@@ -897,7 +933,10 @@ proc writeCodeLengths(w: var Vp8lBitWriter, lens: openArray[uint16], numSyms: in
     if s <= 18: freq[s] += 1
     if s == 16 or s == 17 or s == 18: k += 2
     else: k += 1
-  let clLens = buildLens(freq)
+  # The code-length code itself is stored 3 bits per length on the
+  # wire (decoder readBits(3)), so cap its lengths at 7. Longer codes
+  # would be truncated and rebuild a different tree (large alphabets).
+  let clLens = buildLens(freq, 7)
   const Order = [17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
   var lastUsed = 4
   for k in countdown(18, 4):
