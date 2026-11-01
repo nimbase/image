@@ -28,6 +28,7 @@
 - Buffers: `ImageBuffer` (12 aliases), `DynamicImage` (12 variants), `FlatSamples`, `SubImage` views
 - IO: `ImageFormat` (15 variants), magic-byte guessing, `Limits`, `ImageReader` helpers
 - Errors: `ImageError` / `ImageResult[T]` with decoding, encoding, limits and unsupported kinds
+- Converter: `decodeImage` (any format → `DynamicImage`), `normalizeToRgba8`, `convertToWebp` + fluent `toWebp().lossless().crop().encode()` — first frame wins for animated/multi-image, 16-bit/float auto-downconvert, max 16384px
 
 Codec support (`o` = decode, `w` = encode):
 
@@ -43,7 +44,7 @@ Codec support (`o` = decode, `w` = encode):
 - QOI: o+w — full op-index/run/diff/luma/rgb/rgba codec
 - TGA: o+w — raw/RLE, colormaps, 15-bit, orientation
 - TIFF: o+w — strips/tiles, chunky/planar, None/LZW/Deflate/PackBits, YCbCr/CMYK/palette
-- WebP: o+w — lossless VP8L + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) + literal-only encoder; animation / VP8X alpha unsupported
+- WebP: o+w — lossless VP8L (literal-only encoder) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100); animation / VP8X alpha unsupported
 - AVIF: color math only (BT.601/709/2020 YCbCr, YCgCo-Re); AV1 bitstream unsupported
 - HEIF/HEIC: o (decode-only) — ISOBMFF container + uncompressed (`unci`, v0/v1, comp/pixel/row/mixed, 8/16-bit) + JPEG-in-HEIF via the JPEG decoder + `irot`/`imir`/`clap`/`iden`; HEVC/VVC/AVC/JPEG2000 bitstreams, tiled layouts, grids/overlays, sequences unsupported
 
@@ -164,6 +165,20 @@ let pages = decodeTiffAll(bytes)  # multi-page -> seq[DynamicImage]
 let enc = encodeWebp(img)         # lossless VP8L
 let dec = decodeWebp(enc.value)   # opaque -> Rgb8, alpha -> Rgba8
 ```
+
+### Converter (any format → WebP)
+
+```nim
+let any = decodeImage(bytes)      # magic-byte sniffed, first frame wins
+let webp = convertToWebp(bytes, quality = 75)      # lossy (default)
+let exact = convertToWebp(bytes, lossless = true)  # pixel-exact VP8L
+let req = img.toWebp(90).crop(0, 0, 20, 20).encode()  # fluent + strict crop
+let small = img.toWebp(75).lossless().encode()
+```
+
+16-bit maps exactly (`v div 257`), float clamps `[0,1]` (no tone mapping
+in v1). CLI: `examples/webp_convert` (`webp_convert input output
+[--quality N] [--lossless]`).
 
 ### AVIF
 
