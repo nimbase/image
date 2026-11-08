@@ -1,6 +1,6 @@
 ## OpenEXR codec — references/image/src/codecs/openexr.rs + exr@1.74.0
-## Single-part scanline only (tiled/multipart/deep/PIZ/DWAA/DWAB return
-## Unsupported). NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A + half/float/uint -> 32F.
+## Single-part scanline only (tiled/multipart/deep/DWAA/DWAB return
+## Unsupported). NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A/PIZ + half/float/uint.
 ## RLE/ZIP pipeline per OpenEXRCore internal_zip.c / internal_rle.c:
 ## separate even/odd halves, biased delta (first byte raw, rest cur-prev+128),
 ## then RLE (neg=literal -c bytes, pos=repeat c+1) / zlib-deflate.
@@ -9,6 +9,9 @@
 ## B44/B44A per OpenEXRCore internal_b44.c + internal_b44_table_init.c:
 ## 4x4 half blocks -> 14 bytes (3 for B44A flat fields), exact
 ## shift-search, sign-magnitude ordering, exp/log tables for pLinear.
+## PIZ per OpenEXRCore internal_piz.c (wavelet + range bitmap) and
+## internal_huf.c (canonical Huffman with reversed numeric order,
+## zero-run table packing, RLE pseudo-symbol; slow-path decoder).
 import std/sequtils
 import std/math
 import ../color
@@ -373,6 +376,781 @@ type ExrChannel* = object
   pLinear*: bool
   xSamp*, ySamp*: int32
 
+# ---------- PIZ (wavelet + custom Huffman, lossless) ----------
+# Reimplements OpenEXRCore internal_piz.c (bitmap LUT, wenc/wdec 14/16,
+# 2D wavelet, channel-major scratch) and the slow-path decoder plus the
+# faithful encoder of internal_huf.c (canonical codes with reversed
+# numeric order, zero-run table packing, RLE pseudo-symbol). The fast
+# SIMD decoder is an optimization only; the slow path defines conformance.
+
+const
+  HufEncBits = 16
+  HufDecBits = 14
+  HufEncSize = (1 shl HufEncBits) + 1 # 65537 (u16 symbols + RLE pseudo)
+  HufDecSize = 1 shl HufDecBits
+  HufDecMask = HufDecSize - 1
+  ShortZeroRun = 59
+  LongZeroRun = 63
+  ShortestLongRun = 2 + LongZeroRun - ShortZeroRun # 6
+  LongestLongRun = 255 + ShortestLongRun # 261
+
+type HufDecEntry = object
+  len: int32
+  lit: uint32
+  p: seq[uint32] # long-code symbol list
+
+proc hufGetBits(nBits: int, c: var uint64, lc: var int,
+    data: openArray[uint8], pos: var int): uint64 =
+  ## MSB-first bit reader shared by table unpacking.
+  while lc < nBits:
+    c = (c shl 8) or uint64(data[pos]); inc(pos)
+    lc += 8
+  lc -= nBits
+  result = (c shr lc) and ((1'u64 shl nBits) - 1'u64)
+
+proc hufCanonicalCodeTable*(hcode: var openArray[uint64]) =
+  ## Canonical codes, reversed numeric order: shorter codes (zero-filled
+  ## right) are numerically larger; same-length codes grow with symbols.
+  ## Table derivable from lengths alone (not transmitted).
+  var n = newSeq[uint64](59)
+  for i in 0..<HufEncSize: n[hcode[i]] += 1
+  var c = 0'u64
+  for i in countdown(58, 1):
+    let nc = (c + n[i]) shr 1
+    n[i] = c
+    c = nc
+  for i in 0..<HufEncSize:
+    let l = hcode[i]
+    if l > 0: hcode[i] = l or (n[l] shl 6); inc(n[l])
+
+proc hufFHeapGreater(a, b: int, frq: openArray[uint64]): bool {.inline.} =
+  ## Heap order (min-heap on frequency, ties broken by higher index
+  ## first, matching the reference's pointer comparison).
+  frq[a] > frq[b] or (frq[a] == frq[b] and a > b)
+
+proc hufInternPushHeap(fHeap: var openArray[int], holeIndex, topIndex: int,
+    value: int, frq: openArray[uint64]) =
+  var hole = holeIndex
+  var parent = (hole - 1) div 2
+  while hole > topIndex and hufFHeapGreater(fHeap[parent], value, frq):
+    fHeap[hole] = fHeap[parent]
+    hole = parent
+    parent = (hole - 1) div 2
+  fHeap[hole] = value
+
+proc hufAdjustHeap(fHeap: var openArray[int], holeIndex, len: int,
+    value: int, frq: openArray[uint64]) =
+  let topIndex = holeIndex
+  var hole = holeIndex
+  var secondChild = holeIndex
+  while secondChild < (len - 1) div 2:
+    secondChild = 2 * (secondChild + 1)
+    if hufFHeapGreater(fHeap[secondChild], fHeap[secondChild - 1], frq):
+      dec(secondChild)
+    fHeap[hole] = fHeap[secondChild]
+    hole = secondChild
+  if (len and 1) == 0 and secondChild == (len - 2) div 2:
+    secondChild = 2 * (secondChild + 1)
+    fHeap[hole] = fHeap[secondChild - 1]
+    hole = secondChild - 1
+  hufInternPushHeap(fHeap, hole, topIndex, value, frq)
+
+proc hufPushHeap(fHeap: var openArray[int], last: int,
+    frq: openArray[uint64]) =
+  hufInternPushHeap(fHeap, last - 1, 0, fHeap[last - 1], frq)
+
+proc hufPopHeap(fHeap: var openArray[int], last: int,
+    frq: openArray[uint64]) =
+  ## Moves top to [last-1]; heap becomes [0, last-1).
+  if last - 0 > 1:
+    let top = fHeap[0]
+    fHeap[0] = fHeap[last - 1]
+    fHeap[last - 1] = top
+    hufAdjustHeap(fHeap, 0, last - 1, fHeap[0], frq)
+
+proc hufMakeHeap(fHeap: var openArray[int], len: int,
+    frq: openArray[uint64]) =
+  if len < 2: return
+  var parent = (len - 2) div 2
+  while true:
+    let value = fHeap[parent]
+    hufAdjustHeap(fHeap, parent, len, value, frq)
+    if parent == 0: return
+    dec(parent)
+
+proc hufBuildEncTable*(frq: var openArray[uint64], iMin, iMax: var int): seq[uint64] =
+  ## Huffman code lengths via tree simulation + canonical assignment.
+  ## Returns the code table (length | code<<6); sets iMin/iMax (min/max
+  ## symbol, iMax including the RLE pseudo-symbol with frequency 1).
+  ## frq is destroyed.
+  var fHeap = newSeq[int](HufEncSize)
+  var hlink = newSeq[int](HufEncSize)
+  var scode = newSeq[uint64](HufEncSize)
+  iMin = 0
+  while frq[iMin] == 0: inc(iMin)
+  var nf = 0
+  var iMv = 0
+  for i in iMin..<HufEncSize:
+    hlink[i] = i
+    if frq[i] != 0:
+      fHeap[nf] = i; inc(nf)
+      iMv = i
+  inc(iMv)
+  frq[iMv] = 1
+  fHeap[nf] = iMv; inc(nf)
+  iMax = iMv
+  hufMakeHeap(fHeap, nf, frq)
+  while nf > 1:
+    let mm = fHeap[0]
+    hufPopHeap(fHeap, nf, frq)
+    dec(nf)
+    let m = fHeap[0]
+    hufPopHeap(fHeap, nf, frq)
+    frq[m] += frq[mm]
+    hufPushHeap(fHeap, nf, frq)
+    var j = m
+    while true:
+      scode[j] += 1
+      if hlink[j] == j:
+        hlink[j] = mm
+        break
+      j = hlink[j]
+    j = mm
+    while true:
+      scode[j] += 1
+      if hlink[j] == j: break
+      j = hlink[j]
+  hufCanonicalCodeTable(scode)
+  result = scode
+
+proc hufPackEncTable*(hcode: openArray[uint64], iMin, iMax: int): seq[uint8] =
+  ## Pack code lengths only (zero runs compressed).
+  result = @[]
+  var c = 0'u64
+  var lc = 0
+  var i = iMin
+  template outBits(nBits: int, bits: uint64) =
+    c = (c shl nBits) or bits
+    lc += nBits
+    while lc >= 8:
+      lc -= 8
+      result.add(uint8((c shr lc) and 0xFF))
+  while i <= iMax:
+    let l = int(hcode[i] and 63)
+    if l == 0:
+      var zerun = 1
+      while i < iMax and zerun < LongestLongRun:
+        if int(hcode[i + 1] and 63) > 0: break
+        inc(i); inc(zerun)
+      if zerun >= 2:
+        if zerun >= ShortestLongRun:
+          outBits(6, LongZeroRun.uint64)
+          outBits(8, uint64(zerun - ShortestLongRun))
+        else:
+          outBits(6, uint64(ShortZeroRun + zerun - 2))
+        inc(i)
+        continue
+    outBits(6, uint64(l))
+    inc(i)
+  if lc > 0:
+    result.add(uint8((c shl (8 - lc)) and 0xFF))
+
+proc hufUnpackEncTable*(data: openArray[uint8], pos: var int,
+    iMin, iMax: int, hcode: var openArray[uint64]): bool =
+  ## Unpack lengths; returns false on corrupt input.
+  for i in 0..<HufEncSize: hcode[i] = 0
+  var c = 0'u64
+  var lc = 0
+  var di = pos
+  template getBits(nBits: int): uint64 =
+    (block:
+      while lc < nBits:
+        if di >= data.len: return false
+        c = (c shl 8) or uint64(data[di]); inc(di)
+        lc += 8
+      lc -= nBits
+      (c shr lc) and ((1'u64 shl nBits) - 1'u64))
+  var i = iMin
+  while i <= iMax:
+    if lc < 6 and di - pos >= data.len: return false
+    let l = getBits(6)
+    if l == LongZeroRun.uint64:
+      if lc < 8 and di - pos >= data.len: return false
+      var zerun = int(getBits(8)) + ShortestLongRun
+      if i + zerun > iMax + 1: return false
+      while zerun > 0:
+        hcode[i] = 0; inc(i); dec(zerun)
+      dec(i)
+    elif l >= ShortZeroRun.uint64:
+      let zerun = int(l) - ShortZeroRun + 2
+      if i + zerun > iMax + 1: return false
+      for _ in 0..<zerun:
+        hcode[i] = 0; inc(i)
+      dec(i)
+    else:
+      hcode[i] = l
+    inc(i)
+  pos = di
+  hufCanonicalCodeTable(hcode)
+  true
+
+proc hufOutCode(code: uint64, c: var uint64, lc, nBits: var int,
+    outB: var seq[uint8]) =
+  let nB = int(code and 63)
+  c = (c shl nB) or (code shr 6)
+  lc += nB
+  nBits += nB
+  while lc >= 8:
+    lc -= 8
+    outB.add(uint8((c shr lc) and 0xFF))
+
+proc hufSendCode(sCode: uint64, runCount: int, runCode: uint64,
+    c: var uint64, lc, nBits: var int, outB: var seq[uint8]) =
+  if (int(sCode and 63) + int(runCode and 63) + 8) <
+      int(sCode and 63) * runCount:
+    hufOutCode(sCode, c, lc, nBits, outB)
+    hufOutCode(runCode, c, lc, nBits, outB)
+    c = (c shl 8) or uint64(runCount)
+    lc += 8
+    nBits += 8
+    while lc >= 8:
+      lc -= 8
+      outB.add(uint8((c shr lc) and 0xFF))
+  else:
+    var rc = runCount
+    while rc >= 0:
+      hufOutCode(sCode, c, lc, nBits, outB)
+      dec(rc)
+
+proc hufEncode*(hcode: openArray[uint64], data: openArray[uint16],
+    rlc: int): tuple[bits: seq[uint8], nBits: int] =
+  ## Huffman + RLE encode. Returns the packed bit stream and its exact
+  ## bit length. Mirrors hufEncode(): a run of cs extras is emitted as
+  ## code(s) [, code(rle), 8-bit cs] when shorter, else cs+1 literals.
+  var enc: seq[uint8] = @[]
+  var c = 0'u64
+  var lc = 0
+  var nBits = 0
+  var s = int(data[0])
+  var cs = 0
+  let runCode = hcode[rlc]
+  for i in 1..<data.len:
+    let ns = int(data[i])
+    if cs == 255 or s != ns:
+      hufSendCode(hcode[s], cs, runCode, c, lc, nBits, enc)
+      cs = 0
+      s = ns
+    else:
+      inc(cs)
+  hufSendCode(hcode[s], cs, runCode, c, lc, nBits, enc)
+  if lc > 0:
+    enc.add(uint8((c shl (8 - lc)) and 0xFF))
+  (enc, nBits)
+
+proc hufBuildDecTable*(hcode: openArray[uint64], iMin, iMax: int):
+    seq[HufDecEntry] =
+  ## 14-bit prefix table + long-code lists. Mirrors hufBuildDecTable().
+  ## Raises ValueError (caught as corrupt chunk) on table conflicts.
+  result = newSeq[HufDecEntry](HufDecSize)
+  for i in iMin..iMax:
+    let code = hcode[i] shr 6
+    let l = int(hcode[i] and 63)
+    if (code shr l) != 0 and l > 0:
+      raise newException(ValueError, "exr: bad huffman code")
+    if l > HufDecBits:
+      let pl = int(code shr (l - HufDecBits))
+      if result[pl].len != 0:
+        raise newException(ValueError, "exr: huffman table clash")
+      result[pl].lit += 1
+      result[pl].p.add(uint32(i))
+    elif l > 0:
+      var pl = int(code shl (HufDecBits - l))
+      let n = 1 shl (HufDecBits - l)
+      for _ in 0..<n:
+        if result[pl].len != 0 or result[pl].p.len != 0:
+          raise newException(ValueError, "exr: huffman table clash")
+        result[pl].len = int32(l)
+        result[pl].lit = uint32(i)
+        inc(pl)
+
+proc hufDecode*(hcode: openArray[uint64], hdecod: openArray[HufDecEntry],
+    data: openArray[uint8], nBits: int, rlc, nOut: int):
+    tuple[ok: bool, outp: seq[uint16]] =
+  ## Slow-path bit-exact decode with RLE pseudo-symbol handling.
+  ## Returns ok=false on any corrupt input (bounds checked throughout).
+  var output = newSeq[uint16](nOut)
+  var c = 0'u64
+  var lc = 0
+  var pos = 0
+  var n = 0
+  let inBytes = (nBits + 7) div 8
+  template getChar() =
+    if pos >= data.len: return (false, output)
+    c = (c shl 8) or uint64(data[pos]); inc(pos)
+    lc += 8
+  template takeCode(lit: uint32): bool =
+    (block:
+      var done = true
+      if int(lit) == rlc:
+        if lc < 8:
+          if pos >= data.len: done = false
+          else: getChar()
+        if done:
+          lc -= 8
+          let cs = int((c shr lc) and 0xFF)
+          if n - 1 < 0: done = false
+          elif n + cs > nOut: done = false
+          else:
+            let sv = output[n - 1]
+            for _ in 0..<cs:
+              output[n] = sv; inc(n)
+      else:
+        if n >= nOut: done = false
+        else:
+          output[n] = uint16(lit); inc(n)
+      done)
+  while pos < inBytes:
+    getChar()
+    while lc >= HufDecBits:
+      let pl = hdecod[int((c shr (lc - HufDecBits)) and HufDecMask.uint64)]
+      if pl.len != 0:
+        if pl.len > lc: return (false, output)
+        lc -= pl.len
+        if not takeCode(pl.lit): return (false, output)
+      else:
+        if pl.p.len == 0: return (false, output)
+        var found = false
+        for sym in pl.p:
+          let l = int(hcode[sym] and 63)
+          while lc < l and pos < inBytes:
+            getChar()
+          if lc >= l and
+              (hcode[sym] shr 6) == ((c shr (lc - l)) and ((1'u64 shl l) - 1'u64)):
+            lc -= l
+            if not takeCode(sym): return (false, output)
+            found = true
+            break
+        if not found: return (false, output)
+  var i = (8 - nBits) and 7
+  if i > lc: return (false, output)
+  c = c shr i
+  lc -= i
+  while lc > 0:
+    let pl = hdecod[int((c shl (HufDecBits - lc)) and HufDecMask.uint64)]
+    if pl.len == 0: return (false, output)
+    if pl.len > lc: return (false, output)
+    lc -= pl.len
+    if not takeCode(pl.lit): return (false, output)
+  if n != nOut: return (false, output)
+  (true, output)
+
+# ---------- PIZ wavelet + bitmap (mirrors internal_piz.c) ----------
+
+const PizBitmapSize = 8192 # 65536 bits / 8
+
+proc pizBitmapFromData*(data: openArray[uint16],
+    bitmap: var openArray[uint8]): tuple[mn, mx: int] =
+  ## Presence bitmap over the value range; bit 0 (value 0) never stored.
+  for i in 0..<PizBitmapSize: bitmap[i] = 0
+  for v in data:
+    bitmap[int(v) shr 3] = bitmap[int(v) shr 3] or (1'u8 shl (int(v) and 7))
+  bitmap[0] = bitmap[0] and not 1'u8
+  var mn = PizBitmapSize - 1
+  var mx = 0
+  for i in 0..<PizBitmapSize:
+    if bitmap[i] != 0:
+      if i < mn: mn = i
+      if i > mx: mx = i
+  (mn, mx)
+
+proc pizForwardLut*(bitmap: openArray[uint8], lut: var openArray[uint16]): int =
+  ## Compress the value range: maps every present value (plus 0) to a
+  ## dense index. Returns max index.
+  var k = 0
+  for i in 0..<65536:
+    if i == 0 or (bitmap[i shr 3] and (1'u8 shl (i and 7))) != 0:
+      lut[i] = uint16(k); inc(k)
+  k - 1
+
+proc pizReverseLut*(bitmap: openArray[uint8], lut: var openArray[uint16]): int =
+  ## Inverse mapping (dense index -> original value). Returns max index.
+  var k = 0
+  for i in 0..<65536:
+    if i == 0 or (bitmap[i shr 3] and (1'u8 shl (i and 7))) != 0:
+      lut[k] = uint16(i); inc(k)
+  let n = k - 1
+  while k < 65536:
+    lut[k] = 0; inc(k)
+  n
+
+proc pizApplyLut*(lut: openArray[uint16], data: var openArray[uint16]) =
+  for i in 0..<data.len: data[i] = lut[int(data[i])]
+
+proc pizWenc14(a, b: uint16, l, h: var uint16) =
+  let ms = (int(cast[int16](a)) + int(cast[int16](b))) shr 1
+  # NB: C++ implementation-defined for negatives; arithmetic shift assumed
+  let ds = int(cast[int16](a)) - int(cast[int16](b))
+  l = uint16(ms and 0xFFFF)
+  h = uint16(ds and 0xFFFF)
+
+proc pizWdec14(l, h: uint16, a, b: var uint16) =
+  let hi = int(cast[int16](h))
+  let li = int(cast[int16](l))
+  let ai = li + (hi and 1) + (hi shr 1)
+  a = uint16(ai and 0xFFFF)
+  b = uint16((ai - hi) and 0xFFFF)
+
+proc pizWdec14x4(px, p01, p10, p11: var uint16) =
+  ## Inverse 2D step (wdec14_4): decodes the 2x2 block in place.
+  var ai = int(cast[int16](px))
+  var bi = int(cast[int16](p10))
+  var ci = int(cast[int16](p01))
+  var di = int(cast[int16](p11))
+  var i00 = ai + (bi and 1) + (bi shr 1)
+  let i10 = i00 - bi
+  var i01 = ci + (di and 1) + (di shr 1)
+  let i11 = i01 - di
+  ai = i00 + (i01 and 1) + (i01 shr 1)
+  bi = ai - i01
+  ci = i10 + (i11 and 1) + (i11 shr 1)
+  di = ci - i11
+  px = uint16(ai and 0xFFFF)
+  p01 = uint16(bi and 0xFFFF)
+  p10 = uint16(ci and 0xFFFF)
+  p11 = uint16(di and 0xFFFF)
+
+const PizModMask = (1 shl 16) - 1
+const PizAOffset = 1 shl 15
+const PizMOffset = 1 shl 15
+
+proc pizWenc16(a, b: uint16, l, h: var uint16) =
+  let ao = (int(a) + PizAOffset) and PizModMask
+  var m = (ao + int(b)) shr 1
+  var d = ao - int(b)
+  if d < 0: m = (m + PizMOffset) and PizModMask
+  d = d and PizModMask
+  l = uint16(m)
+  h = uint16(d)
+
+proc pizWdec16(l, h: uint16, a, b: var uint16) =
+  let m = int(l)
+  let d = int(h)
+  let bb = (m - (d shr 1)) and PizModMask
+  let aa = (d + bb - PizAOffset) and PizModMask
+  b = uint16(bb)
+  a = uint16(aa)
+
+proc pizWav2DEncode*(buf: var openArray[uint16], nx, ox, ny, oy: int,
+    maxVal: uint16) =
+  ## Forward 2D Haar-ish transform, in place, strided. Mirrors wav_2D_encode.
+  let w14 = if maxVal < (1'u16 shl 14): 1 else: 0
+  let n = if nx < ny: nx else: ny
+  var p = 1
+  var p2 = 2
+  while p2 <= n:
+    var py = 0
+    while py <= oy * (ny - p2):
+      var px = py
+      let ex = py + ox * (nx - p2)
+      while px <= ex:
+        let p01 = px + ox * p
+        let p10 = px + oy * p
+        let p11 = p10 + ox * p
+        if w14 == 1:
+          var i00, i01, i10, i11: uint16
+          pizWenc14(buf[px], buf[p01], i00, i01)
+          pizWenc14(buf[p10], buf[p11], i10, i11)
+          pizWenc14(i00, i10, buf[px], buf[p10])
+          pizWenc14(i01, i11, buf[p01], buf[p11])
+        else:
+          var i00, i01, i10, i11: uint16
+          pizWenc16(buf[px], buf[p01], i00, i01)
+          pizWenc16(buf[p10], buf[p11], i10, i11)
+          pizWenc16(i00, i10, buf[px], buf[p10])
+          pizWenc16(i01, i11, buf[p01], buf[p11])
+        px += ox * p2
+      if (nx and p) != 0:
+        let p10 = px + oy * p
+        if w14 == 1:
+          var l, h: uint16
+          pizWenc14(buf[px], buf[p10], l, h)
+          buf[px] = l; buf[p10] = h
+        else:
+          var l, h: uint16
+          pizWenc16(buf[px], buf[p10], l, h)
+          buf[px] = l; buf[p10] = h
+      py += oy * p2
+    if (ny and p) != 0:
+      var px = py
+      let ex = py + ox * (nx - p2)
+      while px <= ex:
+        let p01 = px + ox * p
+        if w14 == 1:
+          var l, h: uint16
+          pizWenc14(buf[px], buf[p01], l, h)
+          buf[px] = l; buf[p01] = h
+        else:
+          var l, h: uint16
+          pizWenc16(buf[px], buf[p01], l, h)
+          buf[px] = l; buf[p01] = h
+        px += ox * p2
+    p = p2
+    p2 = p2 shl 1
+
+proc pizWav2DDecode*(buf: var openArray[uint16], nx, ox, ny, oy: int,
+    maxVal: uint16) =
+  ## Inverse 2D transform, in place, strided. Mirrors wav_2D_decode.
+  let w14 = if maxVal < (1'u16 shl 14): 1 else: 0
+  let n = if nx < ny: nx else: ny
+  var p = 1
+  while p <= n: p = p shl 1
+  p = p shr 1
+  var p2 = p
+  p = p shr 1
+  while p >= 1:
+    var py = 0
+    while py <= oy * (ny - p2):
+      var px = py
+      let ex = py + ox * (nx - p2)
+      while px <= ex:
+        let p01 = px + ox * p
+        let p10 = px + oy * p
+        let p11 = p10 + ox * p
+        if w14 == 1:
+          pizWdec14x4(buf[px], buf[p01], buf[p10], buf[p11])
+        else:
+          var i00, i10, i01, i11: uint16
+          pizWdec16(buf[px], buf[p10], i00, i10)
+          pizWdec16(buf[p01], buf[p11], i01, i11)
+          pizWdec16(i00, i01, buf[px], buf[p01])
+          pizWdec16(i10, i11, buf[p10], buf[p11])
+        px += ox * p2
+      if (nx and p) != 0:
+        let p10 = px + oy * p
+        if w14 == 1:
+          var i00: uint16
+          pizWdec14(buf[px], buf[p10], i00, buf[p10])
+          buf[px] = i00
+        else:
+          var i00: uint16
+          pizWdec16(buf[px], buf[p10], i00, buf[p10])
+          buf[px] = i00
+      py += oy * p2
+    if (ny and p) != 0:
+      var px = py
+      let ex = py + ox * (nx - p2)
+      while px <= ex:
+        let p01 = px + ox * p
+        if w14 == 1:
+          var i00: uint16
+          pizWdec14(buf[px], buf[p01], i00, buf[p01])
+          buf[px] = i00
+        else:
+          var i00: uint16
+          pizWdec16(buf[px], buf[p01], i00, buf[p01])
+          buf[px] = i00
+        px += ox * p2
+    p2 = p
+    p = p shr 1
+
+proc hufCompress*(raw: openArray[uint16]): tuple[ok: bool, packed: seq[uint8]] =
+  ## Full Huffman stream: 20-byte header (im, iM, tableLen, nBits, 0),
+  ## packed table, packed data. Mirrors internal_huf_compress.
+  if raw.len == 0: return (true, @[])
+  var frq = newSeq[uint64](HufEncSize)
+  for v in raw: frq[int(v)] += 1
+  var iMin, iMax: int
+  let hcode = hufBuildEncTable(frq, iMin, iMax)
+  let table = hufPackEncTable(hcode, iMin, iMax)
+  let (bits, nBits) = hufEncode(hcode, raw, iMax)
+  let dataLen = (nBits + 7) div 8
+  var packed = newSeq[uint8](20 + table.len + dataLen)
+  proc putU32(o: int, v: int) =
+    packed[o] = uint8(v and 0xFF)
+    packed[o+1] = uint8((v shr 8) and 0xFF)
+    packed[o+2] = uint8((v shr 16) and 0xFF)
+    packed[o+3] = uint8((v shr 24) and 0xFF)
+  putU32(0, iMin)
+  putU32(4, iMax)
+  putU32(8, table.len)
+  putU32(12, nBits)
+  putU32(16, 0)
+  for i, b in table: packed[20 + i] = b
+  for i in 0..<dataLen: packed[20 + table.len + i] = bits[i]
+  (true, packed)
+
+proc hufDecompress*(comp: openArray[uint8], nRaw: int):
+    tuple[ok: bool, raw: seq[uint16]] =
+  ## Inverse of hufCompress. Mirrors the slow path of
+  ## internal_huf_decompress (prefix table, no SIMD fast path needed
+  ## for conformance).
+  if comp.len < 20:
+    if nRaw == 0: return (true, @[])
+    return (false, @[])
+  let iMin = int(uint32(comp[0]) or (uint32(comp[1]) shl 8) or
+    (uint32(comp[2]) shl 16) or (uint32(comp[3]) shl 24))
+  let iMax = int(uint32(comp[4]) or (uint32(comp[5]) shl 8) or
+    (uint32(comp[6]) shl 16) or (uint32(comp[7]) shl 24))
+  let nBits = int(uint32(comp[12]) or (uint32(comp[13]) shl 8) or
+    (uint32(comp[14]) shl 16) or (uint32(comp[15]) shl 24))
+  if iMin >= HufEncSize or iMax >= HufEncSize: return (false, @[])
+  if iMin > iMax: return (false, @[])
+  var hcode = newSeq[uint64](HufEncSize)
+  var tpos = 20
+  if not hufUnpackEncTable(comp, tpos, iMin, iMax, hcode):
+    return (false, @[])
+  # nBits counts valid bits from the table end; the stream must fit.
+  let avail = (comp.len - tpos) * 8
+  if nBits > avail: return (false, @[])
+  let hdec = hufBuildDecTable(hcode, iMin, iMax)
+  let (ok, output) = hufDecode(hcode, hdec,
+    comp.toOpenArray(tpos, comp.len - 1), nBits, iMax, nRaw)
+  if not ok: return (false, @[])
+  (true, output)
+
+proc pizWavEncodeChunk(wav: var seq[uint16], w, rows: int,
+    chanBytes: seq[int], maxVal: uint16) =
+  ## Forward wavelet per channel/lane (via contiguous lane buffers).
+  var base = 0
+  for ci in 0..<chanBytes.len:
+    let wc = chanBytes[ci] div 2
+    for j in 0..<wc:
+      var lane = newSeq[uint16](rows * w)
+      for y in 0..<rows:
+        for x in 0..<w:
+          lane[y * w + x] = wav[base + y * w * wc + x * wc + j]
+      pizWav2DEncode(lane, w, 1, rows, w, maxVal)
+      for y in 0..<rows:
+        for x in 0..<w:
+          wav[base + y * w * wc + x * wc + j] = lane[y * w + x]
+    base += rows * w * wc
+
+proc pizWavDecodeChunk(wav: var seq[uint16], w, rows: int,
+    chanBytes: seq[int], maxVal: uint16) =
+  ## Inverse wavelet per channel/lane.
+  var base = 0
+  for ci in 0..<chanBytes.len:
+    let wc = chanBytes[ci] div 2
+    for j in 0..<wc:
+      var lane = newSeq[uint16](rows * w)
+      for y in 0..<rows:
+        for x in 0..<w:
+          lane[y * w + x] = wav[base + y * w * wc + x * wc + j]
+      pizWav2DDecode(lane, w, 1, rows, w, maxVal)
+      for y in 0..<rows:
+        for x in 0..<w:
+          wav[base + y * w * wc + x * wc + j] = lane[y * w + x]
+    base += rows * w * wc
+
+proc pizApplyChunk*(planar: openArray[uint8], w, rows: int,
+    chanBytes: seq[int], ptypes: seq[int32]): tuple[ok: bool, blk: seq[uint8]] =
+  ## Full PIZ chunk encode: channel-major gather, bitmap + forward LUT,
+  ## wavelet, Huffman. Falls back to raw planar when Huffman (with its
+  ## headers) does not win. Mirrors internal_exr_apply_piz.
+  var poff = newSeq[int](chanBytes.len)
+  var lineBytes = 0
+  for ci in 0..<chanBytes.len:
+    poff[ci] = lineBytes
+    lineBytes += w * chanBytes[ci]
+  let exp = rows * lineBytes
+  # gather planar rows -> channel-major u16
+  var totalU16 = 0
+  for cb in chanBytes: totalU16 += rows * w * (cb div 2)
+  var wav = newSeq[uint16](totalU16)
+  var base = 0
+  for ci in 0..<chanBytes.len:
+    let cb = chanBytes[ci]
+    let wc = cb div 2
+    for y in 0..<rows:
+      for x in 0..<w:
+        for j in 0..<wc:
+          let o = y * lineBytes + poff[ci] + x * cb + 2 * j
+          wav[base + y * w * wc + x * wc + j] =
+            uint16(planar[o]) or (uint16(planar[o + 1]) shl 8)
+    base += rows * w * wc
+  var bitmap = newSeq[uint8](PizBitmapSize)
+  let (mn, mx) = pizBitmapFromData(wav, bitmap)
+  var lut = newSeq[uint16](65536)
+  let maxVal = pizForwardLut(bitmap, lut)
+  pizApplyLut(lut, wav)
+  pizWavEncodeChunk(wav, w, rows, chanBytes, uint16(maxVal))
+  let (hok, huf) = hufCompress(wav)
+  if not hok:
+    return (true, @planar)
+  # chunk: minNz(2) maxNz(2) bitmap hufLen(4) hufStream
+  let bpl = if mx >= mn: mx - mn + 1 else: 0
+  var output = newSeq[uint8](4 + bpl + 4 + huf.len)
+  output[0] = uint8(mn and 0xFF); output[1] = uint8(mn shr 8)
+  output[2] = uint8(mx and 0xFF); output[3] = uint8(mx shr 8)
+  for i in 0..<bpl: output[4 + i] = bitmap[mn + i]
+  let hl = huf.len
+  output[4 + bpl] = uint8(hl and 0xFF)
+  output[4 + bpl + 1] = uint8((hl shr 8) and 0xFF)
+  output[4 + bpl + 2] = uint8((hl shr 16) and 0xFF)
+  output[4 + bpl + 3] = uint8((hl shr 24) and 0xFF)
+  for i in 0..<hl: output[4 + bpl + 4 + i] = huf[i]
+  if output.len < exp:
+    return (true, output)
+  (true, @planar)
+
+proc pizUndoChunk*(comp: openArray[uint8], w, rows: int,
+    channels: seq[ExrChannel], chanBytes: seq[int]): ImageResult[seq[uint8]] =
+  ## Full PIZ chunk decode to planar-per-scanline rows. Mirrors
+  ## internal_exr_undo_piz.
+  var poff = newSeq[int](channels.len)
+  var lineBytes = 0
+  for ci in 0..<channels.len:
+    poff[ci] = lineBytes
+    lineBytes += w * chanBytes[ci]
+  let exp = rows * lineBytes
+  if comp.len == exp:
+    # encoder stored the chunk raw (Huffman did not win)
+    var blk = newSeq[uint8](exp)
+    for i in 0..<exp: blk[i] = comp[i]
+    return ok(blk)
+  if comp.len < 8:
+    return err[seq[uint8]](decodingError("exr: short piz chunk"))
+  let minNz = int(uint16(comp[0]) or (uint16(comp[1]) shl 8))
+  let maxNz = int(uint16(comp[2]) or (uint16(comp[3]) shl 8))
+  if maxNz >= PizBitmapSize:
+    return err[seq[uint8]](decodingError("exr: corrupt piz bitmap"))
+  let bpl = if maxNz >= minNz: maxNz - minNz + 1 else: 0
+  if 4 + bpl + 4 > comp.len:
+    return err[seq[uint8]](decodingError("exr: short piz chunk"))
+  var bitmap = newSeq[uint8](PizBitmapSize)
+  for i in 0..<bpl: bitmap[minNz + i] = comp[4 + i]
+  let hoff = 4 + bpl
+  let hufLen = int(uint32(comp[hoff]) or (uint32(comp[hoff+1]) shl 8) or
+    (uint32(comp[hoff+2]) shl 16) or (uint32(comp[hoff+3]) shl 24))
+  if hufLen <= 0 or hoff + 4 + hufLen > comp.len:
+    return err[seq[uint8]](decodingError("exr: short piz chunk"))
+  var lut = newSeq[uint16](65536)
+  let maxVal = pizReverseLut(bitmap, lut)
+  var totalU16 = 0
+  for cb in chanBytes: totalU16 += rows * w * (cb div 2)
+  let (hok, wav0) = hufDecompress(comp.toOpenArray(hoff + 4, hoff + 4 + hufLen - 1),
+    totalU16)
+  if not hok:
+    return err[seq[uint8]](decodingError("exr: corrupt piz huffman"))
+  var wav = wav0
+  pizWavDecodeChunk(wav, w, rows, chanBytes, uint16(maxVal))
+  pizApplyLut(lut, wav)
+  # scatter channel-major u16 -> planar rows (LE bytes)
+  var output = newSeq[uint8](exp)
+  var base = 0
+  for ci in 0..<chanBytes.len:
+    let cb = chanBytes[ci]
+    let wc = cb div 2
+    for y in 0..<rows:
+      for x in 0..<w:
+        for j in 0..<wc:
+          let v = wav[base + y * w * wc + x * wc + j]
+          let o = y * lineBytes + poff[ci] + x * cb + 2 * j
+          output[o] = uint8(v and 0xFF)
+          output[o + 1] = uint8(v shr 8)
+    base += rows * w * wc
+  ok(output)
+
 # ---------- B44/B44A (fixed-rate lossy for half; float/uint passthrough) ---
 # Reimplements OpenEXRCore internal_b44.c (pack/unpack/shift search) and
 # internal_b44_table_init.c (exp/log tables for pLinear channels).
@@ -716,7 +1494,7 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
     case compression
     of 0, 1, 2: 1
     of 3, 5: 16
-    of 6, 7: 32
+    of 4, 6, 7: 32
     else:
       return err[seq[DynamicImage]](unsupportedError(ukGenericFeature,
         "exr: compression " & $compression))
@@ -820,6 +1598,15 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
         var u = b44UndoChunk(comp, w, rows, channels, chanBytes)
         if not u.ok: return err[seq[DynamicImage]](u.err)
         blk = move(u.value)
+    of 4:
+      # PIZ: wavelet + custom Huffman, 32 rows/chunk.
+      if comp.len == exp:
+        # encoder stored the chunk raw (Huffman did not win).
+        blk = comp[0..<exp]
+      else:
+        var u = pizUndoChunk(comp, w, rows, channels, chanBytes)
+        if not u.ok: return err[seq[DynamicImage]](u.err)
+        blk = move(u.value)
     else: discard
     # Disk layout is planar-per-scanline for every compression; convert
     # once to our chunky `full` buffer. (PXR24's undo already emits
@@ -920,14 +1707,14 @@ proc putBox(dst: var seq[uint8], x0, y0, x1, y1: int32) =
     putU32le(dst, cast[uint32](v))
 
 proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]] =
-  ## Scanline writer (ZIP default; PXR24/B44/B44A opt-in). Accepts
+  ## Scanline writer (ZIP default; PXR24/B44/B44A/PIZ opt-in). Accepts
   ## Rgb32F/Rgba32F/Luma32F (convert first). PXR24 rounds float channels
   ## to 24 bits on write (lossy). B44 only compresses half channels, so
   ## this float-only writer stores them uncompressed (spec passthrough).
   ## HALF/UINT-exactness only matters on decode of foreign files.
   ## Channel data is packed alphabetically by name (B,G,R / A,B,G,R),
   ## per the file layout; the chlist is written in the same order.
-  if compression notin [3, 5, 6, 7]:
+  if compression notin [3, 4, 5, 6, 7]:
     return err[seq[uint8]](unsupportedError(ukGenericFeature,
       "exr: encode compression " & $compression))
   var w, h: int
@@ -993,8 +1780,8 @@ proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]
   putAttr(output, "screenWindowCenter", "v2f", @[0'u8,0,0,0, 0,0,0,0])
   putAttr(output, "screenWindowWidth", "float", @[0'u8,0,0,0])
   output.add(0) # end of header
-  # chunks: ZIP/PXR24 = 16 rows, B44/B44A = 32 rows each
-  let rowsPer = if compression == 6 or compression == 7: 32 else: 16
+  # chunks: ZIP/PXR24 = 16 rows, PIZ/B44/B44A = 32 rows each
+  let rowsPer = if compression == 3 or compression == 5: 16 else: 32
   let lineBytes = w * chNames.len * 4
   let nChunks = (h + rowsPer - 1) div rowsPer
   # offset table placeholder
@@ -1028,6 +1815,12 @@ proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]
       # grows the chunk (`>=`).
       let t = b44ApplyChunk(planar, w, rows, cbytesEnc, ptypesEnc, pLinEnc,
         compression == 7)
+      payload = if t.len < planar.len: t else: planar
+    elif compression == 4:
+      # PIZ: wavelet + Huffman; raw planar fallback when it does not win
+      # (mirrors the nOut < packedbytes gate in internal_exr_apply_piz).
+      let (pok, t) = pizApplyChunk(planar, w, rows, cbytesEnc, ptypesEnc)
+      if not pok: return err[seq[uint8]](encodingError("exr: piz failed"))
       payload = if t.len < planar.len: t else: planar
     else:
       var tb = planar

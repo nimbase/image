@@ -82,13 +82,21 @@ test "exr reference RLE":
       check dec.value.dimensions() == (315'u32, 100'u32)
   check foundUncropped and foundCropped
 
-test "exr PIZ unsupported":
+test "exr piz reference decodes":
   let p = fixturesDir / "exr" / "overexposed gradient - data window equals display window.exr"
   var f = open(p, fmRead)
   var raw = newSeq[uint8](getFileSize(f))
   discard readBytes(f, raw, 0, raw.len)
   close(f)
-  check decodeExr(raw).ok == false
+  let dec = decodeExr(raw)
+  check dec.ok
+  check dec.value.kind == dkRgba32F
+  check dec.value.dimensions() == (20'u32, 12'u32)
+  # spot values vs the reference decoder (bit-exact PIZ conformance)
+  check dec.value.rgba32f.pixels[0].data ==
+    [0.69149625f32, 0.18248774f32, 0.2710451f32, 1.0f32]
+  check dec.value.rgba32f.pixels[1].data ==
+    [0.75934595f32, 0.2371794f32, 0.31343064f32, 1.0f32]
 
 test "exr pxr24 round-trip within spec error":
   # PXR24 rounds float channels to 24 bits (spec: rel err ~3e-5).
@@ -251,6 +259,126 @@ test "exr b44 encode float passes through losslessly":
     let dec = decodeExr(enc.value)
     check dec.ok
     check dec.value.rgb32f.pixels == px
+
+test "exr piz official files decode bit-exact":
+  # Fixtures minted directly with the reference library (C++ API):
+  # smooth 64x64 half/float (Huffman path) and 128x128 grainy half
+  # (multi-chunk Huffman path), each with a lib-decoded NONE anchor.
+  # NaN lanes compare by bit pattern (NaN != NaN by definition).
+  proc readRaw(p: string): seq[uint8] =
+    var f = open(p, fmRead)
+    result = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, result, 0, result.len)
+    close(f)
+  proc samePixels(a, b: seq[Rgb[float32]]): bool =
+    if a.len != b.len: return false
+    for i in 0..<a.len:
+      for c in 0..2:
+        let x = a[i].data[c]; let y = b[i].data[c]
+        if x != x and y != y: continue
+        if x != y: return false
+    true
+  for (cf, cn) in [("piz64s-reference-half.exr", "piz64s-reference-half-none.exr"),
+      ("piz64s-reference-float.exr", "piz64s-reference-float-none.exr"),
+      ("piz128-reference-half.exr", "piz128-reference-half-none.exr")]:
+    let a = decodeExr(readRaw(fixturesDir / "exr" / cf))
+    let b = decodeExr(readRaw(fixturesDir / "exr" / cn))
+    check a.ok and b.ok
+    check a.value.kind == dkRgb32F and b.value.kind == dkRgb32F
+    check samePixels(a.value.rgb32f.pixels, b.value.rgb32f.pixels)
+
+test "exr piz encode matches reference payloads":
+  # Rebuild the smooth-64x64 source pixels in-test and verify our chunk
+  # payloads are byte-identical to the reference library's (heap order,
+  # canonical codes, table packing, RLE and bit packing all conform).
+  proc chunkPayloads(raw: seq[uint8]): seq[seq[uint8]] =
+    ## Raw chunk payloads in offset-table order (64 rows @ 32 = 2 chunks).
+    var pos = 8
+    while true:
+      var e = pos
+      while raw[e] != 0: inc e
+      if e == pos: pos = e+1; break
+      var e2 = e+1
+      while raw[e2] != 0: inc e2
+      let sz = int(uint32(raw[e2+1]) or (uint32(raw[e2+2]) shl 8) or
+        (uint32(raw[e2+3]) shl 16) or (uint32(raw[e2+4]) shl 24))
+      pos = e2+5+sz
+    result = @[]
+    for i in 0..<2:
+      var off = 0'u64
+      for b in 0..7: off = off or (uint64(raw[pos+i*8+b]) shl (8*b))
+      let o = int(off)
+      let psz = int(uint32(raw[o+4]) or (uint32(raw[o+5]) shl 8) or
+        (uint32(raw[o+6]) shl 16) or (uint32(raw[o+7]) shl 24))
+      result.add(raw[o+8 ..< o+8+psz])
+  proc readRawFile(p: string): seq[uint8] =
+    var f = open(p, fmRead)
+    result = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, result, 0, result.len)
+    close(f)
+  var px = newSeq[Rgb[float32]](64*64)
+  for y in 0..<64:
+    for x in 0..<64:
+      let fx = float32(x) / 63.0f32
+      let fy = float32(y) / 63.0f32
+      px[y*64+x] = Rgb[float32](data: [fx*2-1, fy*2-1, (fx+fy)*0.5f32])
+  let img = DynamicImage(kind: dkRgb32F, rgb32f: Rgb32FImage(width: 64, height: 64, pixels: px))
+  let enc = encodeExr(img, 4)
+  check enc.ok
+  let mine = chunkPayloads(enc.value)
+  let refp = chunkPayloads(readRawFile(fixturesDir / "exr" / "piz64s-reference-float.exr"))
+  check mine.len == refp.len
+  for i in 0..<mine.len:
+    check mine[i] == refp[i]
+
+test "exr huffman codec round-trips":
+  # Unit coverage for the PIZ entropy stage: skewed symbols (RLE path),
+  # dense alphabet (multi-length codes) and flat input (single symbol).
+  for data in [@[0'u16, 1, 0, 1, 0, 1, 2, 2, 2, 2, 2],
+               @[5'u16, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 42],
+               @[7'u16]]:
+    var frq = newSeq[uint64](65537)
+    for v in data: frq[int(v)] += 1
+    var iMin, iMax: int
+    let hcode = hufBuildEncTable(frq, iMin, iMax)
+    let table = hufPackEncTable(hcode, iMin, iMax)
+    let enc = hufEncode(hcode, data, iMax)
+    check enc.nBits > 0
+    var stream = newSeq[uint8](20 + table.len + (enc.nBits + 7) div 8)
+    proc putU32(o, v: int) =
+      stream[o] = uint8(v and 0xFF); stream[o+1] = uint8((v shr 8) and 0xFF)
+      stream[o+2] = uint8((v shr 16) and 0xFF); stream[o+3] = uint8((v shr 24) and 0xFF)
+    putU32(0, iMin); putU32(4, iMax); putU32(8, table.len)
+    putU32(12, enc.nBits); putU32(16, 0)
+    for i, b in table: stream[20 + i] = b
+    for i, b in enc.bits: stream[20 + table.len + i] = b
+    let dec = hufDecompress(stream, data.len)
+    check dec.ok
+    check dec.raw == data
+
+test "exr piz round-trips losslessly":
+  # Full pipeline self-check (wavelet + Huffman + bitmap + LUT).
+  var px = newSeq[Rgb[float32]](16*16)
+  for y in 0..<16:
+    for x in 0..<16:
+      px[y*16+x] = Rgb[float32](data: [float32(x)/15.0f32,
+        float32(y)/15.0f32, 0.5f32])
+  let img = DynamicImage(kind: dkRgb32F, rgb32f: Rgb32FImage(width: 16, height: 16, pixels: px))
+  let enc = encodeExr(img, 4)
+  check enc.ok
+  let dec = decodeExr(enc.value)
+  check dec.ok
+  check dec.value.rgb32f.pixels == px
+  # raw fallback path: uncompressed-size chunk passes through verbatim
+  var planar = newSeq[uint8](4 * 1 * 12)
+  for i in 0..<planar.len: planar[i] = uint8(i and 0xFF)
+  var chs: seq[ExrChannel] = @[
+    ExrChannel(name: "B", pixelType: 2, pLinear: false, xSamp: 1, ySamp: 1),
+    ExrChannel(name: "G", pixelType: 2, pLinear: false, xSamp: 1, ySamp: 1),
+    ExrChannel(name: "R", pixelType: 2, pLinear: false, xSamp: 1, ySamp: 1)]
+  let u = pizUndoChunk(planar, 4, 1, chs, @[4, 4, 4])
+  check u.ok
+  check u.value == planar
 
 test "exr bad magic":
   check decodeExr(@[0'u8, 1, 2, 3]).ok == false

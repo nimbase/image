@@ -36,7 +36,7 @@
 Codec support (`o` = decode, `w` = encode):
 
 - BMP: o+w — 1/4/8-bit palette, 16-bit bitfields, 24/32-bit, RLE4/RLE8
-- EXR: o+w — scanline NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A, half/float/uint to 32F; PIZ/DWAA/tiled/multipart unsupported
+- EXR: o+w — scanline NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A/PIZ, half/float/uint to 32F; DWAA/tiled/multipart unsupported
 - Farbfeld: o+w — `Rgba16`
 - GIF: o+w — animation, disposal, interlace, loop count, LZW
 - HDR: o+w — Radiance RGBE, flat + new/old RLE
