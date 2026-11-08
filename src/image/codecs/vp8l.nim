@@ -915,8 +915,13 @@ proc parseLz77*(px: seq[Rgba[uint8]], w: int, eR, eG, eB, eA: openArray[uint16])
             px[j+L].data == px[i+L].data:
           inc(L)
         considerMatch(L, d)
-    if mLen >= Vp8lMinMatch and mCost < litCost and
-        (not hit or mCost < Vp8lSymEst):
+    # Match cost is TOTAL for mLen pixels; compare against coding the
+    # same run pixel-by-pixel (run pixels are identical, so the current
+    # pixel's literal cost is representative). The old comparison
+    # (mCost < litCost) biased heavily against long matches and only
+    # worked by accident via single-symbol elision.
+    if mLen >= Vp8lMinMatch and mCost < mLen * litCost and
+        (not hit or mCost < mLen * Vp8lSymEst):
       let (ls, _, _) = lengthSymExtra(mLen)
       fG[256 + ls] += 1
       fD[mSym] += 1
@@ -1155,10 +1160,228 @@ proc writeCodeLengths(w: var Vp8lBitWriter, lens: openArray[uint16], numSyms: in
     else:
       j += 1
 
-proc encodeVp8l*(img: RgbaImage): seq[uint8] =
-  ## VP8L encoder with LZ77 backward matches + color cache (no transforms,
-  ## no meta-Huffman yet). Pixel-exact output any spec decoder accepts.
-  let w = int(img.width); let h = int(img.height)
+# ---------- predictor transform (encode) ----------
+
+const PredSizeBits = 4
+  ## Predictor block exponent (16px blocks). Fixed for v1; adaptive later.
+
+proc fwdPredSeg(mode: int, src: seq[Rgba[uint8]], w, y, x0, x1: int,
+    res: var seq[array[4, uint8]]) =
+  ## Forward residuals for row y, columns [x0, x1) (x1-x0 <= 16).
+  ## Mirrors predMode segment logic with subtraction on ORIGINAL
+  ## neighbors (decode reconstructs the same originals causally, so
+  ## originals are exactly what the decoder's buffer holds).
+  ## avg2/clampFull/clampHalf shared with the decoder.
+  let n = x1 - x0
+  res.setLen(n)
+  case mode
+  of 0: # opaque black: RGB raw, alpha minus 255
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      res[i] = [a[0], a[1], a[2], uint8((int(a[3]) - 255) and 0xFF)]
+  of 1: # left
+    var prev = src[y*w+x0-1].data
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      for k in 0..3: res[i][k] = uint8((int(a[k]) - int(prev[k])) and 0xFF)
+      prev = a
+  of 2: # top
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let t = src[(y-1)*w+x0+i].data
+      for k in 0..3: res[i][k] = uint8((int(a[k]) - int(t[k])) and 0xFF)
+  of 3: # top-right (last pixel wraps to row start, mirroring decode)
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let t = if x0+i+1 < w: src[(y-1)*w+x0+i+1].data
+        else: src[y*w].data
+      for k in 0..3: res[i][k] = uint8((int(a[k]) - int(t[k])) and 0xFF)
+  of 4: # top-left
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let t = src[(y-1)*w+x0+i-1].data
+      for k in 0..3: res[i][k] = uint8((int(a[k]) - int(t[k])) and 0xFF)
+  of 5:
+    var prev = src[y*w+x0-1].data
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tr = if x0+i+1 < w: src[(y-1)*w+x0+i+1].data
+        else: src[y*w].data
+      let tt = src[(y-1)*w+x0+i].data
+      for k in 0..3:
+        res[i][k] = uint8((int(a[k]) - int(avg2(avg2(prev[k], tr[k]),
+          tt[k]))) and 0xFF)
+      prev = a
+  of 6:
+    var prev = src[y*w+x0-1].data
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tl = src[(y-1)*w+x0+i-1].data
+      for k in 0..3:
+        res[i][k] = uint8((int(a[k]) - int(avg2(prev[k], tl[k]))) and 0xFF)
+      prev = a
+  of 7:
+    var prev = src[y*w+x0-1].data
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tt = src[(y-1)*w+x0+i].data
+      for k in 0..3:
+        res[i][k] = uint8((int(a[k]) - int(avg2(prev[k], tt[k]))) and 0xFF)
+      prev = a
+  of 8:
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tl = src[(y-1)*w+x0+i-1].data
+      let tt = src[(y-1)*w+x0+i].data
+      for k in 0..3:
+        res[i][k] = uint8((int(a[k]) - int(avg2(tl[k], tt[k]))) and 0xFF)
+  of 9:
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tt = src[(y-1)*w+x0+i].data
+      let tr = if x0+i+1 < w: src[(y-1)*w+x0+i+1].data
+        else: src[y*w].data
+      for k in 0..3:
+        res[i][k] = uint8((int(a[k]) - int(avg2(tt[k], tr[k]))) and 0xFF)
+  of 10:
+    var prev = src[y*w+x0-1].data
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tl = src[(y-1)*w+x0+i-1].data
+      let tt = src[(y-1)*w+x0+i].data
+      let tr = if x0+i+1 < w: src[(y-1)*w+x0+i+1].data
+        else: src[y*w].data
+      for k in 0..3:
+        res[i][k] = uint8((int(a[k]) - int(avg2(avg2(prev[k], tl[k]),
+          avg2(tt[k], tr[k])))) and 0xFF)
+      prev = a
+  of 11:
+    var l = [int16(src[y*w+x0-1].data[0]), int16(src[y*w+x0-1].data[1]),
+      int16(src[y*w+x0-1].data[2]), int16(src[y*w+x0-1].data[3])]
+    var tl = [int16(src[(y-1)*w+x0-1].data[0]),
+      int16(src[(y-1)*w+x0-1].data[1]),
+      int16(src[(y-1)*w+x0-1].data[2]),
+      int16(src[(y-1)*w+x0-1].data[3])]
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tarr = [int16(src[(y-1)*w+x0+i].data[0]),
+        int16(src[(y-1)*w+x0+i].data[1]),
+        int16(src[(y-1)*w+x0+i].data[2]),
+        int16(src[(y-1)*w+x0+i].data[3])]
+      var pl = 0; var pt = 0
+      var pr = [0'i16, 0, 0, 0]
+      for k in 0..3:
+        pr[k] = l[k] + tarr[k] - tl[k]
+        pl += abs(pr[k] - l[k]); pt += abs(pr[k] - tarr[k])
+      for k in 0..3:
+        let pv = if pl < pt: uint8(l[k]) else: uint8(tarr[k])
+        res[i][k] = uint8((int(a[k]) - int(pv)) and 0xFF)
+      tl = tarr
+      l = [int16(a[0]), int16(a[1]), int16(a[2]), int16(a[3])]
+  of 12:
+    var prev = src[y*w+x0-1].data
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tl = src[(y-1)*w+x0+i-1].data
+      let tt = src[(y-1)*w+x0+i].data
+      for k in 0..3:
+        res[i][k] = uint8((int(a[k]) - int(clampFull(int(prev[k]),
+          int(tt[k]), int(tl[k])))) and 0xFF)
+      prev = a
+  else: # 13
+    var prev = src[y*w+x0-1].data
+    for i in 0..<n:
+      let a = src[y*w+x0+i].data
+      let tl = src[(y-1)*w+x0+i-1].data
+      let tt = src[(y-1)*w+x0+i].data
+      for k in 0..3:
+        res[i][k] = uint8((int(a[k]) - int(clampHalf(
+          (int(prev[k]) + int(tt[k])) div 2, int(tl[k])))) and 0xFF)
+      prev = a
+
+proc segSad(res: openArray[array[4, uint8]], n: int): int =
+  ## Wrapped SAD (distance from 0 mod 256): 255 means -1 (tiny).
+  for i in 0..<n:
+    for k in 0..3:
+      let v = int(res[i][k])
+      result += min(v, 256 - v)
+
+proc choosePredictorModes*(px: seq[Rgba[uint8]], w, h,
+    sizeBits: int): seq[uint8] =
+  ## Best of 14 modes per block by wrapped residual SAD.
+  let bxs = subSize(w, sizeBits)
+  let bys = subSize(h, sizeBits)
+  result = newSeq[uint8](bxs * bys)
+  var res: seq[array[4, uint8]] = @[]
+  for by in 0..<bys:
+    for bx in 0..<bxs:
+      let y0 = max(by shl sizeBits, 1)
+      let y1 = min((by + 1) shl sizeBits, h)
+      let x0 = max(bx shl sizeBits, 1)
+      let x1 = min((bx + 1) shl sizeBits, w)
+      if y0 >= y1 or x0 >= x1:
+        result[by * bxs + bx] = 0
+        continue
+      var bestM = 0
+      var bestS = high(int)
+      for m in 0..13:
+        var s = 0
+        for y in y0..<y1:
+          fwdPredSeg(m, px, w, y, x0, x1, res)
+          s += segSad(res, x1 - x0)
+          if s >= bestS: break # early-out
+        if s < bestS:
+          bestS = s
+          bestM = m
+      result[by * bxs + bx] = uint8(bestM)
+
+proc applyPredictorFwd*(src: seq[Rgba[uint8]], w, h, sizeBits: int,
+    modes: seq[uint8]): seq[Rgba[uint8]] =
+  ## Forward predictor: residuals into a new buffer.
+  result = src # copy; every pixel is overwritten below
+  let bxs = subSize(w, sizeBits)
+  let bys = subSize(h, sizeBits)
+  var res: seq[array[4, uint8]] = @[]
+  # top-left alpha special (decode adds 255)
+  result[0] = Rgba[uint8](data: [src[0].data[0], src[0].data[1],
+    src[0].data[2], uint8((int(src[0].data[3]) - 255) and 0xFF)])
+  # first row: left prediction
+  if w > 1:
+    fwdPredSeg(1, src, w, 0, 1, w, res)
+    for x in 1..<w:
+      result[x] = Rgba[uint8](data: res[x-1])
+  # first column: top prediction
+  for y in 1..<h:
+    let a = src[y*w].data; let t = src[(y-1)*w].data
+    var r: array[4, uint8]
+    for k in 0..3: r[k] = uint8((int(a[k]) - int(t[k])) and 0xFF)
+    result[y*w] = Rgba[uint8](data: r)
+  # interior blocks
+  for by in 0..<bys:
+    for bx in 0..<bxs:
+      let m = int(modes[by * bxs + bx])
+      let y0 = max(by shl sizeBits, 1)
+      let y1 = min((by + 1) shl sizeBits, h)
+      let x0 = max(bx shl sizeBits, 1)
+      let x1 = min((bx + 1) shl sizeBits, w)
+      for y in y0..<y1:
+        if x0 >= x1: continue
+        fwdPredSeg(m, src, w, y, x0, x1, res)
+        for x in x0..<x1:
+          result[y*w+x] = Rgba[uint8](data: res[x-x0])
+
+proc applySubGreenFwd*(px: var seq[Rgba[uint8]]) =
+  ## Forward subtract-green: R -= G, B -= G (decoder adds back).
+  for i in 0..<px.len:
+    let g = int(px[i].data[1])
+    px[i].data[0] = uint8((int(px[i].data[0]) - g) and 0xFF)
+    px[i].data[2] = uint8((int(px[i].data[2]) - g) and 0xFF)
+
+proc encodeStreamInto(w2: var Vp8lBitWriter, img: RgbaImage,
+    writeMeta: bool) =
+  ## LZ77 + Huffman stream (decodeStream format): cache flag, optional
+  ## meta-huffman flag, trees, ops. No signature/header/flush: callers
+  ## concatenate sub-streams (transform data) and flush once at the end.
   # order-0 literal cost estimates for the parse
   var gR = newSeq[int](256); var gG = newSeq[int](256)
   var gB = newSeq[int](256); var gA = newSeq[int](256)
@@ -1167,21 +1390,13 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
     gB[p.data[2]] += 1; gA[p.data[3]] += 1
   let eR = buildLens(gR); let eG = buildLens(gG)
   let eB = buildLens(gB); let eA = buildLens(gA)
+  let w = int(img.width)
   let (ops, fG, fR, fB, fA, fD) = parseLz77(img.pixels, w, eR, eG, eB, eA)
-  var w2: Vp8lBitWriter
-  w2.data.add(0x2F)
-  var hdr = uint32(w - 1) or (uint32(h - 1) shl 14)
-  var hasAlpha = false
-  for p in img.pixels:
-    if p.data[3] != 255: hasAlpha = true; break
-  if hasAlpha: hdr = hdr or (1'u32 shl 28)
-  for k in 0..3: w2.data.add(uint8((hdr shr (8*k)) and 0xFF))
-  w2.emitBits(0, 1) # transforms: none
   # NB: decodeStream reads the cache flag BEFORE the meta-huffman flag
   # (all-zero order was invisible when every flag was 0).
   w2.emitBits(1, 1) # color cache follows
   w2.emitBits(Vp8lCacheBits, 4)
-  w2.emitBits(0, 1) # no meta huffman
+  if writeMeta: w2.emitBits(0, 1) # no meta huffman
   let lG = buildLens(fG); let lR = buildLens(fR)
   let lB = buildLens(fB); let lA = buildLens(fA)
   # write 5 trees: green(280 + cache), red, blue, alpha, dist
@@ -1211,9 +1426,11 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
         if l != 0: inc(npresent)
       npresent == 1
   # Single-symbol trees decode without consuming bits, so the encoder must
-  # emit nothing for them either.
+  # emit nothing for them either. (Dist included: a stream with a single
+  # distance, e.g. all d==1 runs, builds a single-symbol dist tree.)
   let sG = isSingle(lG); let sR = isSingle(lR)
   let sB = isSingle(lB); let sA = isSingle(lA)
+  let sD = distUsed and isSingle(lD)
   var idx = 0
   var k = 0
   while k < ops.len:
@@ -1238,9 +1455,60 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
       let (ls, le, lnb) = lengthSymExtra(L)
       w2.emitBits(cG[256 + ls], nG[256 + ls])
       w2.emitBits(le, lnb)
-      w2.emitBits(cD[ds], nD[ds])
+      if not sD: w2.emitBits(cD[ds], nD[ds])
       w2.emitBits(de, distExtraBits(ds))
       idx += L; k += 8
+
+proc encodeStream*(img: RgbaImage, writeMeta: bool): seq[uint8] =
+  ## Standalone stream (main image body use writeMeta=true).
+  var w2: Vp8lBitWriter
+  encodeStreamInto(w2, img, writeMeta)
+  w2.emitFlush()
+  w2.data
+
+const Vp8lUseTransforms = true
+  ## Master switch for predictor + subtract-green. Always on (measured
+  ## wins across content; tiny overhead on incompressible data).
+
+proc encodeVp8l*(img: RgbaImage): seq[uint8] =
+  ## VP8L encoder: predictor + subtract-green transforms, LZ77 backward
+  ## matches + color cache, no meta-Huffman yet. Pixel-exact output any
+  ## spec decoder accepts.
+  let w = int(img.width); let h = int(img.height)
+  var hasAlpha = false
+  for p in img.pixels:
+    if p.data[3] != 255: hasAlpha = true; break
+  # predictor transform (always on for v1; residuals compress better
+  # across content and cost only a small mode image)
+  var px = img.pixels
+  var modes: seq[uint8] = @[]
+  var bxs = 0; var bys = 0
+  if Vp8lUseTransforms:
+    modes = choosePredictorModes(img.pixels, w, h, PredSizeBits)
+    px = applyPredictorFwd(img.pixels, w, h, PredSizeBits, modes)
+    # subtract-green (always on for v1; decorrelates R/B from G)
+    applySubGreenFwd(px)
+  var w2: Vp8lBitWriter
+  w2.data.add(0x2F)
+  var hdr = uint32(w - 1) or (uint32(h - 1) shl 14)
+  if hasAlpha: hdr = hdr or (1'u32 shl 28)
+  for k in 0..3: w2.data.add(uint8((hdr shr (8*k)) and 0xFF))
+  # transform 0: predictor
+  if Vp8lUseTransforms:
+    bxs = subSize(w, PredSizeBits); bys = subSize(h, PredSizeBits)
+    w2.emitBits(1, 1); w2.emitBits(0, 2); w2.emitBits(PredSizeBits - 2, 3)
+    var mpx = newSeq[Rgba[uint8]](bxs * bys)
+    for i, m in modes: mpx[i] = Rgba[uint8](data: [0'u8, m, 0, 0])
+    encodeStreamInto(w2,
+      RgbaImage(width: uint32(bxs), height: uint32(bys), pixels: move(mpx)),
+      false)
+    # transform 2: subtract-green (no data)
+    w2.emitBits(1, 1); w2.emitBits(2, 2)
+  w2.emitBits(0, 1) # end of transforms (none if transforms off)
+  # NB: decodeStream reads the cache flag BEFORE the meta-huffman flag
+  # (all-zero order was invisible when every flag was 0).
+  var timg = RgbaImage(width: img.width, height: img.height, pixels: move(px))
+  encodeStreamInto(w2, timg, true)
   w2.emitFlush()
   w2.data
 
