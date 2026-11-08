@@ -12,6 +12,13 @@ import ./isobmff
 import ./items
 import ./props
 import ./unc
+import ./derived
+import ./groups
+import ./writer
+
+export groups
+export writer
+export derived
 
 proc rotateCcw[P](img: ImageBuffer[P], turns: int): ImageBuffer[P] =
   let t = ((turns mod 4) + 4) mod 4
@@ -51,12 +58,25 @@ proc flipImg[P](img: ImageBuffer[P], topBottom: bool): ImageBuffer[P] =
 const KnownDescriptive = ["ispe", "pixi", "colr", "hvcC", "lhvC", "vvcC",
   "avcC", "jpgC", "j2kH", "uncC", "cmpd", "cmpC", "pasp", "auxC", "rloc",
   "lsel", "clli", "mdcv", "cclv", "amve", "ndwt", "rref", "tols", "subs",
-  "oinf", "udes"]
+  "oinf", "udes", "altt", "crtt", "mdft"]
 const KnownTransformative = ["irot", "imir", "clap", "iscl"]
+
+proc scaleNearest[P](img: ImageBuffer[P], nw, nh: int): ImageBuffer[P] =
+  if nw <= 0 or nh <= 0 or nw > 16384 or nh > 16384:
+    raise heifErr("heif: bad iscl target")
+  let sw = int(img.width)
+  let sh = int(img.height)
+  var px = newSeq[P](nw * nh)
+  for y in 0 ..< nh:
+    let sy = min(sh - 1, (y * sh) div nh)
+    for x in 0 ..< nw:
+      let sx = min(sw - 1, (x * sw) div nw)
+      px[y * nw + x] = img.pixels[sy * sw + sx]
+  ImageBuffer[P](width: uint32(nw), height: uint32(nh), pixels: move(px))
 
 proc applyTransforms(img: DynamicImage,
     props: seq[RawProperty]): ImageResult[DynamicImage] =
-  ## irot/imir/clap in property order (23008-12 transformative order).
+  ## irot/imir/clap/iscl in property order (23008-12 transformative order).
   var cur = img
   for pr in props:
     if pr.kind == "irot":
@@ -98,6 +118,26 @@ proc applyTransforms(img: DynamicImage,
       else:
         return err[DynamicImage](unsupportedError(ukGenericFeature,
           "heif: clap on this color type unsupported"))
+    elif pr.kind == "iscl":
+      try:
+        let s = parseIscl(pr.payload)
+        if s.wDen == 0 or s.hDen == 0 or s.wNum == 0 or s.hNum == 0:
+          return err[DynamicImage](decodingError("heif: bad iscl"))
+        let (w, h) = cur.dimensions()
+        let nw = (int(w) * int(s.wNum) + int(s.wDen) - 1) div int(s.wDen)
+        let nh = (int(h) * int(s.hNum) + int(s.hDen) - 1) div int(s.hDen)
+        case cur.kind
+        of dkRgb8: cur.rgb8 = scaleNearest(cur.rgb8, nw, nh)
+        of dkRgba8: cur.rgba8 = scaleNearest(cur.rgba8, nw, nh)
+        of dkLuma8: cur.luma8 = scaleNearest(cur.luma8, nw, nh)
+        of dkRgb16: cur.rgb16 = scaleNearest(cur.rgb16, nw, nh)
+        of dkRgba16: cur.rgba16 = scaleNearest(cur.rgba16, nw, nh)
+        of dkLuma16: cur.luma16 = scaleNearest(cur.luma16, nw, nh)
+        else:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: iscl on this color type unsupported"))
+      except HeifDecodeError as e:
+        return err[DynamicImage](decodingError(e.msg))
     elif pr.essential:
       var descriptive = false
       for k in KnownDescriptive:
@@ -138,7 +178,9 @@ proc effectiveDescriptive(props: seq[RawProperty]): seq[RawProperty] =
     result.add(pr)
 
 proc decodePrimary(data: seq[uint8], meta: HeifMeta,
-    id: uint32): ImageResult[DynamicImage] =
+    id: uint32, depth = 0): ImageResult[DynamicImage] =
+  if depth > 8:
+    return err[DynamicImage](decodingError("heif: derivation too deep"))
   let (found, item) = findItem(meta, id)
   if not found:
     return err[DynamicImage](decodingError("heif: primary item not found"))
@@ -146,13 +188,101 @@ proc decodePrimary(data: seq[uint8], meta: HeifMeta,
     # identity: single dimg reference carries the coded image
     for r in meta.refs:
       if r.fromId == id and r.refType == "dimg" and r.toIds.len == 1:
-        let inner = decodePrimary(data, meta, r.toIds[0])
+        let inner = decodePrimary(data, meta, r.toIds[0], depth + 1)
         if not inner.ok: return inner
         return applyTransforms(inner.value, itemProps(meta, id))
     return err[DynamicImage](decodingError("heif: bad iden references"))
-  if item.typ == "grid" or item.typ == "iovl":
-    return err[DynamicImage](unsupportedError(ukGenericFeature,
-      "heif: derived image '" & item.typ & "' unsupported"))
+  if item.typ == "grid":
+    var tids: seq[uint32] = @[]
+    for r in meta.refs:
+      if r.fromId == id and r.refType == "dimg":
+        tids = r.toIds
+        break
+    if tids.len == 0:
+      return err[DynamicImage](decodingError("heif: grid missing dimg"))
+    var payload: seq[uint8] = @[]
+    try:
+      payload = itemBytes(data, meta, id)
+    except HeifDecodeError as e:
+      return err[DynamicImage](decodingError(e.msg))
+    var g: GridInfo
+    try:
+      g = parseGrid(payload)
+    except HeifDecodeError as e:
+      return err[DynamicImage](decodingError(e.msg))
+    if tids.len != g.rows * g.cols:
+      return err[DynamicImage](decodingError("heif: grid count mismatch"))
+    var tiles: seq[DynamicImage] = @[]
+    for t in tids:
+      let d = decodePrimary(data, meta, t, depth + 1)
+      if not d.ok: return d
+      tiles.add(d.value)
+    # All tiles must share kind; composite 8-bit RGB/RGBA fast paths.
+    if tiles[0].kind == dkRgb8:
+      var rgbTiles: seq[RgbImage] = @[]
+      for t in tiles:
+        if t.kind != dkRgb8:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed grid tile kinds"))
+        rgbTiles.add(t.rgb8)
+      # Tile sizes must match
+      let tw = rgbTiles[0].width
+      let th = rgbTiles[0].height
+      for t in rgbTiles:
+        if t.width != tw or t.height != th:
+          return err[DynamicImage](decodingError("heif: grid tile size mismatch"))
+      let comp = compositeGridRgb8(rgbTiles, g)
+      return applyTransforms(DynamicImage(kind: dkRgb8, rgb8: comp),
+        itemProps(meta, id))
+    elif tiles[0].kind == dkRgba8:
+      var raTiles: seq[RgbaImage] = @[]
+      for t in tiles:
+        if t.kind != dkRgba8:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed grid tile kinds"))
+        raTiles.add(t.rgba8)
+      let comp = compositeGridRgba8(raTiles, g)
+      return applyTransforms(DynamicImage(kind: dkRgba8, rgba8: comp),
+        itemProps(meta, id))
+    else:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "heif: grid tile kind unsupported"))
+  if item.typ == "iovl":
+    var tids: seq[uint32] = @[]
+    for r in meta.refs:
+      if r.fromId == id and r.refType == "dimg":
+        tids = r.toIds
+        break
+    if tids.len == 0:
+      return err[DynamicImage](decodingError("heif: overlay missing dimg"))
+    var payload: seq[uint8] = @[]
+    try:
+      payload = itemBytes(data, meta, id)
+    except HeifDecodeError as e:
+      return err[DynamicImage](decodingError(e.msg))
+    var ov: OverlayInfo
+    try:
+      ov = parseOverlay(payload, tids.len)
+    except HeifDecodeError as e:
+      return err[DynamicImage](decodingError(e.msg))
+    var layers: seq[DynamicImage] = @[]
+    for t in tids:
+      let d = decodePrimary(data, meta, t, depth + 1)
+      if not d.ok: return d
+      layers.add(d.value)
+    if layers[0].kind == dkRgb8:
+      var rgbLayers: seq[RgbImage] = @[]
+      for l in layers:
+        if l.kind != dkRgb8:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed overlay kinds"))
+        rgbLayers.add(l.rgb8)
+      let comp = compositeOverlayRgb8(rgbLayers, ov)
+      return applyTransforms(DynamicImage(kind: dkRgb8, rgb8: comp),
+        itemProps(meta, id))
+    else:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "heif: overlay kind unsupported"))
   if item.typ == "hvc1" or item.typ == "hev1" or item.typ == "lhv1":
     return err[DynamicImage](unsupportedError(ukFormat,
       "heif: HEVC bitstream decoding not implemented in pure-Nim v1"))
@@ -235,8 +365,9 @@ proc decodePrimary(data: seq[uint8], meta: HeifMeta,
     "heif: item type '" & item.typ & "' unsupported"))
 
 proc decodeHeif*(data: seq[uint8]): ImageResult[DynamicImage] =
-  ## Decode a HEIF/HEIC still (primary item). Still image items only;
-  ## sequences, grids/overlays and video bitstreams stay Unsupported.
+  ## Decode a HEIF/HEIC still (primary item). Handles uncompressed,
+  ## JPEG, and derived grid/overlay/identity stills. Video bitstreams
+  ## stay Unsupported (passthrough via extractors).
   if data.len < 12:
     return err[DynamicImage](decodingError("heif: too short"))
   try:
@@ -246,6 +377,72 @@ proc decodeHeif*(data: seq[uint8]): ImageResult[DynamicImage] =
     decodePrimary(data, meta, meta.primaryId)
   except HeifDecodeError as e:
     err[DynamicImage](decodingError(e.msg))
+
+proc listHeifItems*(data: seq[uint8]): ImageResult[seq[HeifItem]] =
+  if data.len < 12:
+    return err[seq[HeifItem]](decodingError("heif: too short"))
+  try:
+    ok(parseMeta(data).items)
+  except HeifDecodeError as e:
+    err[seq[HeifItem]](decodingError(e.msg))
+
+proc decodeHeifItem*(data: seq[uint8], itemId: uint32): ImageResult[DynamicImage] =
+  if data.len < 12:
+    return err[DynamicImage](decodingError("heif: too short"))
+  try:
+    let meta = parseMeta(data)
+    decodePrimary(data, meta, itemId)
+  except HeifDecodeError as e:
+    err[DynamicImage](decodingError(e.msg))
+
+proc decodeHeifAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
+  ## Decode every top-level image item (master + thumbs). Derived
+  ## items are resolved; hidden tiles are included when directly listed.
+  if data.len < 12:
+    return err[seq[DynamicImage]](decodingError("heif: too short"))
+  try:
+    let meta = parseMeta(data)
+    var outs: seq[DynamicImage] = @[]
+    for it in meta.items:
+      if it.typ == "unci" or it.typ == "jpeg" or it.typ == "grid" or
+          it.typ == "iovl" or it.typ == "iden":
+        let d = decodePrimary(data, meta, it.id)
+        if d.ok: outs.add(d.value)
+    ok(outs)
+  except HeifDecodeError as e:
+    err[seq[DynamicImage]](decodingError(e.msg))
+
+proc heifGroups*(data: seq[uint8]): ImageResult[seq[EntityGroup]] =
+  if data.len < 12:
+    return err[seq[EntityGroup]](decodingError("heif: too short"))
+  try:
+    for b in topLevelBoxes(data):
+      if b.isTypeStr("meta"):
+        return ok(parseEntityGroups(data, b))
+    ok(newSeq[EntityGroup]())
+  except HeifDecodeError as e:
+    err[seq[EntityGroup]](decodingError(e.msg))
+
+proc heifMetadata*(data: seq[uint8]): ImageResult[seq[tuple[id: uint32,
+    typ: string, contentType: string, bytes: seq[uint8]]]] =
+  ## List metadata items (Exif / mime / uri) with their raw bytes.
+  ## Image items are skipped; cdsc links are available via iref parsing
+  ## when needed.
+  if data.len < 12:
+    return err[seq[tuple[id: uint32, typ: string, contentType: string,
+      bytes: seq[uint8]]]](decodingError("heif: too short"))
+  try:
+    let meta = parseMeta(data)
+    var outs: seq[tuple[id: uint32, typ: string, contentType: string,
+      bytes: seq[uint8]]] = @[]
+    for it in meta.items:
+      if it.typ == "Exif" or it.typ == "mime" or it.typ == "uri ":
+        outs.add((it.id, it.typ, it.contentType,
+          itemBytes(data, meta, it.id)))
+    ok(outs)
+  except HeifDecodeError as e:
+    err[seq[tuple[id: uint32, typ: string, contentType: string,
+      bytes: seq[uint8]]]](decodingError(e.msg))
 
 proc decodeHeic*(data: seq[uint8]): ImageResult[DynamicImage] =
   ## Alias: HEIC is HEIF with an HEVC brand; same container path.

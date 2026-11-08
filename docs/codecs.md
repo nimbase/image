@@ -21,7 +21,7 @@ check the return type before calling `.value`.
 | TIFF | o+w: strips/tiles, chunky/planar, None/LZW/Deflate/PackBits, YCbCr/CMYK/palette. First page by default | `decodeTiff` / `decodeTiffAll` | `encodeTiff` → `ImageResult` |
 | WebP | o+w: lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green, per-block color and meta-Huffman transforms; no color-index yet) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100). No animation / VP8X alpha | `decodeWebp` → `DynamicImage` | `encodeWebp` (lossless, `ImageResult`), `encodeWebpLossy(RgbaImage, quality)` (raw VP8 frame → RIFF) |
 | AVIF | color math only: BT.601/709/2020 YCbCr, YCgCo-Re, yuv420→rgb. No AV1 bitstream | `decodeAvif` (v1 stub → `ekUnsupported`) | `encodeAvif` (stub) |
-| HEIF/HEIC | o (decode-only): ISOBMFF + uncompressed (`unci` v0/v1) + JPEG-in-HEIF + `irot`/`imir`/`clap`/`iden`. No HEVC/VVC/AVC/JPEG2000 bitstreams, grids, overlays, sequences | `decodeHeif` / `decodeHeic` → `DynamicImage` | — (none) |
+| HEIF/HEIC | o+w: ISOBMFF container + uncompressed (`unci` v0/v1) + JPEG-in-HEIF + `iden`/`grid`/`iovl` + `irot`/`imir`/`clap`/`iscl` + thumbnails/aux/entity-groups/Exif/mime. No HEVC/VVC/AVC/JPEG2000 bitstream decode (passthrough via extractors), no timed sequences | `decodeHeif` / `decodeHeic` / `decodeHeifAll` / `decodeHeifItem` → `DynamicImage`, `heifMetadata`, `heifGroups` | `encodeHeif`, `encodeHeifJpeg`, `writeCollection` (`HeifCollection`) |
 
 ## Quirks worth knowing
 

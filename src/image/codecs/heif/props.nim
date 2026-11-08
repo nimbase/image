@@ -194,3 +194,173 @@ proc parseCmpC*(payload: seq[uint8]): string =
   var id = ""
   for i in 4 ..< 8: id.add(char(payload[i]))
   id
+
+# --- Additional descriptive properties (reader) ---
+
+type
+  PixelAspect* = object
+    hSpacing*, vSpacing*: uint32
+  AuxType* = object
+    auxType*: string
+  RelLoc* = object
+    hOff*, vOff*: uint32
+  LayerSel* = object
+    layerId*: uint16
+  UserDesc* = object
+    lang*, name*, desc*, tags*: string
+
+proc parsePasp*(payload: seq[uint8]): PixelAspect =
+  if payload.len < 8:
+    raise heifErr("heif: truncated pasp")
+  PixelAspect(
+    hSpacing: (uint32(payload[0]) shl 24) or (uint32(payload[1]) shl 16) or
+      (uint32(payload[2]) shl 8) or uint32(payload[3]),
+    vSpacing: (uint32(payload[4]) shl 24) or (uint32(payload[5]) shl 16) or
+      (uint32(payload[6]) shl 8) or uint32(payload[7]))
+
+proc parseAuxC*(payload: seq[uint8]): AuxType =
+  if payload.len < 5: raise heifErr("heif: truncated auxC")
+  var s = ""
+  var i = 4
+  while i < payload.len and payload[i] != 0:
+    s.add(char(payload[i])); inc(i)
+  if i >= payload.len: raise heifErr("heif: bad auxC string")
+  AuxType(auxType: s)
+
+proc parseRloc*(payload: seq[uint8]): RelLoc =
+  if payload.len < 12: raise heifErr("heif: truncated rloc")
+  RelLoc(
+    hOff: (uint32(payload[4]) shl 24) or (uint32(payload[5]) shl 16) or
+      (uint32(payload[6]) shl 8) or uint32(payload[7]),
+    vOff: (uint32(payload[8]) shl 24) or (uint32(payload[9]) shl 16) or
+      (uint32(payload[10]) shl 8) or uint32(payload[11]))
+
+proc parseLsel*(payload: seq[uint8]): LayerSel =
+  if payload.len < 2: raise heifErr("heif: truncated lsel")
+  LayerSel(layerId: (uint16(payload[0]) shl 8) or uint16(payload[1]))
+
+type
+  ScaleInfo* = object
+    wNum*, wDen*, hNum*, hDen*: uint16
+
+proc parseIscl*(payload: seq[uint8]): ScaleInfo =
+  if payload.len < 12: raise heifErr("heif: truncated iscl")
+  proc u16o(o: int): uint16 =
+    (uint16(payload[o]) shl 8) or uint16(payload[o+1])
+  ScaleInfo(wNum: u16o(4), wDen: u16o(6), hNum: u16o(8), hDen: u16o(10))
+
+proc readUtf8Str(payload: seq[uint8], pos: var int): string =
+  result = ""
+  while pos < payload.len and payload[pos] != 0:
+    result.add(char(payload[pos])); inc(pos)
+  if pos >= payload.len: raise heifErr("heif: bad utf8 string")
+  inc(pos) # skip NUL
+
+proc parseUdes*(payload: seq[uint8]): UserDesc =
+  if payload.len < 5: raise heifErr("heif: truncated udes")
+  var pos = 4
+  let lang = readUtf8Str(payload, pos)
+  let name = readUtf8Str(payload, pos)
+  let desc = readUtf8Str(payload, pos)
+  let tags = readUtf8Str(payload, pos)
+  UserDesc(lang: lang, name: name, desc: desc, tags: tags)
+
+proc parseAltt*(payload: seq[uint8]): UserDesc =
+  if payload.len < 5: raise heifErr("heif: truncated altt")
+  var pos = 4
+  let text = readUtf8Str(payload, pos)
+  let lang = readUtf8Str(payload, pos)
+  UserDesc(lang: lang, name: text, desc: "", tags: "")
+
+# --- Property builders (writer) ---
+# Each returns the full property payload as stored in ipco
+# (including FullBox header where applicable).
+
+proc buildIspe*(w, h: uint32): seq[uint8] =
+  result = @[]
+  result.putFullHeader(0, 0)
+  result.putU32BE(w)
+  result.putU32BE(h)
+
+proc buildPixi*(bits: openArray[int]): seq[uint8] =
+  result = @[]
+  result.putFullHeader(0, 0)
+  result.add(uint8(bits.len))
+  for b in bits: result.add(uint8(b))
+
+proc buildNclx*(primaries, transfer: uint16, matrix: uint8,
+    fullRange: bool): seq[uint8] =
+  result = @[]
+  result.put4CC("nclx")
+  result.putU16BE(primaries)
+  result.putU16BE(transfer)
+  result.add(matrix)
+  result.add(if fullRange: 0x80'u8 else: 0x00'u8)
+  result.add(0); result.add(0); result.add(0)
+
+proc buildIrot*(turns: int): seq[uint8] =
+  @[uint8(turns and 3)]
+
+proc buildImir*(topBottom: bool): seq[uint8] =
+  @[if topBottom: 0'u8 else: 1'u8]
+
+proc buildClap*(wNum, wDen, hNum, hDen: uint32, hOff, vOff: int32): seq[uint8] =
+  result = @[]
+  result.putU32BE(wNum); result.putU32BE(wDen)
+  result.putU32BE(hNum); result.putU32BE(hDen)
+  result.putU32BE(cast[uint32](hOff)); result.putU32BE(wDen)
+  result.putU32BE(cast[uint32](vOff)); result.putU32BE(hDen)
+
+proc buildPasp*(h, v: uint32): seq[uint8] =
+  result = @[]
+  result.putU32BE(h); result.putU32BE(v)
+
+proc buildAuxC*(uri: string): seq[uint8] =
+  result = @[]
+  result.putFullHeader(0, 0)
+  for c in uri: result.add(uint8(c))
+  result.add(0)
+
+proc buildRloc*(h, v: uint32): seq[uint8] =
+  result = @[]
+  result.putFullHeader(0, 0)
+  result.putU32BE(h); result.putU32BE(v)
+
+proc buildIscl*(wNum, wDen, hNum, hDen: uint16): seq[uint8] =
+  result = @[]
+  result.putFullHeader(0, 0)
+  result.putU16BE(wNum); result.putU16BE(wDen)
+  result.putU16BE(hNum); result.putU16BE(hDen)
+
+proc putUtf8Str(dst: var seq[uint8], s: string) =
+  for c in s: dst.add(uint8(c))
+  dst.add(0)
+
+proc buildUdes*(lang, name, desc, tags: string): seq[uint8] =
+  result = @[]
+  result.putFullHeader(0, 0)
+  result.putUtf8Str(lang); result.putUtf8Str(name)
+  result.putUtf8Str(desc); result.putUtf8Str(tags)
+
+proc buildUncCV1*(tag: string): seq[uint8] =
+  result = @[]
+  result.putFullHeader(1, 0)
+  result.put4CC(tag)
+
+proc buildUncCV0*(depth: int, sampling, interleave: int,
+    compTypes: openArray[int]): seq[uint8] =
+  result = @[]
+  result.putFullHeader(0, 0)
+  result.putU32BE(uint32(compTypes.len))
+  for t in compTypes:
+    result.putU16BE(uint16(t))
+    result.add(0) # flags
+    result.add(uint8(depth - 1))
+    result.add(0); result.add(0)
+  result.add(uint8(sampling))
+  result.add(uint8(interleave))
+
+proc buildCmpd*(compTypes: openArray[int]): seq[uint8] =
+  result = @[]
+  result.putU32BE(uint32(compTypes.len))
+  for t in compTypes: result.putU16BE(uint16(t))

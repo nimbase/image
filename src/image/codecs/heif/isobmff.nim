@@ -120,3 +120,53 @@ proc boxFlags*(data: seq[uint8], b: Box): uint32 =
   (uint32(data[b.payloadOff + 1]) shl 16) or
     (uint32(data[b.payloadOff + 2]) shl 8) or
     uint32(data[b.payloadOff + 3])
+
+# --- Box writer helpers (clean-room, MIT) ---
+# Builders emit ISOBMFF framing: u32 size + 4CC + payload.
+# Large sizes (>= 2^32) use size==1 + u64 largesize.
+
+proc putU16BE*(dst: var seq[uint8], v: uint16) =
+  dst.add(uint8(v shr 8))
+  dst.add(uint8(v and 0xFF))
+
+proc putU32BE*(dst: var seq[uint8], v: uint32) =
+  dst.add(uint8(v shr 24))
+  dst.add(uint8((v shr 16) and 0xFF))
+  dst.add(uint8((v shr 8) and 0xFF))
+  dst.add(uint8(v and 0xFF))
+
+proc putU64BE*(dst: var seq[uint8], v: uint64) =
+  for s in [56, 48, 40, 32, 24, 16, 8, 0]:
+    dst.add(uint8((v shr s) and 0xFF))
+
+proc put4CC*(dst: var seq[uint8], s: string) =
+  doAssert s.len == 4
+  for i in 0 ..< 4: dst.add(uint8(s[i]))
+
+proc putBytes*(dst: var seq[uint8], b: openArray[uint8]) =
+  for x in b: dst.add(x)
+
+proc putFullHeader*(dst: var seq[uint8], version: uint8, flags: uint32) =
+  dst.add(version)
+  dst.add(uint8((flags shr 16) and 0xFF))
+  dst.add(uint8((flags shr 8) and 0xFF))
+  dst.add(uint8(flags and 0xFF))
+
+proc makeBox*(typ: string, payload: openArray[uint8]): seq[uint8] =
+  let total = uint64(8 + payload.len)
+  result = @[]
+  if total < 0xFFFFFFFF'u64:
+    result.putU32BE(uint32(total))
+    result.put4CC(typ)
+  else:
+    result.putU32BE(1)
+    result.put4CC(typ)
+    result.putU64BE(total + 8)
+  result.putBytes(payload)
+
+proc makeFullBox*(typ: string, version: uint8, flags: uint32,
+    payload: openArray[uint8]): seq[uint8] =
+  var inner: seq[uint8] = @[]
+  inner.putFullHeader(version, flags)
+  inner.putBytes(payload)
+  makeBox(typ, inner)

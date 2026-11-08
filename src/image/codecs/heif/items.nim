@@ -10,6 +10,9 @@ type
     id*: uint32
     typ*: string
     hidden*: bool
+    contentType*: string ## for 'mime' (e.g. application/rdf+xml)
+    itemName*: string
+    itemUri*: string ## for 'uri ' items
 
   ItemExtent* = object
     ## Absolute file offset + length of one data run.
@@ -100,6 +103,24 @@ proc parseInfe(data: seq[uint8], b: Box, meta: var HeifMeta) =
     item.typ = ""
     for i in 0 ..< 4: item.typ.add(char(p[off + i]))
     off += 4
+    # Trailing: item_name NUL, then content_type NUL (mime),
+    # or item_uri_type (uri ). Best-effort, never fails the file.
+    if off < p.len:
+      var s = ""
+      while off < p.len and p[off] != 0:
+        s.add(char(p[off])); inc(off)
+      if off < p.len: inc(off) # skip NUL
+      item.itemName = s
+      if item.typ == "mime" and off < p.len:
+        var c = ""
+        while off < p.len and p[off] != 0:
+          c.add(char(p[off])); inc(off)
+        item.contentType = c
+      elif item.typ == "uri " and off < p.len:
+        var u = ""
+        while off < p.len and p[off] != 0:
+          u.add(char(p[off])); inc(off)
+        item.itemUri = u
     meta.items.add(item)
   else:
     raise heifErr("heif: unsupported infe version (only v2/v3)")
