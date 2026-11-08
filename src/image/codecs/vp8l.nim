@@ -535,12 +535,20 @@ proc decodeStream(r: var LsbReader, xsize, ysize: int, isArgb: bool,
       for k in 0..3: data[idx*4+k] = col[k]
       inc(idx)
       if idx < nextBlock:
-        let (hit, ln2, sym2) = peekSymbol(tree[0], r)
-        if hit and int(sym2) >= 280:
-          r.buf = r.buf shr ln2; r.nbits -= ln2
-          let col2 = info.cache[int(sym2) - 280]
-          for k in 0..3: data[idx*4+k] = col2[k]
-          inc(idx)
+        # Peek-ahead for back-to-back cache hits. peekSymbol reads the
+        # table with zero-padded bits, so it must only run with a full
+        # 16-bit window buffered: after a long code nbits can be small
+        # and the padded lookup can alias a hit leaf, consuming real
+        # bits mid-symbol and desyncing the stream. (Found via our own
+        # encoder's longer hit codes; cwebp streams rarely triggered it.)
+        if r.nbits < 16: r.fillBits()
+        if r.nbits >= 16:
+          let (hit, ln2, sym2) = peekSymbol(tree[0], r)
+          if hit and int(sym2) >= 280:
+            r.buf = r.buf shr ln2; r.nbits -= ln2
+            let col2 = info.cache[int(sym2) - 280]
+            for k in 0..3: data[idx*4+k] = col2[k]
+            inc(idx)
   (true, info)
 
 type Transform = object
@@ -765,7 +773,181 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
     return err[DynamicImage](decodingError("webp: missing VP8 data"))
   err[DynamicImage](decodingError("webp: no image chunk"))
 
-# ---------- literal-only VP8L encoder ----------
+# ---------- LZ77 + color-cache VP8L encoder (Phase A) ----------
+
+const Vp8lCacheBits = 7
+  ## Fixed color-cache exponent. The unused-cache overhead (flag bits +
+  ## zero RLE in the green tree) is a few bytes, not worth adapting.
+const Vp8lCacheSize = 1 shl Vp8lCacheBits
+const Vp8lHashBits = 18
+const Vp8lHashSize = 1 shl Vp8lHashBits
+const Vp8lMaxMatch = 4096 ## longest copyDist length (prefix 23)
+const Vp8lMinMatch = 3
+const Vp8lMaxDistPix = 1048456 ## longest pixel distance the 40 dist codes cover
+const Vp8lSymEst = 12
+  ## Parse-time flat estimate for a length/cache/dist Huffman symbol.
+  ## True code lengths are unknown until the parse fixes frequencies;
+  ## extra-bit counts are exact. A second parse pass could refine this.
+
+func packArgb(px: array[4, uint8]): uint32 =
+  ## Decoder-identical packing (see cacheInsert): A in the high byte.
+  ## Used both for the color cache index and the match-search hash.
+  (uint32(px[0]) shl 16) or (uint32(px[1]) shl 8) or uint32(px[2]) or
+    (uint32(px[3]) shl 24)
+
+func cacheIdxU(u: uint32, bits: int): int =
+  int((0x1E35A7BD'u32 * u) shr (32 - bits))
+
+func lengthSymExtra*(ln: int): tuple[sym, extra, nbits: int] =
+  ## Inverse of copyDist: prefix sym, extra value, extra bit count.
+  ## The prefix ranges partition N, so this is a pure function of ln
+  ## (shared by length codes 0..23 and the direct distance path 0..39).
+  if ln <= 4:
+    return (ln - 1, 0, 0)
+  let m = ln - 1
+  var e = 0
+  var t = m
+  while t >= 4:
+    t = t shr 1
+    inc(e)
+  let off = if m < (3 shl e): (2 shl e) else: (3 shl e)
+  let sym = if m < (3 shl e): 2 * e + 2 else: 2 * e + 3
+  (sym, m - off, e)
+
+func distExtraBits(sym: int): int =
+  if sym < 4: 0 else: (sym - 2) shr 1
+
+proc distChoice*(d, xsize: int, dcost: openArray[int]): tuple[sym, extra: int,
+    ok: bool] =
+  ## Cheapest (prefix, extra) encoding pixel distance d, or ok=false when
+  ## d is not encodable. Mirrors the decoder: a copyDist result n > 120 is
+  ## a direct distance (d = n - 120), else a DistMap 2-D code
+  ## (d = max(1, dx + dy * xsize)).
+  if d < 1 or d > Vp8lMaxDistPix:
+    return (0, 0, false)
+  var bestSym = -1
+  var bestExtra = 0
+  var bestCost = high(int)
+  # direct path: n = d + 120 must be achievable
+  let (s, e, nb) = lengthSymExtra(d + 120)
+  if s <= 39:
+    bestSym = s; bestExtra = e; bestCost = dcost[s] + nb
+  # 2-D path: prefixes whose copyDist range intersects 1..120
+  for p in 0..39:
+    var e, off, nmin, nmax: int
+    if p < 4:
+      e = 0; off = 0; nmin = p + 1; nmax = p + 1
+    else:
+      e = (p - 2) shr 1
+      off = (2 + (p and 1)) shl e
+      nmin = off + 1; nmax = off + (1 shl e)
+    if nmin > 120: break # ranges grow monotonically with p
+    for nn in nmin..min(nmax, 120):
+      let (dx, dy) = DistMap[nn - 1]
+      var dd = dx + dy * xsize
+      if dd < 1: dd = 1
+      if dd == d:
+        # same prefix => same cost for any nn; first hit has fewest extras.
+        # Prefixes < 4 carry no extra bits (n = p + 1 exactly), so the
+        # extra value must be 0 — a nonzero value would be OR-ed into the
+        # bit buffer by emitBits(v, 0) and corrupt the stream.
+        let c = dcost[p] + e
+        if c < bestCost:
+          bestCost = c; bestSym = p
+          bestExtra = if p < 4: 0 else: nn - off - 1
+        break
+  if bestSym < 0: return (0, 0, false)
+  (bestSym, bestExtra, true)
+
+proc parseLz77*(px: seq[Rgba[uint8]], w: int, eR, eG, eB, eA: openArray[uint16]):
+    tuple[ops: seq[uint8], fG, fR, fB, fA, fD: seq[int]] =
+  ## Greedy cost-based LZ77 parse with a color cache shadowing the decoder.
+  ## Ops byte buffer: 0 = literal, 1 = cache hit, 2 = copy followed by
+  ## u16LE length, u8 dist sym, u32LE dist extra (8 bytes total).
+  ## Cache rules mirror decodeStream exactly: literals insert, hits and
+  ## d==1 copies do not, d>1 copies insert each pixel in order.
+  let n = px.len
+  var fG = newSeq[int](280 + Vp8lCacheSize)
+  var fR = newSeq[int](256); var fB = newSeq[int](256)
+  var fA = newSeq[int](256); var fD = newSeq[int](40)
+  var estD: array[40, int]
+  for k in 0..39: estD[k] = Vp8lSymEst
+  var head = newSeq[int](Vp8lHashSize)
+  for k in 0..<Vp8lHashSize: head[k] = -1
+  var cache: array[Vp8lCacheSize, array[4, uint8]]
+  var cacheFull: array[Vp8lCacheSize, bool]
+  var ops: seq[uint8] = @[]
+  var i = 0
+  while i < n:
+    let p = px[i].data
+    let u = packArgb(p)
+    let h = int((0x1E35A7BD'u32 * u) shr (32 - Vp8lHashBits))
+    let litCost = int(eR[p[0]]) + int(eG[p[1]]) + int(eB[p[2]]) + int(eA[p[3]])
+    let ci = cacheIdxU(u, Vp8lCacheBits)
+    var hit = false
+    if cacheFull[ci]:
+      let c = cache[ci]
+      hit = c[0] == p[0] and c[1] == p[1] and c[2] == p[2] and c[3] == p[3]
+    # match candidates: d==1 run first, then the hash candidate
+    var mLen = 0
+    var mDist = 0
+    var mSym = 0
+    var mExtra = 0
+    var mCost = high(int)
+    template considerMatch(L, d: int) =
+      if L >= Vp8lMinMatch:
+        let (_, le, lnb) = lengthSymExtra(L)
+        let (ds, de, dok) = distChoice(d, w, estD)
+        if dok:
+          let c = Vp8lSymEst + lnb + Vp8lSymEst + distExtraBits(ds)
+          if c < mCost:
+            mCost = c; mLen = L; mDist = d; mSym = ds; mExtra = de
+    if i > 0 and px[i-1].data == p:
+      var L = 1
+      while L < Vp8lMaxMatch and i + L < n and px[i+L].data == p: inc(L)
+      considerMatch(L, 1)
+    let j = head[h]
+    if j >= 0:
+      let d = i - j
+      if d <= Vp8lMaxDistPix:
+        var L = 0
+        while L < Vp8lMaxMatch and i + L < n and j + L < n and
+            px[j+L].data == px[i+L].data:
+          inc(L)
+        considerMatch(L, d)
+    if mLen >= Vp8lMinMatch and mCost < litCost and
+        (not hit or mCost < Vp8lSymEst):
+      let (ls, _, _) = lengthSymExtra(mLen)
+      fG[256 + ls] += 1
+      fD[mSym] += 1
+      ops.add(2)
+      ops.add(uint8(mLen and 0xFF)); ops.add(uint8(mLen shr 8))
+      ops.add(uint8(mSym))
+      ops.add(uint8(mExtra and 0xFF)); ops.add(uint8((mExtra shr 8) and 0xFF))
+      ops.add(uint8((mExtra shr 16) and 0xFF))
+      ops.add(uint8(mExtra shr 24))
+      for k in 0..<mLen:
+        let q = px[i+k].data
+        let qu = packArgb(q)
+        head[int((0x1E35A7BD'u32 * qu) shr (32 - Vp8lHashBits))] = i + k
+        if mDist != 1:
+          let qci = cacheIdxU(qu, Vp8lCacheBits)
+          cache[qci] = q
+          cacheFull[qci] = true
+      i += mLen
+    elif hit and Vp8lSymEst < litCost:
+      fG[280 + ci] += 1
+      ops.add(1)
+      head[h] = i
+      i += 1
+    else:
+      fG[p[1]] += 1; fR[p[0]] += 1; fB[p[2]] += 1; fA[p[3]] += 1
+      ops.add(0)
+      cache[ci] = p
+      cacheFull[ci] = true
+      head[h] = i
+      i += 1
+  (ops, fG, fR, fB, fA, fD)
 
 proc buildLens*(freqs: openArray[int], maxLen = 15): seq[uint16] =
   ## Classic Huffman lengths with a libjpeg-style length-limit adjustment
@@ -876,6 +1058,8 @@ type Vp8lBitWriter = object
   nbits: int
 
 proc emitBits(w: var Vp8lBitWriter, v, n: int) =
+  if n == 0: return # writing zero bits must not touch the buffer: OR-ing
+    # a nonzero v here would corrupt already-buffered bits of the next byte
   w.buf = w.buf or (uint32(v) shl w.nbits)
   w.nbits += n
   while w.nbits >= 8:
@@ -949,10 +1133,19 @@ proc writeCodeLengths(w: var Vp8lBitWriter, lens: openArray[uint16], numSyms: in
     w.emitBits(int(clLens[Order[k]]), 3)
   w.emitBits(0, 1) # use full range (no max_symbol)
   let (cc, cl) = canonCodes(clLens)
+  # If the RLE alphabet collapses to one symbol, the decoder builds a
+  # single-symbol tree that consumes zero bits per code — so emit only
+  # the extra values, no code bits (mirrors the pixel-data isSingle
+  # guard). Emitting canonCodes' length-1 code here would desync the
+  # stream: the decoder never reads those bits.
+  var npres = 0
+  for l in clLens:
+    if l != 0: inc(npres)
+  let rleSingle = npres == 1
   var j = 0
   while j < seq16.len:
     let s = seq16[j]
-    w.emitBits(cc[s], cl[s])
+    if not rleSingle: w.emitBits(cc[s], cl[s])
     if s == 16:
       w.emitBits(seq16[j+1], 2); j += 2
     elif s == 17:
@@ -963,9 +1156,18 @@ proc writeCodeLengths(w: var Vp8lBitWriter, lens: openArray[uint16], numSyms: in
       j += 1
 
 proc encodeVp8l*(img: RgbaImage): seq[uint8] =
-  ## Literal-only VP8L encoder (no LZ77/transforms/cache). Valid output,
-  ## larger than reference encoders.
+  ## VP8L encoder with LZ77 backward matches + color cache (no transforms,
+  ## no meta-Huffman yet). Pixel-exact output any spec decoder accepts.
   let w = int(img.width); let h = int(img.height)
+  # order-0 literal cost estimates for the parse
+  var gR = newSeq[int](256); var gG = newSeq[int](256)
+  var gB = newSeq[int](256); var gA = newSeq[int](256)
+  for p in img.pixels:
+    gR[p.data[0]] += 1; gG[p.data[1]] += 1
+    gB[p.data[2]] += 1; gA[p.data[3]] += 1
+  let eR = buildLens(gR); let eG = buildLens(gG)
+  let eB = buildLens(gB); let eA = buildLens(gA)
+  let (ops, fG, fR, fB, fA, fD) = parseLz77(img.pixels, w, eR, eG, eB, eA)
   var w2: Vp8lBitWriter
   w2.data.add(0x2F)
   var hdr = uint32(w - 1) or (uint32(h - 1) shl 14)
@@ -975,26 +1177,33 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
   if hasAlpha: hdr = hdr or (1'u32 shl 28)
   for k in 0..3: w2.data.add(uint8((hdr shr (8*k)) and 0xFF))
   w2.emitBits(0, 1) # transforms: none
+  # NB: decodeStream reads the cache flag BEFORE the meta-huffman flag
+  # (all-zero order was invisible when every flag was 0).
+  w2.emitBits(1, 1) # color cache follows
+  w2.emitBits(Vp8lCacheBits, 4)
   w2.emitBits(0, 1) # no meta huffman
-  # frequency counts
-  var fG = newSeq[int](280); var fR = newSeq[int](256)
-  var fB = newSeq[int](256); var fA = newSeq[int](256)
-  for p in img.pixels:
-    fR[p.data[0]] += 1; fG[p.data[1]] += 1; fB[p.data[2]] += 1; fA[p.data[3]] += 1
-  w2.emitBits(0, 1) # no color cache
   let lG = buildLens(fG); let lR = buildLens(fR)
   let lB = buildLens(fB); let lA = buildLens(fA)
-  # write 5 trees: green(280), red, blue, alpha, dist(40 zeros -> single?)
-  # distance tree unused: write simple single-node tree with symbol 0
-  writeCodeLengths(w2, lG, 280)
+  # write 5 trees: green(280 + cache), red, blue, alpha, dist
+  writeCodeLengths(w2, lG, 280 + Vp8lCacheSize)
   writeCodeLengths(w2, lR, 256)
   writeCodeLengths(w2, lB, 256)
   writeCodeLengths(w2, lA, 256)
-  # dist tree: simple 1-symbol tree with symbol 0 (never used, literal-only).
-  # Layout: simple=1, num=0 (one symbol), is8=0, zero=0 (a single bit).
-  w2.emitBits(1, 1); w2.emitBits(0, 1); w2.emitBits(0, 1); w2.emitBits(0, 1)
+  var distUsed = false
+  for f in fD:
+    if f != 0: distUsed = true; break
+  var lD: seq[uint16] = @[]
+  if distUsed:
+    lD = buildLens(fD)
+    writeCodeLengths(w2, lD, 40)
+  else:
+    # dist tree unused: simple 1-symbol tree with symbol 0.
+    # Layout: simple=1, num=0 (one symbol), is8=0, zero=0 (a single bit).
+    w2.emitBits(1, 1); w2.emitBits(0, 1); w2.emitBits(0, 1); w2.emitBits(0, 1)
   let (cG, nG) = canonCodes(lG); let (cR, nR) = canonCodes(lR)
   let (cB, nB) = canonCodes(lB); let (cA, nA) = canonCodes(lA)
+  let (cD, nD) = if distUsed: canonCodes(lD)
+    else: (newSeq[int](40), newSeq[int](40))
   template isSingle(lens: openArray[uint16]): bool =
     block:
       var npresent = 0
@@ -1005,11 +1214,33 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
   # emit nothing for them either.
   let sG = isSingle(lG); let sR = isSingle(lR)
   let sB = isSingle(lB); let sA = isSingle(lA)
-  for p in img.pixels:
-    if not sG: w2.emitBits(cG[p.data[1]], nG[p.data[1]])
-    if not sR: w2.emitBits(cR[p.data[0]], nR[p.data[0]])
-    if not sB: w2.emitBits(cB[p.data[2]], nB[p.data[2]])
-    if not sA: w2.emitBits(cA[p.data[3]], nA[p.data[3]])
+  var idx = 0
+  var k = 0
+  while k < ops.len:
+    case ops[k]
+    of 0:
+      let p = img.pixels[idx].data
+      if not sG: w2.emitBits(cG[p[1]], nG[p[1]])
+      if not sR: w2.emitBits(cR[p[0]], nR[p[0]])
+      if not sB: w2.emitBits(cB[p[2]], nB[p[2]])
+      if not sA: w2.emitBits(cA[p[3]], nA[p[3]])
+      inc(idx); inc(k)
+    of 1:
+      let u = packArgb(img.pixels[idx].data)
+      let sym = 280 + cacheIdxU(u, Vp8lCacheBits)
+      w2.emitBits(cG[sym], nG[sym])
+      inc(idx); inc(k)
+    else: # copy: u16LE len, u8 dist sym, u32LE dist extra
+      let L = int(ops[k+1]) or (int(ops[k+2]) shl 8)
+      let ds = int(ops[k+3])
+      let de = int(ops[k+4]) or (int(ops[k+5]) shl 8) or
+        (int(ops[k+6]) shl 16) or (int(ops[k+7]) shl 24)
+      let (ls, le, lnb) = lengthSymExtra(L)
+      w2.emitBits(cG[256 + ls], nG[256 + ls])
+      w2.emitBits(le, lnb)
+      w2.emitBits(cD[ds], nD[ds])
+      w2.emitBits(de, distExtraBits(ds))
+      idx += L; k += 8
   w2.emitFlush()
   w2.data
 

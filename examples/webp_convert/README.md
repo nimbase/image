@@ -36,8 +36,9 @@ HEIF video/J2K, animated WebP) report the decoder's clean error.
 
 ## Notes
 
-- Lossless output is large: the VP8L encoder is literal-only (no LZ77,
-  transforms, or color cache), so a 24 MP photo is ~70 MB. It is still
-  pixel-exact and decodes in any spec WebP decoder.
+- Lossless output is still large on photos: the VP8L encoder does LZ77
+  + color cache (no transforms or meta-Huffman yet), so a 24 MP photo is
+  ~50 MB (was ~61 MB literal-only). Flat/graphic content collapses far
+  better. Output is pixel-exact and decodes in any spec WebP decoder.
 - Lossy default quality is 75 (cwebp default); quality maps linearly to
   the VP8 quantizer index.

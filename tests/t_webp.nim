@@ -151,6 +151,8 @@ test "webp vp8l lengths respect cap and Kraft":
 test "webp vp8l photo content round-trips":
   # Regression: photo crops (deep, skewed histograms) used to emit
   # undecodable streams. Pixel-exact via the lossless path.
+  # Also covers the decoder peek-ahead path (back-to-back cache hits
+  # after long codes) and the LZ77 copy path at scale.
   let p = fixturesDir / "pawel-czerwinski-dz4Kpq_8xRg-unsplash.jpg"
   var f = open(p, fmRead)
   var raw = newSeq[uint8](getFileSize(f))
@@ -174,3 +176,91 @@ test "webp vp8l photo content round-trips":
       check [px.data[0], px.data[1], px.data[2]] ==
         [rgba.pixels[i].data[0], rgba.pixels[i].data[1], rgba.pixels[i].data[2]]
   check decodeWebp(@[0'u8, 1, 2, 3]).ok == false
+
+test "webp vp8l lz77 flat image tiny":
+  # Single color with alpha: first pixel literal, the rest one d==1 run.
+  var px = newSeq[Rgba[uint8]](64 * 64)
+  for i in 0..<px.len:
+    px[i] = Rgba[uint8](data: [10'u8, 20, 30, 128])
+  let img = DynamicImage(kind: dkRgba8,
+    rgba8: RgbaImage(width: 64, height: 64, pixels: px))
+  let enc = encodeWebp(img)
+  check enc.ok
+  check enc.value.len < 1024
+  let dec = decodeWebp(enc.value)
+  check dec.ok
+  require dec.value.kind == dkRgba8
+  check dec.value.rgba8.pixels == px
+
+test "webp vp8l lz77 periodic stripes":
+  # 8-color cycle: cache hits plus short d==8 copies. Opaque in, Rgb8 out.
+  var px = newSeq[Rgba[uint8]](128 * 8)
+  for i in 0..<px.len:
+    let v = uint8((i mod 8) * 32)
+    px[i] = Rgba[uint8](data: [v, v, v, 255])
+  let img = DynamicImage(kind: dkRgba8,
+    rgba8: RgbaImage(width: 128, height: 8, pixels: px))
+  let enc = encodeWebp(img)
+  check enc.ok
+  check enc.value.len < 2048
+  let dec = decodeWebp(enc.value)
+  check dec.ok
+  require dec.value.kind == dkRgb8
+  for i, p in dec.value.rgb8.pixels:
+    check [p.data[0], p.data[1], p.data[2]] ==
+      [px[i].data[0], px[i].data[1], px[i].data[2]]
+
+test "webp vp8l noise round-trips without matches":
+  # 1024 distinct opaque pixels (unique R,G pairs): no hits or copies
+  # possible, exercising the literal path plus the dummy single-symbol
+  # dist tree. Opaque -> Rgb8.
+  var px = newSeq[Rgba[uint8]](32 * 32)
+  for i in 0..<px.len:
+    px[i] = Rgba[uint8](data: [uint8(i and 255), uint8((i shr 8) and 255),
+      uint8((i * 131 + 17) and 255), 255'u8])
+  var seen = newSeq[bool](1 shl 16)
+  for p in px:
+    let k = int(p.data[0]) or (int(p.data[1]) shl 8)
+    check not seen[k] # test premise: all pixels distinct
+    seen[k] = true
+  let img = DynamicImage(kind: dkRgba8,
+    rgba8: RgbaImage(width: 32, height: 32, pixels: px))
+  let enc = encodeWebp(img)
+  check enc.ok
+  let dec = decodeWebp(enc.value)
+  check dec.ok
+  require dec.value.kind == dkRgb8
+  for i, p in dec.value.rgb8.pixels:
+    check [p.data[0], p.data[1], p.data[2]] ==
+      [px[i].data[0], px[i].data[1], px[i].data[2]]
+
+test "webp vp8l length prefix codes round-trip":
+  # lengthSymExtra must invert copyDist for every length 1..4096.
+  proc fwdCopyDist(prefix, extra: int): int =
+    if prefix < 4: return prefix + 1
+    let e = (prefix - 2) shr 1
+    let off = (2 + (prefix and 1)) shl e
+    off + extra + 1
+  for L in 1..4096:
+    let (sym, extra, nbits) = lengthSymExtra(L)
+    check sym >= 0 and sym <= 23
+    check extra >= 0 and extra < (1 shl nbits)
+    check fwdCopyDist(sym, extra) == L
+
+test "webp vp8l dist choice smoke":
+  # Hand-verified against DistMap: d=1 -> prefix 1 (no extra bits);
+  # d=2 at width 64 -> prefix 4 (DM[5]=(2,0)). Prefixes < 4 must carry
+  # extra value 0 (decoder reads zero extra bits there; a nonzero value
+  # would corrupt the bit buffer).
+  var dc: array[40, int]
+  for k in 0..39: dc[k] = 0
+  let (s1, e1, ok1) = distChoice(1, 64, dc)
+  check ok1
+  check s1 == 1
+  check e1 == 0
+  let (s2, e2, ok2) = distChoice(2, 64, dc)
+  check ok2
+  check s2 == 4
+  check e2 == 1
+  check distChoice(0, 64, dc).ok == false
+  check distChoice(1048456 + 1, 64, dc).ok == false

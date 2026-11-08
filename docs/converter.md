@@ -48,7 +48,10 @@ let small = img.toWebp(75).lossless().encode()
 - Lossy default is 75 (cwebp default); quality maps linearly to the VP8
   quantizer index. Measured on gradients: mean abs channel error grows as
   quality drops; lossy is smaller than lossless on smooth content.
-- Lossless (VP8L literal-only: no LZ77, transforms, or color cache) is
-  pixel-exact and decodes in any spec WebP decoder, but large on photos
-  (a 24 MP photo ≈ 60–70 MB). Prefer lossy for photos, lossless for exact
-  round-trips of small/palette-like content.
+- Lossless (VP8L with LZ77 + color cache; no transforms or meta-Huffman
+  yet) is pixel-exact and decodes in any spec WebP decoder. Photos still
+  compress modestly (a 24 MP photo ≈ 50 MB, vs ~61 MB literal-only):
+  smooth gradients rarely repeat exactly, so most of the win is cache
+  hits on flat areas. Flat/graphic content collapses dramatically
+  (a flat 64×64 needs ~100 bytes). Prefer lossy for photos, lossless
+  for exact round-trips.
