@@ -186,3 +186,53 @@ test "vp8 lossy low-quality photo crop round-trips":
     se += e * e
   let psnr = 10.0 * log10(65025.0 / max(se / float(rgba.pixels.len), 1e-9))
   check psnr > 35.0
+
+test "vp8 trellis keeps base levels at zero lambda":
+  # With no rate penalty the DP must pick nearest-level everywhere
+  # (EOB only drops all-zero tails, which emit identically).
+  var s = 0x9E3779B9'u32
+  proc rnd(): float64 =
+    s = s * 1664525'u32 + 1013904223'u32
+    float64(s) / 4294967296.0
+  for _ in 0..<20:
+    var F: array[16, float64]
+    for k in 0..<16: F[k] = (rnd() - 0.5) * 4000.0
+    for (plane, first) in [(0, 1), (2, 0), (3, 0)]:
+      let (tq, tnz) = trellisBlk(F, 34'i16, 34'i16, plane, 1, first, 0.0)
+      var bnz = false
+      for k in 0..<16:
+        let e = if k == 0 and first == 1: 0'i32
+          else: quantizeCoeff(F[k] * 2.0, 34'i16)
+        check tq[k] == e
+        if e != 0: bnz = true
+      check tnz == bnz
+
+test "vp8 trellis never regresses block cost":
+  # The DP minimizes D + lambdaT*R over a set containing base levels,
+  # so honest block cost (transform distortion + token path rate via
+  # the same tables the writer uses) must not exceed base cost.
+  # Catches cost-model bugs (e.g. EOB terminals that drop tail
+  # distortion make EOB look free and nuke real coefficients).
+  var s = 0x1234567'u32
+  proc rnd(): float64 =
+    s = s * 1664525'u32 + 1013904223'u32
+    float64(s) / 4294967296.0
+  for _ in 0..<30:
+    var F: array[16, float64]
+    for k in 0..<16: F[k] = (rnd() - 0.5) * 4000.0
+    for (plane, first, qi) in [(0, 1, 34), (2, 0, 40), (3, 0, 50)]:
+      let q = int16(qi)
+      let lamT = trellisLambda(0.01 * float64(q) * float64(q))
+      let (tq, _) = trellisBlk(F, q, q, plane, 1, first, lamT)
+      var bq: array[16, int32]
+      for k in 0..<16:
+        bq[k] = if k == 0 and first == 1: 0'i32
+          else: quantizeCoeff(F[k] * 2.0, q)
+      proc blkCost(qq: array[16, int32]): float64 =
+        var dd = 0.0
+        for k in 0..<16:
+          let d = F[k] * 2.0 - float64(qq[k]) * float64(q)
+          dd += d * d
+        let (r, _) = coeffBlockRate(qq, plane, 1, first)
+        dd + lamT * r
+      check blkCost(tq) <= blkCost(bq) + 1e-6

@@ -35,7 +35,8 @@ check the return type before calling `.value`.
   but both return `ekUnsupported` in v1 (color math helpers like
   `rgbToYuvPixel`, `yuv420ToRgb`, `ycgcoReForward/Inverse` are usable).
 - WebP lossy encode is VP8 intra-only keyframes, single partition, RDO
-  mode search over fully-quantized candidates, default token
-  probabilities (no adaptation): ~1.5–1.8× cwebp size at high Q.
+  mode search over fully-quantized candidates + trellis-refined levels,
+  default token probabilities (no adaptation): ~1.5–1.8× cwebp size at
+  high Q.
 - GIF decode gives `GifImage`; use `gifFrameToRgba(gif, 0)` for frame 0.
   The converter composites frame 0 onto a full-canvas buffer.

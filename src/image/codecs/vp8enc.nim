@@ -226,9 +226,11 @@ func bitCost*(prob: uint8, bit: bool): float64 =
   elif q >= 1.0: 0.0
   else: -log2(q)
 
+type TokCostTable* = array[2, array[4, array[8, array[3, array[12, float64]]]]]
+
 let TokCosts* = block:
   ## -log2 bit cost of every (start, plane, band, cx, token) path.
-  var t: array[2, array[4, array[8, array[3, array[12, float64]]]]]
+  var t: TokCostTable
   for s in 0..1:
     for p in 0..<4:
       for bnd in 0..<8:
@@ -240,6 +242,11 @@ let TokCosts* = block:
               c += bitCost(prob, bit)
             t[s][p][bnd][cx][tok] = c
   t
+
+var CurTokCosts* = TokCosts
+  ## Per-frame token bit costs. Equals TokCosts until adaptive probs
+  ## (Phase C part 2) install refined tables; RDO and trellis always
+  ## read CurTokCosts so both automatically benefit.
 
 proc treeEdgeContains(nodes: seq[TreeNode], edge: uint8, v: int): bool =
   if int(edge) < nodes.len:
@@ -261,6 +268,70 @@ proc treeCost*(nodes: seq[TreeNode], v: int): float64 =
       result += bitCost(n.prob, true)
       if int(n.right) < nodes.len: idx = int(n.right)
       else: break
+
+# ---------- adaptive token probabilities (Phase C part 2) ----------
+#
+# The frame header can replace any of the 1056 default token-node
+# probabilities (CoeffUpdateProbs-gated flag + 8-bit value each).
+# Pass 1 encodes with defaults while counting node visits; pass 2
+# installs RD-beneficial updates and re-encodes. The decoder already
+# implements updateTokenProbs, so streams stay spec-valid.
+
+proc buildTokNodePaths(): array[2, array[4, array[8,
+    array[3, array[12, seq[int]]]]]] =
+  ## Node indices traversed for every (start, plane, band, cx, token).
+  ## Tree structure is fixed, so paths hold for any probabilities.
+  for s in 0..1:
+    for p in 0..<4:
+      for bnd in 0..<8:
+        for cx in 0..<3:
+          let nodes = buildNodes(DctTokenTree, CoeffProbs[p][bnd][cx])
+          for tok in 0..11:
+            if s == 1 and tok == 11: continue # unreachable EOB
+            var idx = s
+            var path: seq[int] = @[]
+            while idx < nodes.len:
+              let n = nodes[idx]
+              path.add(idx)
+              if treeEdgeContains(nodes, n.left, tok):
+                if int(n.left) < nodes.len: idx = int(n.left)
+                else: break
+              else:
+                if int(n.right) < nodes.len: idx = int(n.right)
+                else: break
+            result[s][p][bnd][cx][tok] = move(path)
+
+let TokNodePaths = buildTokNodePaths()
+
+var TokCntL, TokCntR: array[4, array[8, array[3, array[11, int]]]]
+  ## Per-node 0/1 visit counts from the latest pass (zeroed per pass).
+
+var CurTokProbs: array[4, array[8, array[3, array[11, uint8]]]]
+var TokUpdated: array[4, array[8, array[3, array[11, bool]]]]
+var CurTokNodes: array[4, array[8, array[3, seq[TreeNode]]]]
+  ## Per-frame emission tables (defaults or pass-2 updates).
+
+var vp8LastNumUpdates*: int
+  ## Diagnostic: number of token-prob updates in the last encode.
+
+proc resetTokTablesToDefaults() =
+  for p in 0..<4:
+    for b in 0..<8:
+      for cx in 0..<3:
+        CurTokNodes[p][b][cx] = buildNodes(DctTokenTree, CoeffProbs[p][b][cx])
+        for t in 0..<11:
+          CurTokProbs[p][b][cx][t] = CoeffProbs[p][b][cx][t]
+          TokUpdated[p][b][cx][t] = false
+  CurTokCosts = TokCosts
+  for p in 0..<4:
+    for b in 0..<8:
+      for cx in 0..<3:
+        for t in 0..<11:
+          TokCntL[p][b][cx][t] = 0
+          TokCntR[p][b][cx][t] = 0
+  vp8LastNumUpdates = 0
+
+resetTokTablesToDefaults() # module init so direct writeToken use is valid
 
 proc writeTreeVal(e: var BoolEnc, nodes: seq[TreeNode], v: int) =
   var idx = 0
@@ -285,8 +356,23 @@ proc writeTreeVal(e: var BoolEnc, nodes: seq[TreeNode], v: int) =
 
 proc writeToken*(e: var BoolEnc, startIdx, plane, band,
     cx, tok: int) =
-  for (bit, prob) in TokPaths[startIdx][plane][band][cx][tok]:
-    putBit(e, bit, prob)
+  ## Token bits through the CURRENT per-frame node tables (defaults or
+  ## pass-2 updates), tallying node visits for adaptation. Directions
+  ## come from the fixed tree structure (TokPaths bits); probabilities
+  ## from CurTokNodes.
+  let nodes = CurTokNodes[plane][band][cx]
+  var idx = startIdx
+  for (bit, _) in TokPaths[startIdx][plane][band][cx][tok]:
+    let n = nodes[idx]
+    e.putBit(bit, n.prob)
+    if bit:
+      TokCntR[plane][band][cx][idx] += 1
+      if int(n.right) < nodes.len: idx = int(n.right)
+      else: break
+    else:
+      TokCntL[plane][band][cx][idx] += 1
+      if int(n.left) < nodes.len: idx = int(n.left)
+      else: break
 
 proc writeExtra*(e: var BoolEnc, ci, extra: int) =
   ## Magnitude refinement bits, MSB-first, same table order as decode.
@@ -332,16 +418,16 @@ proc coeffBlockRate*(qblk: array[16, int32], plane, cx, first: int):
     let band = int(CoeffBands[i])
     let v = qblk[int(Zigzag[i])]
     if i > lastNz and not skip:
-      result[0] += TokCosts[0][plane][band][cxv][11] # EOB
+      result[0] += CurTokCosts[0][plane][band][cxv][11] # EOB
       break
     elif v == 0:
-      result[0] += TokCosts[if skip: 1 else: 0][plane][band][cxv][0]
+      result[0] += CurTokCosts[if skip: 1 else: 0][plane][band][cxv][0]
       skip = true
       cxv = 0
     else:
       let av = abs(v)
       let (tok, ci, extra) = tokenForAbs(av)
-      result[0] += TokCosts[if skip: 1 else: 0][plane][band][cxv][tok]
+      result[0] += CurTokCosts[if skip: 1 else: 0][plane][band][cxv][tok]
       if tok >= 5:
         result[0] += extraRate(ci, extra)
       result[0] += 1.0 # sign bit, prob 128
@@ -732,6 +818,114 @@ proc rdoReconChroma(pu, pv: array[64, uint8],
       result.ru[y * 8 + x] = uws[(1 + y) * 9 + 1 + x]
       result.rv[y * 8 + x] = vws[(1 + y) * 9 + 1 + x]
 
+const TrellisScale = 0.5
+  ## Trellis lambda multiplier: lambdaT = lambda * TrellisScale.
+  ## Analytical prior from D_pixel/D_G (~0.27, so ~4x) proved too
+  ## aggressive on the matrix (operating point shifted down-quality);
+  ## swept 0.5/1.0/2.0/4.0 on tex512+photo512 at q50/75/90 and 0.5
+  ## keeps the operating point (q90 strict wins -4..-8% at equal PSNR,
+  ## rest neutral-to-positive) while capturing EOB/rounding wins.
+  ## The gap vs the analytical prior reflects integer rounding,
+  ## clamping, and RDO interaction on marginal decisions.
+
+func trellisLambda*(lambda: float64): float64 = TrellisScale * lambda
+
+proc trellisBlk*(F: array[16, float64], qdc, qac: int16, plane, cx,
+    first: int, lambdaT: float64): tuple[q: array[16, int32],
+    hasNz: bool] =
+  ## RD-optimal levels for one block: forward DP over scan positions
+  ## with skip state (DCT_0 emitted or not), candidates {0, base,
+  ## alt-rounding} per position plus EOB termination from skip=false.
+  ## Mirrors writeCoeffs exactly (same trees, extras, EOB reachability),
+  ## so the chosen levels emit verbatim. Distortion is in G units;
+  ## caller scales lambda by TrellisScale.
+  const Inff = 1e100
+  var dp0 = 0.0   # best cost of prefix ending with skip=false
+  var dp1 = Inff  # best cost of prefix ending with skip=true
+  var choice: array[16, array[2, tuple[lvl: int32, ps: bool]]]
+  var bestTerm = Inff
+  var bestTermPos = -1
+  # Suffix distortion if positions i..15 are all left uncoded (EOB at i
+  # drops the tail: its G^2 must be counted, not just the EOB bits).
+  var suffixG2: array[17, float64]
+  for i in countdown(15, first):
+    suffixG2[i] = suffixG2[i + 1] +
+      (let zz = int(Zigzag[i]); (F[zz] * FdctGain) * (F[zz] * FdctGain))
+  for i in first..15:
+    let zz = int(Zigzag[i])
+    let bnd = int(CoeffBands[i])
+    let G = F[zz] * FdctGain
+    let qf = float64(if zz == 0: qdc else: qac)
+    let base = quantizeCoeff(G, if zz == 0: qdc else: qac)
+    let baseM = abs(base)
+    # EOB terminates here (only from skip=false, like writeCoeffs):
+    # prefix cost + EOB bits + dropped-tail distortion.
+    let termC = dp0 + lambdaT * CurTokCosts[0][plane][bnd][cx][11] +
+      suffixG2[i]
+    if termC < bestTerm:
+      bestTerm = termC
+      bestTermPos = i
+    # candidate magnitudes: 0 plus base and the other rounding
+    var cands: array[3, int32]
+    var ncand = 1
+    if baseM > 0:
+      cands[1] = baseM
+      ncand = 2
+      let fl = int(abs(G) / qf)
+      var alt = if baseM == fl: fl + 1 else: fl
+      if alt < 0: alt = 0
+      if alt != 0 and alt != baseM:
+        cands[2] = int32(alt)
+        ncand = 3
+    var ndp0 = Inff
+    var ndp1 = Inff
+    # zero level (sets skip)
+    let dzD = G * G
+    let z0 = dp0 + dzD + lambdaT * CurTokCosts[0][plane][bnd][cx][0]
+    if z0 < ndp1:
+      ndp1 = z0
+      choice[i][1] = (0'i32, false)
+    let z1 = dp1 + dzD + lambdaT * CurTokCosts[1][plane][bnd][cx][0]
+    if z1 < ndp1:
+      ndp1 = z1
+      choice[i][1] = (0'i32, true)
+    # nonzero levels (reset skip); take G's sign (rate is sign-agnostic
+    # beyond the 1-bit flag, distortion minimal at sign(G))
+    for c in 1..<ncand:
+      let m = cands[c]
+      let L = if G < 0: -m else: m
+      let D = (G - float64(L) * qf) * (G - float64(L) * qf)
+      let (tok, ci, extra) = tokenForAbs(m)
+      var exR = 0.0
+      if tok >= 5: exR = extraRate(ci, extra)
+      let R0 = CurTokCosts[0][plane][bnd][cx][tok] + exR + 1.0
+      let R1 = CurTokCosts[1][plane][bnd][cx][tok] + exR + 1.0
+      if dp0 + D + lambdaT * R0 < ndp0:
+        ndp0 = dp0 + D + lambdaT * R0
+        choice[i][0] = (L, false)
+      if dp1 + D + lambdaT * R1 < ndp0:
+        ndp0 = dp1 + D + lambdaT * R1
+        choice[i][0] = (L, true)
+    dp0 = ndp0
+    dp1 = ndp1
+  # finish: EOB-terminal, run-to-end with skip false (last was value at
+  # 15), or run-to-end with skip true (explicit trailing DCT_0s)
+  var endPos = 16
+  var curSkip = false
+  if dp0 <= bestTerm and dp0 <= dp1:
+    discard # ends at 15, skip false
+  elif dp1 <= bestTerm and dp1 <= dp0:
+    curSkip = true
+  else:
+    endPos = bestTermPos
+    curSkip = false
+  for i in countdown(min(endPos, 16) - 1, first):
+    let (lvl, ps) = choice[i][ord(curSkip)]
+    result.q[int(Zigzag[i])] = lvl
+    if lvl != 0: result.hasNz = true
+    curSkip = ps
+  # positions past EOB (or untouched 0) stay zero from init
+
 # ---------- frame assembly ----------
 
 func blockHasCoeffs(blk: array[16, int32], first: int): bool =
@@ -954,11 +1148,14 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
           bestJc = cj
           bestCm = cm
 
-      # residual + quantize
+      # residual + quantize (trellis-refined; cx simulated exactly as the
+      # bitstream section will derive it from the refined coeffs)
       var qY: array[16, array[16, int32]] # per 4x4 block, natural order
       var qY2: array[16, int32]
       var qU, qV: array[4, array[16, int32]]
       var allZero = true
+      var tCxS = tCxY
+      var lCxS = lCxY
       if lumaMode == lmB:
         for i in 0..<16:
           let bx = (i mod 4) * 4; let by = (i div 4) * 4
@@ -986,10 +1183,14 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
               blk[y * 4 + x] = float64(int(prox[(by + y) * 16 + bx + x])) -
                 float64(int(ws2[(1 + by + y) * 21 + 1 + bx + x]))
           let f = fdct4x4(blk)
-          for k in 0..<16:
-            let q = if k == 0: enc.ydc else: enc.yac
-            qY[i][k] = quantizeCoeff(f[k] * FdctGain, q)
-            if qY[i][k] != 0: allZero = false
+          let sx = bx div 4; let sy = by div 4
+          let cx = int(tCxS[sx + 1]) + int(lCxS[sy + 1])
+          let (tq, tnz) = trellisBlk(f, enc.ydc, enc.yac, 3, cx, 0,
+            trellisLambda(lambdaY))
+          for k in 0..<16: qY[i][k] = tq[k]
+          if tnz: allZero = false
+          lCxS[sy + 1] = (if tnz: 1 else: 0)
+          tCxS[sx + 1] = (if tnz: 1 else: 0)
       else:
         var ws3 = createBorderLuma(mbx, mby, mbw, enc.topBorderY,
           enc.leftBorderY)
@@ -1009,9 +1210,14 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
                 float64(int(ws3[(1 + by + y) * 21 + 1 + bx + x]))
           let f = fdct4x4(blk)
           dcBlks[i] = f[0]
-          for k in 1..<16:
-            qY[i][k] = quantizeCoeff(f[k] * FdctGain, enc.yac)
-            if qY[i][k] != 0: allZero = false
+          let sx = bx div 4; let sy = by div 4
+          let cx = int(tCxS[sx + 1]) + int(lCxS[sy + 1])
+          let (tq, tnz) = trellisBlk(f, enc.yac, enc.yac, 0, cx, 1,
+            trellisLambda(lambdaY))
+          for k in 1..<16: qY[i][k] = tq[k]
+          if tnz: allZero = false
+          lCxS[sy + 1] = (if tnz: 1 else: 0)
+          tCxS[sx + 1] = (if tnz: 1 else: 0)
         let wht = fwht4x4(dcBlks)
         for k in 0..<16:
           let q = if k == 0: enc.y2dc else: enc.y2ac
@@ -1045,12 +1251,17 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
               blk[y * 4 + x] = float64(int(src[(by + y) * 8 + bx + x])) -
                 float64(int(bord[(1 + by + y) * 9 + 1 + bx + x]))
           let f = fdct4x4(blk)
+          let j = if ci == 0: 5 else: 7
+          let sx = bx div 4; let sy = by div 4
+          let cx = int(tCxS[sx + j]) + int(lCxS[sy + j])
+          let (tq, tnz) = trellisBlk(f, enc.uvdc, enc.uvac, 2, cx, 0,
+            trellisLambda(lambdaC))
           for k in 0..<16:
-            let q = if k == 0: enc.uvdc else: enc.uvac
-            let v = quantizeCoeff(f[k] * FdctGain, q)
-            if ci == 0: qU[i][k] = v
-            else: qV[i][k] = v
-            if v != 0: allZero = false
+            if ci == 0: qU[i][k] = tq[k]
+            else: qV[i][k] = tq[k]
+          if tnz: allZero = false
+          lCxS[sy + j] = (if tnz: 1 else: 0)
+          tCxS[sx + j] = (if tnz: 1 else: 0)
 
       # bitstream
       let skipped = allZero
