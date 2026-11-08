@@ -1,8 +1,11 @@
 ## OpenEXR codec — references/image/src/codecs/openexr.rs + exr@1.74.0
-## Single-part scanline only (tiled/multipart/deep/PIZ/PXR24/B44/DWAA/B
-## return Unsupported). NONE/RLE/ZIP/ZIPS + half/float/uint -> 32F images.
-## RLE/ZIP pipeline per exrs: separate even/odd halves, delta samples,
+## Single-part scanline only (tiled/multipart/deep/PIZ/B44/DWAA/B44A/DWAB
+## return Unsupported). NONE/RLE/ZIP/ZIPS/PXR24 + half/float/uint -> 32F.
+## RLE/ZIP pipeline per OpenEXRCore internal_zip.c / internal_rle.c:
+## separate even/odd halves, biased delta (first byte raw, rest cur-prev+128),
 ## then RLE (neg=literal -c bytes, pos=repeat c+1) / zlib-deflate.
+## PXR24 per OpenEXRCore internal_pxr24.c: float->float24, per-row delta,
+## MSB-first planes, zlib (reimplemented; no copied code).
 import std/sequtils
 import ../color
 import ../error
@@ -38,12 +41,27 @@ proc floatToHalf*(f: float32): uint16 =
   if xe >= 0x47800000'u32:
     return sign or 0x7BFF'u16 # overflow -> max finite
   elif xe >= 0x38800000'u32:
-    return sign or uint16(((xe - 0x38000000'u32) shr 13) and 0xFFFF)
+    # Normal range: round the 23-bit mantissa to 10 bits, ties to even
+    # (matches Imath half; truncation here would disagree with reference
+    # files on values like -43.333332f32 -> 0xD917, not 0xD916).
+    let e = (xe shr 23) and 0xFF'u32
+    var m = (xe and 0x7FFFFF'u32) + 0xFFF'u32 + ((xe shr 13) and 1'u32)
+    var ee = e
+    if (m and 0x00800000'u32) != 0:
+      m = 0
+      ee += 1
+    if ee >= 143:
+      return sign or 0x7BFF'u16 # rounding carried into inf range
+    return sign or uint16(((ee - 112'u32) shl 10) or (m shr 13))
   elif xe >= 0x33800000'u32:
     let e = int(xe shr 23)
     let m = (xe and 0x7FFFFF'u32) or 0x800000'u32
     let shift = 126 - e
-    let t = (m + (1'u32 shl (shift - 1))) shr shift
+    let base = m shr shift
+    let rest = m and ((1'u32 shl shift) - 1'u32)
+    let halfway = 1'u32 shl (shift - 1)
+    let t = base + (if rest > halfway or
+      (rest == halfway and (base and 1'u32) != 0): 1'u32 else: 0'u32)
     return sign or uint16(t and 0xFFFF)
   else:
     sign # underflow -> signed zero
@@ -72,19 +90,67 @@ proc interleaveHalves(data: var seq[uint8]) =
   data = tmp
 
 proc samplesToDifferences(data: var seq[uint8]) =
+  ## Biased delta per OpenEXRCore internal_zip.c deconstruct /
+  ## internal_rle.c reorder_and_predict: first byte raw, the rest store
+  ## (cur - prev + 128). The bias keeps small deltas away from zero bytes
+  ## that would confuse the RLE stage. (An unbiased delta would round-trip
+  ## against itself but misread every foreign file.)
   if data.len == 0: return
   var prev = data[0]
   for i in 1..<data.len:
     let t = data[i]
-    data[i] = t - prev # uint8 wraps mod 256
+    data[i] = t - prev + 128'u8 # wraps mod 256
     prev = t
 
 proc differencesToSamples(data: var seq[uint8]) =
   if data.len == 0: return
   for i in 1..<data.len:
-    data[i] = data[i] + data[i-1] # uint8 wraps mod 256
+    data[i] = data[i-1] + data[i] - 128'u8 # wraps mod 256
 
-# ---------- RLE (exrs compression::rle) ----------
+# ---------- scanline layout: planar on disk, chunky in memory ----------
+## The file layout stores each scanline channel-contiguous
+## ([ch0 row][ch1 row]..., channels alphabetical). Our `full`/`raw`
+## buffers are pixel-chunky. These convert at the boundary. (PXR24's
+## own transform already produces/consumes planar rows, so it shares
+## this boundary too.)
+
+proc planarToChunky(blk: openArray[uint8], w, rows: int,
+    chanBytes: seq[int]): seq[uint8] =
+  var coff = newSeq[int](chanBytes.len)
+  var stride = 0
+  for ci in 0..<chanBytes.len:
+    coff[ci] = stride
+    stride += chanBytes[ci]
+  let lineBytes = w * stride
+  result = newSeq[uint8](rows * lineBytes)
+  for r in 0..<rows:
+    var p = r * lineBytes
+    for ci in 0..<chanBytes.len:
+      let cb = chanBytes[ci]
+      for x in 0..<w:
+        let dst = (r * w + x) * stride + coff[ci]
+        for b in 0..<cb:
+          result[dst + b] = blk[p]; inc(p)
+
+proc chunkyToPlanar(full: openArray[uint8], w, rows: int,
+    chanBytes: seq[int]): seq[uint8] =
+  var coff = newSeq[int](chanBytes.len)
+  var stride = 0
+  for ci in 0..<chanBytes.len:
+    coff[ci] = stride
+    stride += chanBytes[ci]
+  let lineBytes = w * stride
+  result = newSeq[uint8](rows * lineBytes)
+  for r in 0..<rows:
+    var p = r * lineBytes
+    for ci in 0..<chanBytes.len:
+      let cb = chanBytes[ci]
+      for x in 0..<w:
+        let src = (r * w + x) * stride + coff[ci]
+        for b in 0..<cb:
+          result[p] = full[src + b]; inc(p)
+
+# ---------- RLE (biased predictor + counts; see internal_rle.c) ----------
 
 proc rleDecompress(data: openArray[uint8], expected: int): ImageResult[seq[uint8]] =
   var output: seq[uint8] = @[]
@@ -111,6 +177,9 @@ proc rleDecompress(data: openArray[uint8], expected: int): ImageResult[seq[uint8
   ok(output)
 
 proc rleCompress(data: seq[uint8]): seq[uint8] =
+  ## Input is planar-per-scanline bytes (disk layout); the biased
+  ## predictor + counts match internal_rle.c. Currently unused by the
+  ## writer (ZIP/PXR24 only) but kept coherent for a future RLE path.
   var buf = data
   separateHalves(buf)
   samplesToDifferences(buf)
@@ -136,6 +205,153 @@ proc rleCompress(data: seq[uint8]): seq[uint8] =
       for i in runStart..<runEnd: output.add(buf[i])
       runStart = runEnd
       inc(runEnd)
+  output
+
+# ---------- PXR24 (Pixar lossy-float; lossless for half/uint) ----------
+
+proc floatToFloat24(f: float32): uint32 =
+  ## Round a 32-bit float to the 24-bit representation PXR24 stores
+  ## (upper 24 bits; low 8 dropped). Preserves NaN payloads / infinities
+  ## per internal_pxr24.c; near-FLT_MAX round-up truncates instead.
+  let u = cast[uint32](f)
+  let s = u and 0x80000000'u32
+  let e = u and 0x7F800000'u32
+  let m = u and 0x007FFFFF'u32
+  if e == 0x7F800000'u32:
+    if m != 0:
+      let mm = m shr 8
+      let i = (e shr 8) or mm or (if mm == 0: 1'u32 else: 0'u32)
+      return (s shr 8) or i
+    return (s shr 8) or (e shr 8)
+  var i = ((e or m) + (m and 0x80'u32)) shr 8
+  if i >= 0x7F8000'u32:
+    i = (e or m) shr 8
+  (s shr 8) or i
+
+proc pxr24TransformedSize(w, rows: int, chanBytes: seq[int],
+    pixelTypes: seq[int32]): int =
+  ## Size of the zlib payload input (pre-compression): 4 planes for uint,
+  ## 2 for half, 3 for float.
+  result = 0
+  for ci in 0..<chanBytes.len:
+    let planes = if pixelTypes[ci] == 2: 3
+      elif chanBytes[ci] == 2: 2 else: 4
+    result += rows * w * planes
+
+proc pxr24Undo(decomp: openArray[uint8], w, rows: int, chanBytes: seq[int],
+    pixelTypes: seq[int32]): ImageResult[seq[uint8]] =
+  ## Reconstruct planar-per-scanline rows from PXR24 plane data
+  ## (disk layout; the caller converts to chunky).
+  var stride = 0
+  for cb in chanBytes: stride += cb
+  let lineBytes = w * stride
+  var output = newSeq[uint8](rows * lineBytes)
+  var p = 0
+  var pOut = 0
+  for r in 0..<rows:
+    for ci in 0..<chanBytes.len:
+      let pt = pixelTypes[ci]
+      let cb = chanBytes[ci]
+      if pt == 2: # float: 3 planes -> 4-byte pixels (low byte zero)
+        if p + 3 * w > decomp.len:
+          return err[seq[uint8]](decodingError("exr: short pxr24 chunk"))
+        var pixel = 0'u32
+        for x in 0..<w:
+          let diff = (uint32(decomp[p + x]) shl 24) or
+            (uint32(decomp[p + w + x]) shl 16) or
+            (uint32(decomp[p + 2 * w + x]) shl 8)
+          pixel += diff # wraps mod 2^32
+          let o = pOut + x * cb
+          output[o] = uint8(pixel and 0xFF)
+          output[o+1] = uint8((pixel shr 8) and 0xFF)
+          output[o+2] = uint8((pixel shr 16) and 0xFF)
+          output[o+3] = uint8((pixel shr 24) and 0xFF)
+        p += 3 * w
+        pOut += w * cb
+      elif cb == 2: # half: 2 planes
+        if p + 2 * w > decomp.len:
+          return err[seq[uint8]](decodingError("exr: short pxr24 chunk"))
+        var pixel = 0'u32
+        for x in 0..<w:
+          let diff = (uint32(decomp[p + x]) shl 8) or uint32(decomp[p + w + x])
+          pixel += diff
+          let o = pOut + x * cb
+          output[o] = uint8(pixel and 0xFF)
+          output[o+1] = uint8((pixel shr 8) and 0xFF)
+        p += 2 * w
+        pOut += w * cb
+      else: # uint: 4 planes
+        if p + 4 * w > decomp.len:
+          return err[seq[uint8]](decodingError("exr: short pxr24 chunk"))
+        var pixel = 0'u32
+        for x in 0..<w:
+          let diff = (uint32(decomp[p + x]) shl 24) or
+            (uint32(decomp[p + w + x]) shl 16) or
+            (uint32(decomp[p + 2 * w + x]) shl 8) or
+            uint32(decomp[p + 3 * w + x])
+          pixel += diff
+          let o = pOut + x * cb
+          output[o] = uint8(pixel and 0xFF)
+          output[o+1] = uint8((pixel shr 8) and 0xFF)
+          output[o+2] = uint8((pixel shr 16) and 0xFF)
+          output[o+3] = uint8((pixel shr 24) and 0xFF)
+        p += 4 * w
+        pOut += w * cb
+  ok(output)
+
+proc pxr24Apply(blk: openArray[uint8], w, rows: int, chanBytes: seq[int],
+    pixelTypes: seq[int32]): seq[uint8] =
+  ## Forward PXR24 transform: per-row/channel delta + MSB-first planes.
+  ## Input is chunky rows; output is the planar zlib payload.
+  var stride = 0
+  var coff = newSeq[int](chanBytes.len)
+  for ci in 0..<chanBytes.len:
+    coff[ci] = stride
+    stride += chanBytes[ci]
+  let lineBytes = w * stride
+  var output = newSeq[uint8](pxr24TransformedSize(w, rows, chanBytes, pixelTypes))
+  var p = 0
+  for r in 0..<rows:
+    let lineOff = r * lineBytes
+    for ci in 0..<chanBytes.len:
+      let pt = pixelTypes[ci]
+      let cb = chanBytes[ci]
+      if pt == 2: # float -> float24
+        var prev = 0'u32
+        for x in 0..<w:
+          let o = lineOff + x * stride + coff[ci]
+          let u = uint32(blk[o]) or (uint32(blk[o+1]) shl 8) or
+            (uint32(blk[o+2]) shl 16) or (uint32(blk[o+3]) shl 24)
+          let cur = floatToFloat24(cast[float32](u))
+          let diff = cur - prev # wraps
+          prev = cur
+          output[p + x] = uint8((diff shr 16) and 0xFF)
+          output[p + w + x] = uint8((diff shr 8) and 0xFF)
+          output[p + 2 * w + x] = uint8(diff and 0xFF)
+        p += 3 * w
+      elif cb == 2: # half
+        var prev = 0'u32
+        for x in 0..<w:
+          let o = lineOff + x * stride + coff[ci]
+          let cur = uint32(blk[o]) or (uint32(blk[o+1]) shl 8)
+          let diff = cur - prev
+          prev = cur
+          output[p + x] = uint8((diff shr 8) and 0xFF)
+          output[p + w + x] = uint8(diff and 0xFF)
+        p += 2 * w
+      else: # uint
+        var prev = 0'u32
+        for x in 0..<w:
+          let o = lineOff + x * stride + coff[ci]
+          let cur = uint32(blk[o]) or (uint32(blk[o+1]) shl 8) or
+            (uint32(blk[o+2]) shl 16) or (uint32(blk[o+3]) shl 24)
+          let diff = cur - prev
+          prev = cur
+          output[p + x] = uint8((diff shr 24) and 0xFF)
+          output[p + w + x] = uint8((diff shr 16) and 0xFF)
+          output[p + 2 * w + x] = uint8((diff shr 8) and 0xFF)
+          output[p + 3 * w + x] = uint8(diff and 0xFF)
+        p += 4 * w
   output
 
 # ---------- header parsing ----------
@@ -238,6 +454,16 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
         "exr: subsampled channels"))
     if c.pixelType notin [0'i32, 1, 2]:
       return err[seq[DynamicImage]](unsupportedError(ukColor, "exr: sample type"))
+  # Pixel data channels are ALWAYS alphabetical by name (OpenEXR File
+  # Layout: "within a scan line the data for each channel are contiguous.
+  # Channels are stored in alphabetical order"), independent of chlist
+  # order. Sort so coff/stride/getF index the data layout, not the header.
+  for i in 1..<channels.len:
+    let t = channels[i]
+    var j = i - 1
+    while j >= 0 and channels[j].name > t.name:
+      channels[j+1] = channels[j]; dec(j)
+    channels[j+1] = t
   # rows per chunk + bytes per line
   var chanBytes: seq[int] = @[]
   for c in channels:
@@ -249,7 +475,7 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
   let rowsPerChunk =
     case compression
     of 0, 1, 2: 1
-    of 3: 16
+    of 3, 5: 16
     else:
       return err[seq[DynamicImage]](unsupportedError(ukGenericFeature,
         "exr: compression " & $compression))
@@ -300,23 +526,57 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
         return err[seq[DynamicImage]](decodingError("exr: short raw chunk"))
       blk = comp[0..<exp]
     of 1:
-      var r = rleDecompress(comp, exp)
-      if not r.ok: return err[seq[DynamicImage]](r.err)
-      blk = move(r.value)
+      # As with ZIP, the encoder stores the chunk raw when RLE grows it;
+      # the reference framework then skips decompression (proven: a
+      # raw-stored RLE chunk re-converts byte-identically). Mirror that.
+      if comp.len == exp:
+        blk = comp[0..<exp]
+      else:
+        var r = rleDecompress(comp, exp)
+        if not r.ok: return err[seq[DynamicImage]](r.err)
+        blk = move(r.value)
     of 2, 3:
-      var r = inflateZlib(comp, exp)
-      if not r.ok: return err[seq[DynamicImage]](r.err)
-      if r.value.len < exp:
-        return err[seq[DynamicImage]](decodingError("exr: short zip chunk"))
-      if r.value.len == exp: blk = move(r.value)
-      else: blk = r.value[0..<exp]
-      differencesToSamples(blk)
-      interleaveHalves(blk)
+      # Reference stores whichever is smaller (raw vs deflated); a chunk
+      # whose size equals the unpacked size is raw (undo_zip fast path).
+      if comp.len == exp:
+        blk = comp[0..<exp]
+      else:
+        var r = inflateZlib(comp, exp)
+        if not r.ok: return err[seq[DynamicImage]](r.err)
+        if r.value.len < exp:
+          return err[seq[DynamicImage]](decodingError("exr: short zip chunk"))
+        if r.value.len == exp: blk = move(r.value)
+        else: blk = r.value[0..<exp]
+        differencesToSamples(blk)
+        interleaveHalves(blk)
+    of 5:
+      # PXR24: zlib payload is plane-split (3 bytes/px for float), so the
+      # inflated size differs from exp when float channels are present.
+      var ptypes = newSeq[int32](channels.len)
+      for i, c in channels: ptypes[i] = c.pixelType
+      let tsize = pxr24TransformedSize(w, rows, chanBytes, ptypes)
+      var inflated = inflateZlib(comp, tsize)
+      if inflated.ok and inflated.value.len >= tsize:
+        let decomp = if inflated.value.len == tsize: move(inflated.value)
+          else: inflated.value[0..<tsize]
+        var u = pxr24Undo(decomp, w, rows, chanBytes, ptypes)
+        if not u.ok: return err[seq[DynamicImage]](u.err)
+        blk = move(u.value)
+      elif comp.len == exp:
+        # encoder stored the chunk raw (compressed form was larger)
+        blk = comp[0..<exp]
+      else:
+        if not inflated.ok: return err[seq[DynamicImage]](inflated.err)
+        return err[seq[DynamicImage]](decodingError("exr: short pxr24 chunk"))
     else: discard
+    # Disk layout is planar-per-scanline for every compression; convert
+    # once to our chunky `full` buffer. (PXR24's undo already emits
+    # planar rows, so it shares this boundary.)
+    blk = planarToChunky(blk, w, rows, chanBytes)
     for r in 0..<rows:
       for i in 0..<lineBytes:
         full[(firstRow+r)*lineBytes+i] = blk[r*lineBytes+i]
-  # samples -> DynamicImage (all to f32). Chunk data is chunky-interleaved.
+  # samples -> DynamicImage (chunky-interleaved rows).
   var coff = newSeq[int](channels.len)
   var stride = 0
   for ci in 0..<channels.len:
@@ -407,28 +667,41 @@ proc putBox(dst: var seq[uint8], x0, y0, x1, y1: int32) =
   for v in [x0, y0, x1, y1]:
     putU32le(dst, cast[uint32](v))
 
-proc encodeExr*(img: DynamicImage): ImageResult[seq[uint8]] =
-  ## ZIP scanline writer. Accepts Rgb32F/Rgba32F/Luma32F (convert first).
+proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]] =
+  ## Scanline writer (ZIP default, PXR24 opt-in). Accepts
+  ## Rgb32F/Rgba32F/Luma32F (convert first). PXR24 rounds float channels
+  ## to 24 bits on write (lossy); HALF/UINT-exactness only matters on
+  ## decode of foreign files since this writer emits float channels.
+  ## Channel data is packed alphabetically by name (B,G,R / A,B,G,R),
+  ## per the file layout; the chlist is written in the same order.
+  if compression notin [3, 5]:
+    return err[seq[uint8]](unsupportedError(ukGenericFeature,
+      "exr: encode compression " & $compression))
+  if compression notin [3, 5]:
+    return err[seq[uint8]](unsupportedError(ukGenericFeature,
+      "exr: encode compression " & $compression))
   var w, h: int
   var chNames: seq[string] = @[]
   var raw: seq[uint8] = @[]
   case img.kind
   of dkRgb32F:
     w = int(img.rgb32f.width); h = int(img.rgb32f.height)
-    chNames = @["R", "G", "B"]
+    chNames = @["B", "G", "R"]
+    const comp = [2, 1, 0] # B,G,R <- R,G,B pixel components
     raw = newSeq[uint8](w*h*12)
     for i, p in img.rgb32f.pixels:
       for c in 0..2:
-        let u = cast[uint32](p.data[c])
+        let u = cast[uint32](p.data[comp[c]])
         raw[12*i+4*c]=uint8(u and 0xFF); raw[12*i+4*c+1]=uint8((u shr 8) and 0xFF)
         raw[12*i+4*c+2]=uint8((u shr 16) and 0xFF); raw[12*i+4*c+3]=uint8((u shr 24) and 0xFF)
   of dkRgba32F:
     w = int(img.rgba32f.width); h = int(img.rgba32f.height)
-    chNames = @["R", "G", "B", "A"]
+    chNames = @["A", "B", "G", "R"]
+    const comp = [3, 2, 1, 0]
     raw = newSeq[uint8](w*h*16)
     for i, p in img.rgba32f.pixels:
       for c in 0..3:
-        let u = cast[uint32](p.data[c])
+        let u = cast[uint32](p.data[comp[c]])
         raw[16*i+4*c]=uint8(u and 0xFF); raw[16*i+4*c+1]=uint8((u shr 8) and 0xFF)
         raw[16*i+4*c+2]=uint8((u shr 16) and 0xFF); raw[16*i+4*c+3]=uint8((u shr 24) and 0xFF)
   of dkLuma32F:
@@ -456,7 +729,7 @@ proc encodeExr*(img: DynamicImage): ImageResult[seq[uint8]] =
     putU32le(chl, 1); putU32le(chl, 1) # sampling
   chl.add(0) # terminator
   putAttr(output, "channels", "chlist", chl)
-  putAttr(output, "compression", "compression", @[3'u8]) # ZIP
+  putAttr(output, "compression", "compression", @[uint8(compression)])
   var bw: seq[uint8] = @[]
   putBox(bw, 0, 0, int32(w-1), int32(h-1))
   putAttr(output, "dataWindow", "box2i", bw)
@@ -470,7 +743,7 @@ proc encodeExr*(img: DynamicImage): ImageResult[seq[uint8]] =
   putAttr(output, "screenWindowCenter", "v2f", @[0'u8,0,0,0, 0,0,0,0])
   putAttr(output, "screenWindowWidth", "float", @[0'u8,0,0,0])
   output.add(0) # end of header
-  # chunks: ZIP = 16 rows each
+  # chunks: ZIP/PXR24 = 16 rows each
   let rowsPer = 16
   let lineBytes = w * chNames.len * 4
   let nChunks = (h + rowsPer - 1) div rowsPer
@@ -479,18 +752,36 @@ proc encodeExr*(img: DynamicImage): ImageResult[seq[uint8]] =
   for _ in 0..<nChunks:
     for _ in 0..7: output.add(0)
   var chunkData: seq[seq[uint8]] = @[]
+  var ptypesEnc = newSeq[int32](chNames.len)
+  var cbytesEnc = newSeq[int](chNames.len)
+  for i in 0..<chNames.len:
+    ptypesEnc[i] = 2
+    cbytesEnc[i] = 4
   for ci in 0..<nChunks:
     let y0 = ci * rowsPer
     let rows = min(rowsPer, h - y0)
-    var blk = raw[y0*lineBytes..<y0*lineBytes+rows*lineBytes]
-    separateHalves(blk)
-    samplesToDifferences(blk)
-    let cr = deflateZlib(blk, 6)
-    if not cr.ok: return err[seq[uint8]](cr.err)
+    let blk = raw[y0*lineBytes..<y0*lineBytes+rows*lineBytes]
+    # Disk layout is planar-per-scanline; the transforms run on planar.
+    let planar = chunkyToPlanar(blk, w, rows, cbytesEnc)
+    var payload: seq[uint8]
+    if compression == 5:
+      let t = pxr24Apply(blk, w, rows, cbytesEnc, ptypesEnc)
+      let cr = deflateZlib(t, 6)
+      if not cr.ok: return err[seq[uint8]](cr.err)
+      # internal_pxr24.c: store packed (planar) when deflate grows it.
+      payload = if cr.value.len <= planar.len: cr.value else: planar
+    else:
+      var tb = planar
+      separateHalves(tb)
+      samplesToDifferences(tb)
+      let cr = deflateZlib(tb, 6)
+      if not cr.ok: return err[seq[uint8]](cr.err)
+      # internal_zip.c: store planar raw when deflate grows it (`>=`).
+      payload = if cr.value.len < planar.len: cr.value else: planar
     var ch: seq[uint8] = @[]
     putU32le(ch, uint32(y0))
-    putU32le(ch, uint32(cr.value.len))
-    for b in cr.value: ch.add(b)
+    putU32le(ch, uint32(payload.len))
+    for b in payload: ch.add(b)
     chunkData.add(ch)
   var doff = output.len
   for i, ch in chunkData:

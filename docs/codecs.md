@@ -8,7 +8,7 @@ check the return type before calling `.value`.
 | Codec | Support | Decode proc | Encode proc |
 |---|---|---|---|
 | BMP | o+w: 1/4/8-bit palette, 16-bit bitfields, 24/32-bit, RLE4/RLE8 | `decodeBmp` → `DynamicImage` | `encodeBmpRgb8`, `encodeBmpRgba8` → `seq[uint8]` |
-| EXR | o+w: scanline NONE/RLE/ZIP/ZIPS, half/float/uint → 32F. No PIZ/tiled/multipart | `decodeExr` / `decodeExrAll` | `encodeExr` → `ImageResult` |
+| EXR | o+w: scanline NONE/RLE/ZIP/ZIPS/PXR24, half/float/uint → 32F. No PIZ/B44/DWAA/tiled/multipart | `decodeExr` / `decodeExrAll` | `encodeExr` (`compression = 3` ZIP default, `5` PXR24) → `ImageResult` |
 | Farbfeld | o+w: `Rgba16` | `decodeFarbfeld` → `Rgba16Image` | `encodeFarbfeld` → `seq[uint8]` |
 | GIF | o+w: animation, disposal, interlace, loop count, LZW | `decodeGif` → `GifImage` (frames + delays) | `encodeGif(frames, w, h, …)` |
 | HDR | o+w: Radiance RGBE, flat + new/old RLE | `decodeHdr` → `Rgb32FImage` | `encodeHdr` / `encodeHdrFlat` → `seq[uint8]` |
