@@ -19,7 +19,7 @@ check the return type before calling `.value`.
 | QOI | o+w: full op-index/run/diff/luma/rgb/rgba | `decodeQoi` → `RgbaImage` | `encodeQoi` → `seq[uint8]` |
 | TGA | o+w: raw/RLE, colormaps, 15-bit, orientation | `decodeTga` → `DynamicImage` | `encodeTgaRgb8`, `encodeTgaRgba8` → `seq[uint8]` |
 | TIFF | o+w: strips/tiles, chunky/planar, None/LZW/Deflate/PackBits, YCbCr/CMYK/palette. First page by default | `decodeTiff` / `decodeTiffAll` | `encodeTiff` → `ImageResult` |
-| WebP | o+w: lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green and per-block color transforms; no color-index/meta-Huffman yet) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100). No animation / VP8X alpha | `decodeWebp` → `DynamicImage` | `encodeWebp` (lossless, `ImageResult`), `encodeWebpLossy(RgbaImage, quality)` (raw VP8 frame → RIFF) |
+| WebP | o+w: lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green, per-block color and meta-Huffman transforms; no color-index yet) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100). No animation / VP8X alpha | `decodeWebp` → `DynamicImage` | `encodeWebp` (lossless, `ImageResult`), `encodeWebpLossy(RgbaImage, quality)` (raw VP8 frame → RIFF) |
 | AVIF | color math only: BT.601/709/2020 YCbCr, YCgCo-Re, yuv420→rgb. No AV1 bitstream | `decodeAvif` (v1 stub → `ekUnsupported`) | `encodeAvif` (stub) |
 | HEIF/HEIC | o (decode-only): ISOBMFF + uncompressed (`unci` v0/v1) + JPEG-in-HEIF + `irot`/`imir`/`clap`/`iden`. No HEVC/VVC/AVC/JPEG2000 bitstreams, grids, overlays, sequences | `decodeHeif` / `decodeHeic` → `DynamicImage` | — (none) |
 

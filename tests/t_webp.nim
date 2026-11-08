@@ -280,6 +280,26 @@ test "webp vp8l color transform wins on photo":
     check [px.data[0], px.data[1], px.data[2]] ==
       [rgba.pixels[i].data[0], rgba.pixels[i].data[1], rgba.pixels[i].data[2]]
 
+test "webp vp8l meta-huffman wins on gradients":
+  # Per-region Huffman groups (32px tiles, greedily clustered). Kept only
+  # when the actual payload is smaller; photos and noise fall back exactly.
+  var px = newSeq[Rgba[uint8]](64 * 64)
+  for y in 0..<64:
+    for x in 0..<64:
+      px[y * 64 + x] = Rgba[uint8](data: [uint8(x mod 256),
+        uint8(y mod 256), uint8((x + y) mod 256), 255])
+  let img = DynamicImage(kind: dkRgba8,
+    rgba8: RgbaImage(width: 64, height: 64, pixels: px))
+  let enc = encodeWebp(img)
+  check enc.ok
+  check enc.value.len < 512
+  let back = decodeWebp(enc.value)
+  check back.ok
+  require back.value.kind == dkRgb8
+  for i, p in back.value.rgb8.pixels:
+    check [p.data[0], p.data[1], p.data[2]] ==
+      [px[i].data[0], px[i].data[1], px[i].data[2]]
+
 test "webp vp8l length prefix codes round-trip":
   # lengthSymExtra must invert copyDist for every length 1..4096.
   proc fwdCopyDist(prefix, extra: int): int =

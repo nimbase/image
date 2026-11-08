@@ -47,7 +47,7 @@ Codec support (`o` = decode, `w` = encode):
 - QOI: o+w — full op-index/run/diff/luma/rgb/rgba codec
 - TGA: o+w — raw/RLE, colormaps, 15-bit, orientation
 - TIFF: o+w — strips/tiles, chunky/planar, None/LZW/Deflate/PackBits, YCbCr/CMYK/palette
-- WebP: o+w — lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green and per-block color transforms) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100); animation / VP8X alpha unsupported
+- WebP: o+w — lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green, per-block color and meta-Huffman transforms) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100); animation / VP8X alpha unsupported
 - AVIF: color math only (BT.601/709/2020 YCbCr, YCgCo-Re); AV1 bitstream unsupported
 - HEIF/HEIC: o (decode-only) — ISOBMFF container + uncompressed (`unci`, v0/v1, comp/pixel/row/mixed, 8/16-bit) + JPEG-in-HEIF via the JPEG decoder + `irot`/`imir`/`clap`/`iden`; HEVC/VVC/AVC/JPEG2000 bitstreams, tiled layouts, grids/overlays, sequences unsupported
 

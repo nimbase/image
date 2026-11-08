@@ -1560,75 +1560,84 @@ proc applyColorFwd*(px: var seq[Rgba[uint8]], w, h, sizeBits: int,
           px[i].data[0] = uint8(rt)
           px[i].data[2] = uint8(bt)
 
-proc encodeStreamInto(w2: var Vp8lBitWriter, img: RgbaImage,
-    writeMeta: bool) =
-  ## LZ77 + Huffman stream (decodeStream format): cache flag, optional
-  ## meta-huffman flag, trees, ops. No signature/header/flush: callers
-  ## concatenate sub-streams (transform data) and flush once at the end.
-  # order-0 literal cost estimates for the parse
-  var gR = newSeq[int](256); var gG = newSeq[int](256)
-  var gB = newSeq[int](256); var gA = newSeq[int](256)
-  for p in img.pixels:
-    gR[p.data[0]] += 1; gG[p.data[1]] += 1
-    gB[p.data[2]] += 1; gA[p.data[3]] += 1
-  let eR = buildLens(gR); let eG = buildLens(gG)
-  let eB = buildLens(gB); let eA = buildLens(gA)
-  let w = int(img.width)
-  let (ops, fG, fR, fB, fA, fD) = parseLz77(img.pixels, w, eR, eG, eB, eA)
-  # NB: decodeStream reads the cache flag BEFORE the meta-huffman flag
-  # (all-zero order was invisible when every flag was 0).
-  w2.emitBits(1, 1) # color cache follows
-  w2.emitBits(Vp8lCacheBits, 4)
-  if writeMeta: w2.emitBits(0, 1) # no meta huffman
-  let lG = buildLens(fG); let lR = buildLens(fR)
-  let lB = buildLens(fB); let lA = buildLens(fA)
-  # write 5 trees: green(280 + cache), red, blue, alpha, dist
-  writeCodeLengths(w2, lG, 280 + Vp8lCacheSize)
-  writeCodeLengths(w2, lR, 256)
-  writeCodeLengths(w2, lB, 256)
-  writeCodeLengths(w2, lA, 256)
+# ---------- Huffman tables + multi-group emission ----------
+
+type HuffTables = object
+  lG, lR, lB, lA, lD: seq[uint16]
+  cG, nG, cR, nR, cB, nB, cA, nA, cD, nD: seq[int]
+  sG, sR, sB, sA, sD: bool
+  distUsed: bool
+
+proc isSingleLens(lens: openArray[uint16]): bool =
+  var npresent = 0
+  for l in lens:
+    if l != 0: inc(npresent)
+  npresent == 1
+
+proc buildTables(fG, fR, fB, fA, fD: openArray[int]): HuffTables =
+  ## Huffman lengths + canonical codes + single-symbol flags for one group.
+  ## Single-symbol trees decode without consuming bits, so the emitter must
+  ## emit nothing for them either.
+  result.lG = buildLens(fG); result.lR = buildLens(fR)
+  result.lB = buildLens(fB); result.lA = buildLens(fA)
   var distUsed = false
   for f in fD:
     if f != 0: distUsed = true; break
+  result.distUsed = distUsed
   var lD: seq[uint16] = @[]
-  if distUsed:
-    lD = buildLens(fD)
-    writeCodeLengths(w2, lD, 40)
+  if distUsed: lD = buildLens(fD)
+  result.lD = lD
+  let (cG, nG) = canonCodes(result.lG)
+  let (cR, nR) = canonCodes(result.lR)
+  let (cB, nB) = canonCodes(result.lB)
+  let (cA, nA) = canonCodes(result.lA)
+  let (cD, nD) = if distUsed: canonCodes(lD)
+    else: (newSeq[int](40), newSeq[int](40))
+  result.cG = cG; result.nG = nG; result.cR = cR; result.nR = nR
+  result.cB = cB; result.nB = nB; result.cA = cA; result.nA = nA
+  result.cD = cD; result.nD = nD
+  result.sG = isSingleLens(result.lG); result.sR = isSingleLens(result.lR)
+  result.sB = isSingleLens(result.lB); result.sA = isSingleLens(result.lA)
+  result.sD = distUsed and isSingleLens(lD)
+
+proc writeTables(w2: var Vp8lBitWriter, t: HuffTables) =
+  ## Write 5 trees: green (280 + cache), red, blue, alpha, dist.
+  writeCodeLengths(w2, t.lG, 280 + Vp8lCacheSize)
+  writeCodeLengths(w2, t.lR, 256)
+  writeCodeLengths(w2, t.lB, 256)
+  writeCodeLengths(w2, t.lA, 256)
+  if t.distUsed:
+    writeCodeLengths(w2, t.lD, 40)
   else:
     # dist tree unused: simple 1-symbol tree with symbol 0.
     # Layout: simple=1, num=0 (one symbol), is8=0, zero=0 (a single bit).
     w2.emitBits(1, 1); w2.emitBits(0, 1); w2.emitBits(0, 1); w2.emitBits(0, 1)
-  let (cG, nG) = canonCodes(lG); let (cR, nR) = canonCodes(lR)
-  let (cB, nB) = canonCodes(lB); let (cA, nA) = canonCodes(lA)
-  let (cD, nD) = if distUsed: canonCodes(lD)
-    else: (newSeq[int](40), newSeq[int](40))
-  template isSingle(lens: openArray[uint16]): bool =
-    block:
-      var npresent = 0
-      for l in lens:
-        if l != 0: inc(npresent)
-      npresent == 1
-  # Single-symbol trees decode without consuming bits, so the encoder must
-  # emit nothing for them either. (Dist included: a stream with a single
-  # distance, e.g. all d==1 runs, builds a single-symbol dist tree.)
-  let sG = isSingle(lG); let sR = isSingle(lR)
-  let sB = isSingle(lB); let sA = isSingle(lA)
-  let sD = distUsed and isSingle(lD)
+
+proc emitOps(w2: var Vp8lBitWriter, ops: seq[uint8], px: seq[Rgba[uint8]],
+    w: int, groups: seq[HuffTables], tileGroup: seq[int], histoBits,
+    hx: int) =
+  ## Emit literals / cache hits / copies with per-op group selection.
+  ## The group comes from the op START pixel (mirroring the reference
+  ## StoreImageToBitMask and our decoder's nextBlock switching).
   var idx = 0
   var k = 0
   while k < ops.len:
+    let g = if tileGroup.len == 0: 0
+      else: tileGroup[((idx div w) shr histoBits) * hx +
+        ((idx mod w) shr histoBits)]
+    let t = groups[g]
     case ops[k]
     of 0:
-      let p = img.pixels[idx].data
-      if not sG: w2.emitBits(cG[p[1]], nG[p[1]])
-      if not sR: w2.emitBits(cR[p[0]], nR[p[0]])
-      if not sB: w2.emitBits(cB[p[2]], nB[p[2]])
-      if not sA: w2.emitBits(cA[p[3]], nA[p[3]])
+      let p = px[idx].data
+      if not t.sG: w2.emitBits(t.cG[p[1]], t.nG[p[1]])
+      if not t.sR: w2.emitBits(t.cR[p[0]], t.nR[p[0]])
+      if not t.sB: w2.emitBits(t.cB[p[2]], t.nB[p[2]])
+      if not t.sA: w2.emitBits(t.cA[p[3]], t.nA[p[3]])
       inc(idx); inc(k)
     of 1:
-      let u = packArgb(img.pixels[idx].data)
+      let u = packArgb(px[idx].data)
       let sym = 280 + cacheIdxU(u, Vp8lCacheBits)
-      w2.emitBits(cG[sym], nG[sym])
+      w2.emitBits(t.cG[sym], t.nG[sym])
       inc(idx); inc(k)
     else: # copy: u16LE len, u8 dist sym, u32LE dist extra
       let L = int(ops[k+1]) or (int(ops[k+2]) shl 8)
@@ -1636,11 +1645,283 @@ proc encodeStreamInto(w2: var Vp8lBitWriter, img: RgbaImage,
       let de = int(ops[k+4]) or (int(ops[k+5]) shl 8) or
         (int(ops[k+6]) shl 16) or (int(ops[k+7]) shl 24)
       let (ls, le, lnb) = lengthSymExtra(L)
-      w2.emitBits(cG[256 + ls], nG[256 + ls])
+      w2.emitBits(t.cG[256 + ls], t.nG[256 + ls])
       w2.emitBits(le, lnb)
-      if not sD: w2.emitBits(cD[ds], nD[ds])
+      if not t.sD: w2.emitBits(t.cD[ds], t.nD[ds])
       w2.emitBits(de, distExtraBits(ds))
       idx += L; k += 8
+
+proc vp8lParse(px: seq[Rgba[uint8]], w: int): tuple[ops: seq[uint8],
+    fG, fR, fB, fA, fD: seq[int]] =
+  ## Order-0 estimates + greedy LZ77 parse (shared by all paths).
+  var gR = newSeq[int](256); var gG = newSeq[int](256)
+  var gB = newSeq[int](256); var gA = newSeq[int](256)
+  for p in px:
+    gR[p.data[0]] += 1; gG[p.data[1]] += 1
+    gB[p.data[2]] += 1; gA[p.data[3]] += 1
+  let eR = buildLens(gR); let eG = buildLens(gG)
+  let eB = buildLens(gB); let eA = buildLens(gA)
+  let (ops, fG, fR, fB, fA, fD) = parseLz77(px, w, eR, eG, eB, eA)
+  (ops, fG, fR, fB, fA, fD)
+
+# ---------- meta-Huffman (multi-group) ----------
+
+const MetaOffR = 280 + Vp8lCacheSize # 408: green alphabet (280 + cache)
+const MetaOffB = MetaOffR + 256
+const MetaOffA = MetaOffB + 256
+const MetaOffD = MetaOffA + 256
+const MetaSymTotal = MetaOffD + 40 # 1216
+
+const MetaMaxTiles = 1024
+  ## Tile-count cap: histoBits grows until the meta grid fits.
+
+const MetaOverheads = [80.0, 160.0, 320.0]
+  ## Merge thresholds tried per image; the actual payload comparison keeps
+  ## the best. Different content prefers different granularity (fine
+  ## regions vs few large ones). Each is gated on actual size.
+
+const Vp8lUseMeta = true
+  ## Master switch for meta-Huffman. Tried on the transform winner and kept
+  ## only when the actual payload is smaller.
+
+type MetaPlan* = object
+  bits*: int # 0 = no meta
+  hx*, hy*: int
+  tileGroup*: seq[int] # per meta-tile compact group id
+  groupFreqs*: seq[seq[int]] # aggregated (+seeded) freqs per group
+  ops*: seq[uint8] # parse reused by the payload builder
+
+func slogE(n: int): float =
+  if n <= 1: 0.0 else: float(n) * log2(float(n))
+
+proc groupEntropy(f: openArray[int]): float =
+  ## Shannon bits for the 5 alphabets (proxy for Huffman cost).
+  const bounds = [(0, MetaOffR), (MetaOffR, MetaOffB), (MetaOffB, MetaOffA),
+    (MetaOffA, MetaOffD), (MetaOffD, MetaSymTotal)]
+  for (a, b) in bounds:
+    var s = 0
+    var acc = 0.0
+    for i in a..<b:
+      let c = f[i]
+      if c != 0:
+        s += c
+        acc += slogE(c)
+    result += slogE(s) - acc
+
+proc bucketTileFreqs(ops: seq[uint8], px: seq[Rgba[uint8]], w, bits,
+    hx, hy: int): seq[seq[int]] =
+  ## Per meta-tile symbol counts, bucketed by op START pixel.
+  let T = hx * hy
+  result = newSeq[seq[int]](T)
+  for t in 0..<T: result[t] = newSeq[int](MetaSymTotal)
+  var idx = 0
+  var k = 0
+  while k < ops.len:
+    let tile = ((idx div w) shr bits) * hx + ((idx mod w) shr bits)
+    case ops[k]
+    of 0:
+      let p = px[idx].data
+      result[tile][int(p[1])] += 1
+      result[tile][MetaOffR + int(p[0])] += 1
+      result[tile][MetaOffB + int(p[2])] += 1
+      result[tile][MetaOffA + int(p[3])] += 1
+      inc(idx); inc(k)
+    of 1:
+      let sym = 280 + cacheIdxU(packArgb(px[idx].data), Vp8lCacheBits)
+      result[tile][sym] += 1
+      inc(idx); inc(k)
+    else:
+      let L = int(ops[k+1]) or (int(ops[k+2]) shl 8)
+      let ds = int(ops[k+3])
+      let (ls, _, _) = lengthSymExtra(L)
+      result[tile][256 + ls] += 1
+      result[tile][MetaOffD + ds] += 1
+      idx += L; k += 8
+
+proc clusterTiles(tileFreqs: seq[seq[int]], hx, hy: int,
+    treeOverhead: float): seq[int] =
+  ## Greedy adjacent merge: repeatedly merge the neighboring pair with the
+  ## best net saving (entropy increase vs one group's trees) until nothing
+  ## pays. Regions are contiguous, so adjacency-only merging finds them.
+  ## Returns per-tile compact group ids.
+  let T = tileFreqs.len
+  if T <= 1: return @[0]
+  type GroupAgg = object
+    freq: seq[int]
+    cost: float
+    live: bool
+    tiles: seq[int]
+  var groups = newSeq[GroupAgg](T)
+  var gid = newSeq[int](T)
+  for t in 0..<T:
+    groups[t] = GroupAgg(freq: tileFreqs[t], cost: groupEntropy(tileFreqs[t]),
+      live: true, tiles: @[t])
+    gid[t] = t
+  var scratch = newSeq[int](MetaSymTotal)
+  var pass = 0
+  while pass < 32:
+    # collect adjacent group pairs (right + down tile neighbors)
+    var pairs: seq[(int, int)] = @[]
+    for ty in 0..<hy:
+      for tx in 0..<hx:
+        let t = ty * hx + tx
+        if tx + 1 < hx:
+          let a = gid[t]; let b = gid[t + 1]
+          if a != b: pairs.add((min(a, b), max(a, b)))
+        if ty + 1 < hy:
+          let a = gid[t]; let b = gid[t + hx]
+          if a != b: pairs.add((min(a, b), max(a, b)))
+    if pairs.len == 0: break
+    pairs.sort(proc(x, y: (int, int)): int =
+      if x[0] != y[0]: x[0] - y[0] else: x[1] - y[1])
+    var uniq: seq[(int, int)] = @[]
+    for pr in pairs:
+      if uniq.len == 0 or uniq[^1] != pr: uniq.add(pr)
+    # evaluate; keep beneficial merges
+    var cands: seq[(float, int, int)] = @[]
+    for (a, b) in uniq:
+      if not groups[a].live or not groups[b].live: continue
+      for i in 0..<MetaSymTotal:
+        scratch[i] = groups[a].freq[i] + groups[b].freq[i]
+      let net = groups[a].cost + groups[b].cost + treeOverhead -
+        groupEntropy(scratch)
+      if net > 0.0: cands.add((net, a, b))
+    if cands.len == 0: break
+    cands.sort(proc(x, y: (float, int, int)): int =
+      if x[0] > y[0]: -1 elif x[0] < y[0]: 1 else: 0)
+    var touched = newSeq[bool](T)
+    var mergedAny = false
+    for (_, a, b) in cands:
+      if not groups[a].live or not groups[b].live: continue
+      if touched[a] or touched[b]: continue
+      # merge b into a
+      for i in 0..<MetaSymTotal:
+        groups[a].freq[i] += groups[b].freq[i]
+      groups[a].cost = groupEntropy(groups[a].freq)
+      for t in groups[b].tiles:
+        gid[t] = a
+        groups[a].tiles.add(t)
+      groups[b].live = false
+      groups[b].tiles = @[]
+      touched[a] = true
+      mergedAny = true
+    if not mergedAny: break
+    inc(pass)
+  # compact ids
+  var remap = newSeq[int](T)
+  for i in 0..<T: remap[i] = -1
+  var ng = 0
+  result = newSeq[int](T)
+  for t in 0..<T:
+    let g = gid[t]
+    if remap[g] < 0:
+      remap[g] = ng
+      inc(ng)
+    result[t] = remap[g]
+
+proc chooseHistoBits(w, h: int): int =
+  result = 5 # 32px tiles
+  while subSize(w, result) * subSize(h, result) > MetaMaxTiles and result < 9:
+    inc(result)
+
+type MetaBucket = object
+  bits, hx, hy: int
+  ops: seq[uint8]
+  tileFreqs: seq[seq[int]]
+
+proc bucketMeta(px: seq[Rgba[uint8]], w, h: int): MetaBucket =
+  ## Parse once + bucket per-tile freqs (shared across overhead tries).
+  let bits = chooseHistoBits(w, h)
+  let hx = subSize(w, bits); let hy = subSize(h, bits)
+  let (ops, _, _, _, _, _) = vp8lParse(px, w)
+  MetaBucket(bits: bits, hx: hx, hy: hy, ops: ops,
+    tileFreqs: bucketTileFreqs(ops, px, w, bits, hx, hy))
+
+proc planFromBucket(b: MetaBucket, treeOverhead: float): MetaPlan =
+  ## Cluster into groups at one overhead. Returns bits=0 when clustering
+  ## yields a single group. The payload builder reuses plan.ops.
+  let ctg = clusterTiles(b.tileFreqs, b.hx, b.hy, treeOverhead)
+  var ng = 0
+  for g in ctg:
+    if g + 1 > ng: ng = g + 1
+  if ng <= 1:
+    return MetaPlan(bits: 0)
+  # aggregate + seed empty channels (an all-zero tree fails to decode;
+  # seeded single-symbol trees are valid and, when unused, cost nothing
+  # to read)
+  var gf = newSeq[seq[int]](ng)
+  for g in 0..<ng: gf[g] = newSeq[int](MetaSymTotal)
+  for ti in 0..<ctg.len:
+    let g = ctg[ti]
+    for i in 0..<MetaSymTotal: gf[g][i] += b.tileFreqs[ti][i]
+  const segs = [(0, MetaOffR), (MetaOffR, MetaOffB), (MetaOffB, MetaOffA),
+    (MetaOffA, MetaOffD)]
+  for g in 0..<ng:
+    for (a, b) in segs:
+      var any = false
+      for i in a..<b:
+        if gf[g][i] != 0: any = true; break
+      if not any: gf[g][a] = 1
+    # Fast-path hazard: the decoder's all-single path requires a literal
+    # green (< 256) and replicates constant pixels. A group with a single
+    # non-literal green (copy-only or cache-hit-only content) would enter
+    # it degenerately, so force a second green symbol. Unused by the
+    # normal path beyond a negligible code perturbation.
+    var nzG = 0
+    var symG = 0
+    for i in 0..<MetaOffR:
+      if gf[g][i] != 0:
+        inc(nzG)
+        symG = i
+    if nzG == 1 and symG >= 256: gf[g][0] += 1
+  MetaPlan(bits: b.bits, hx: b.hx, hy: b.hy, tileGroup: ctg, groupFreqs: gf,
+    ops: b.ops)
+
+proc encodeStreamInto(w2: var Vp8lBitWriter, img: RgbaImage,
+    writeMeta: bool) =
+  ## LZ77 + Huffman stream (decodeStream format): cache flag, optional
+  ## meta-huffman flag, trees, ops. No signature/header/flush: callers
+  ## concatenate sub-streams (transform data) and flush once at the end.
+  ## Transform-data sub-streams never use meta-Huffman (like the reference).
+  let w = int(img.width)
+  let (ops, fG, fR, fB, fA, fD) = vp8lParse(img.pixels, w)
+  # NB: decodeStream reads the cache flag BEFORE the meta-huffman flag
+  # (all-zero order was invisible when every flag was 0).
+  w2.emitBits(1, 1) # color cache follows
+  w2.emitBits(Vp8lCacheBits, 4)
+  if writeMeta: w2.emitBits(0, 1) # no meta huffman
+  let t = buildTables(fG, fR, fB, fA, fD)
+  writeTables(w2, t)
+  emitOps(w2, ops, img.pixels, w, @[t], @[], 0, 0)
+
+proc encodePlannedInto(w2: var Vp8lBitWriter, img: RgbaImage,
+    plan: MetaPlan) =
+  ## Main-image stream with meta-Huffman: meta flag + bits, meta image
+  ## sub-stream (group id per tile, high byte in R, low byte in G),
+  ## per-group trees, ops with per-group codes. Reuses plan.ops.
+  assert plan.bits > 0
+  let w = int(img.width)
+  w2.emitBits(1, 1) # color cache follows
+  w2.emitBits(Vp8lCacheBits, 4)
+  w2.emitBits(1, 1) # meta huffman follows
+  w2.emitBits(plan.bits - 2, 3)
+  var mpx = newSeq[Rgba[uint8]](plan.hx * plan.hy)
+  for ti, g in plan.tileGroup:
+    mpx[ti] = Rgba[uint8](data: [uint8(g shr 8), uint8(g and 0xFF), 0, 0])
+  encodeStreamInto(w2,
+    RgbaImage(width: uint32(plan.hx), height: uint32(plan.hy),
+      pixels: move(mpx)),
+    false)
+  var groups: seq[HuffTables] = @[]
+  for gf in plan.groupFreqs:
+    groups.add(buildTables(gf.toOpenArray(0, MetaOffR - 1),
+      gf.toOpenArray(MetaOffR, MetaOffB - 1),
+      gf.toOpenArray(MetaOffB, MetaOffA - 1),
+      gf.toOpenArray(MetaOffA, MetaOffD - 1),
+      gf.toOpenArray(MetaOffD, MetaSymTotal - 1)))
+  for t in groups: writeTables(w2, t)
+  emitOps(w2, plan.ops, img.pixels, w, groups, plan.tileGroup, plan.bits,
+    plan.hx)
 
 proc encodeStream*(img: RgbaImage, writeMeta: bool): seq[uint8] =
   ## Standalone stream (main image body use writeMeta=true).
@@ -1653,10 +1934,11 @@ const Vp8lUseTransforms = true
   ## Master switch for predictor + subtract-green. Always on (measured
   ## wins across content; tiny overhead on incompressible data).
 
-proc encodeVp8lPayload(img: RgbaImage, pxMain: seq[Rgba[uint8]],
-    modes: seq[uint8], colParams: seq[array[3, uint8]]): seq[uint8] =
-  ## Full VP8L payload: header, transforms, main stream. Both color on/off
-  ## variants are built standalone so the caller can keep the smaller.
+proc encodeVp8lPayload*(img: RgbaImage, pxMain: seq[Rgba[uint8]],
+    modes: seq[uint8], colParams: seq[array[3, uint8]],
+    plan = MetaPlan(bits: 0)): seq[uint8] =
+  ## Full VP8L payload: header, transforms, main stream. Variants are built
+  ## standalone so the caller can keep the smallest actual payload.
   let w = int(img.width); let h = int(img.height)
   var hasAlpha = false
   for p in img.pixels:
@@ -1693,14 +1975,17 @@ proc encodeVp8lPayload(img: RgbaImage, pxMain: seq[Rgba[uint8]],
   # (all-zero order was invisible when every flag was 0).
   var timg = RgbaImage(width: img.width, height: img.height,
     pixels: pxMain)
-  encodeStreamInto(w2, timg, true)
+  if plan.bits == 0:
+    encodeStreamInto(w2, timg, true)
+  else:
+    encodePlannedInto(w2, timg, plan)
   w2.emitFlush()
   w2.data
 
 proc encodeVp8l*(img: RgbaImage): seq[uint8] =
-  ## VP8L encoder: predictor + subtract-green + (when it wins) per-block
-  ## color transform, LZ77 backward matches + color cache, no meta-Huffman
-  ## yet. Pixel-exact output any spec decoder accepts. The color variant is
+  ## VP8L encoder: predictor + subtract-green + (when they win) per-block
+  ## color transform and meta-Huffman, LZ77 backward matches + color cache.
+  ## Pixel-exact output any spec decoder accepts. Each optional stage is
   ## kept only when its actual payload is smaller (reference philosophy:
   ## never trust estimates).
   let w = int(img.width); let h = int(img.height)
@@ -1712,18 +1997,30 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
   var px = applyPredictorFwd(img.pixels, w, h, PredSizeBits, modes)
   # subtract-green (always on for v1; decorrelates R/B from G)
   applySubGreenFwd(px)
-  let plain = encodeVp8lPayload(img, px, modes, @[])
+  var best = encodeVp8lPayload(img, px, modes, @[])
+  var bestPx = move(px)
+  var bestCol: seq[array[3, uint8]] = @[]
   if Vp8lUseColor:
-    let colParams = chooseColorParams(px, w, h, ColSizeBits)
+    let colParams = chooseColorParams(bestPx, w, h, ColSizeBits)
     var anyNz = false
     for cp in colParams:
       if cp != [0'u8, 0, 0]: anyNz = true; break
     if anyNz:
-      var pxC = px
+      var pxC = bestPx
       applyColorFwd(pxC, w, h, ColSizeBits, colParams)
-      let color = encodeVp8lPayload(img, move(pxC), modes, colParams)
-      if color.len < plain.len: return color
-  plain
+      let color = encodeVp8lPayload(img, pxC, modes, colParams)
+      if color.len < best.len:
+        best = color
+        bestPx = move(pxC)
+        bestCol = colParams
+  if Vp8lUseMeta:
+    let bucket = bucketMeta(bestPx, w, h)
+    for oh in MetaOverheads:
+      let plan = planFromBucket(bucket, oh)
+      if plan.bits == 0: continue
+      let meta = encodeVp8lPayload(img, bestPx, modes, bestCol, plan)
+      if meta.len < best.len: best = meta
+  best
 
 proc encodeWebp*(img: DynamicImage): ImageResult[seq[uint8]] =
   let rgba = img.toRgba8()
