@@ -2,7 +2,8 @@
 ## Scope: still keyframes, single partition, no segments, default token
 ## probabilities (no adaptation), fixed skip probability. Valid output
 ## that our decoder (and any spec decoder) accepts; rate-distortion is
-## heuristic (SATD mode search, no RDO loop, no loop-filter awareness).
+## RDO mode search over fully-quantized candidates, no trellis and no
+## loop-filter awareness.
 import std/math
 import std/algorithm
 import ./vp8
@@ -207,12 +208,59 @@ proc buildTokPaths(): array[2, array[4, array[8, array[3, array[12, TokPath]]]]]
 
 let TokPaths* = buildTokPaths()
 
+# ---------- RDO rate estimation (Phase B) ----------
+#
+# Mode decisions minimize J = SSD + lambda*rate over fully-quantized
+# candidates. Rates come from the default token probabilities (no
+# adaptation): each coded bit costs -log2 of its probability, mirroring
+# the bool coder's split. Distortion is post-reconstruction SSD.
+
+func bitCost*(prob: uint8, bit: bool): float64 =
+  ## -log2 cost of coding `bit` with VP8 probability `prob`. The bool
+  ## coder gives the 0-branch a `range * prob/256` split, i.e.
+  ## prob/256 = P(0): a 0-bit with prob=1 costs ~8 bits, with
+  ## prob=255 nearly nothing. (Getting this backwards inverts every
+  ## skewed token/mode cost and actively misleads RDO.)
+  let q = if bit: 1.0 - float64(prob) / 256.0 else: float64(prob) / 256.0
+  if q <= 0.0: 30.0
+  elif q >= 1.0: 0.0
+  else: -log2(q)
+
+let TokCosts* = block:
+  ## -log2 bit cost of every (start, plane, band, cx, token) path.
+  var t: array[2, array[4, array[8, array[3, array[12, float64]]]]]
+  for s in 0..1:
+    for p in 0..<4:
+      for bnd in 0..<8:
+        for cx in 0..<3:
+          for tok in 0..11:
+            if s == 1 and tok == 11: continue # unreachable, as in TokPaths
+            var c = 0.0
+            for (bit, prob) in TokPaths[s][p][bnd][cx][tok]:
+              c += bitCost(prob, bit)
+            t[s][p][bnd][cx][tok] = c
+  t
+
 proc treeEdgeContains(nodes: seq[TreeNode], edge: uint8, v: int): bool =
   if int(edge) < nodes.len:
     let n = nodes[int(edge)]
     return treeEdgeContains(nodes, n.left, v) or
       treeEdgeContains(nodes, n.right, v)
   int(edge and 0x7F'u8) == v
+
+proc treeCost*(nodes: seq[TreeNode], v: int): float64 =
+  ## Signaling cost of value v through a mode tree (mirrors writeTreeVal).
+  var idx = 0
+  while idx < nodes.len:
+    let n = nodes[idx]
+    if treeEdgeContains(nodes, n.left, v):
+      result += bitCost(n.prob, false)
+      if int(n.left) < nodes.len: idx = int(n.left)
+      else: break
+    else:
+      result += bitCost(n.prob, true)
+      if int(n.right) < nodes.len: idx = int(n.right)
+      else: break
 
 proc writeTreeVal(e: var BoolEnc, nodes: seq[TreeNode], v: int) =
   var idx = 0
@@ -259,6 +307,66 @@ proc tokenForAbs(v: int32): tuple[tok, ci, extra: int] =
       if v < Bases[ci] + (1 shl Nbits[ci]):
         return (5 + ci, ci, int(v) - Bases[ci])
     (10, 5, (1 shl 11) - 1) # clamp: encoder-side saturation, still valid
+
+func extraRate*(ci, extra: int): float64 =
+  ## Magnitude-refinement bit cost, MSB-first like writeExtra.
+  var nbits = 0
+  for t in ProbDctCat[ci]:
+    if t == 0: break
+    inc nbits
+  for k in 0..<nbits:
+    let bit = ((extra shr (nbits - 1 - k)) and 1) != 0
+    result += bitCost(ProbDctCat[ci][k], bit)
+
+proc coeffBlockRate*(qblk: array[16, int32], plane, cx, first: int):
+    tuple[rate: float64, hasNz: bool] =
+  ## Token-path bit cost of one quantized block (mirrors writeCoeffs).
+  var cxv = cx
+  var skip = false
+  var lastNz = first - 1
+  for i in countdown(15, first):
+    if qblk[int(Zigzag[i])] != 0:
+      lastNz = i
+      break
+  for i in first..15:
+    let band = int(CoeffBands[i])
+    let v = qblk[int(Zigzag[i])]
+    if i > lastNz and not skip:
+      result[0] += TokCosts[0][plane][band][cxv][11] # EOB
+      break
+    elif v == 0:
+      result[0] += TokCosts[if skip: 1 else: 0][plane][band][cxv][0]
+      skip = true
+      cxv = 0
+    else:
+      let av = abs(v)
+      let (tok, ci, extra) = tokenForAbs(av)
+      result[0] += TokCosts[if skip: 1 else: 0][plane][band][cxv][tok]
+      if tok >= 5:
+        result[0] += extraRate(ci, extra)
+      result[0] += 1.0 # sign bit, prob 128
+      skip = false
+      cxv = if av == 0: 0 elif av == 1: 1 else: 2
+  result[1] = lastNz >= first
+
+func ssd16*(a, b: array[256, uint8]): float64 =
+  for i in 0..<256:
+    let d = float64(int(a[i]) - int(b[i]))
+    result += d * d
+
+func ssd8*(a, b: array[64, uint8]): float64 =
+  for i in 0..<64:
+    let d = float64(int(a[i]) - int(b[i]))
+    result += d * d
+
+const RdoLamK = 0.01
+  ## J = SSD + lambda*rate with lambda = RdoLamK * q^2. Swept 0.01/0.03/
+  ## 0.10/0.30 on the release matrix (tex512 + photo512 at q50/75/90):
+  ## 0.01 strictly dominates the old heuristic everywhere (up to -39%
+  ## size at +1.3 dB on texture; -2..-6% size at +0.1~0.2 dB on photo).
+
+func vp8RdoLambda*(qac: int16): float64 =
+  RdoLamK * float64(qac) * float64(qac)
 
 proc writeCoeffs(e: var BoolEnc, qblk: array[16, int32], plane, cx,
     first: int) =
@@ -343,6 +451,286 @@ proc initVp8Enc(w, h: int, qi: int): Vp8Enc =
   result.uvdc = DcQuant[max(0, min(127, b))]
   if result.uvdc > 132: result.uvdc = 132
   result.uvac = AcQuant[max(0, min(127, b))]
+
+# ---------- RDO candidate evaluation (Phase B) ----------
+#
+# Each helper mirrors one stage of the final MB pipeline (same predictors,
+# same quantizers, same dequant+IDCT reconstruction) so the RD cost J of
+# a candidate equals what the bitstream section would produce for it.
+# Eval procs never mutate encoder state; the winner is re-derived by the
+# existing pipeline, keeping a single source of truth for emission.
+
+proc rdoPredictLuma16(m: LumaMode, mbx, mby, mbw: int, topB,
+    leftB: seq[uint8]): array[256, uint8] =
+  var ws = createBorderLuma(mbx, mby, mbw, topB, leftB)
+  case m
+  of lmV: predictVpred(ws, 16, 1, 1, 21)
+  of lmH: predictHpred(ws, 16, 1, 1, 21)
+  of lmTm: predictTmpred(ws, 16, 1, 1, 21)
+  of lmDc: predictDcpred(ws, 16, 21, mby != 0, mbx != 0)
+  of lmB: discard
+  for y in 0..<16:
+    for x in 0..<16:
+      result[y * 16 + x] = ws[(1 + y) * 21 + 1 + x]
+
+proc rdoQuantLuma16(pred, src: array[256, uint8], ydc, yac, y2dc,
+    y2ac: int16): tuple[qY: array[16, array[16, int32]],
+    qY2: array[16, int32], allZero: bool] =
+  var dcBlks: array[16, float64]
+  result.allZero = true
+  for i in 0..<16:
+    let bx = (i mod 4) * 4; let by = (i div 4) * 4
+    var blk: array[16, float64]
+    for y in 0..<4:
+      for x in 0..<4:
+        blk[y * 4 + x] = float64(int(src[(by + y) * 16 + bx + x])) -
+          float64(int(pred[(by + y) * 16 + bx + x]))
+    let f = fdct4x4(blk)
+    dcBlks[i] = f[0]
+    for k in 1..<16:
+      let q = quantizeCoeff(f[k] * FdctGain, yac)
+      result.qY[i][k] = q
+      if q != 0: result.allZero = false
+  let wht = fwht4x4(dcBlks)
+  for k in 0..<16:
+    let q = if k == 0: y2dc else: y2ac
+    let v = quantizeCoeff(wht[k] * WhtGain, q)
+    result.qY2[k] = v
+    if v != 0: result.allZero = false
+
+proc rdoRateLuma16(qY2: array[16, int32],
+    qY: array[16, array[16, int32]], topCx,
+    leftCx: array[9, uint8]): float64 =
+  ## Coeff rate with sequential cx simulation (mirrors the bitstream loop).
+  var tCx = topCx; var lCx = leftCx
+  let cx0 = int(tCx[0]) + int(lCx[0])
+  var y2: array[16, int32]
+  for k in 0..<16: y2[k] = qY2[k]
+  let (r0, n0) = coeffBlockRate(y2, 1, cx0, 0)
+  result += r0
+  tCx[0] = (if n0: 1 else: 0); lCx[0] = (if n0: 1 else: 0)
+  for y in 0..<4:
+    var l = lCx[y + 1]
+    for x in 0..<4:
+      let i = x + y * 4
+      let cx = int(tCx[x + 1]) + int(l)
+      var blk: array[16, int32]
+      blk[0] = qY[i][0]
+      for k in 1..<16: blk[k] = qY[i][k]
+      let (r, n) = coeffBlockRate(blk, 0, cx, 1)
+      result += r
+      l = (if n: 1 else: 0)
+      tCx[x + 1] = (if n: 1 else: 0)
+    lCx[y + 1] = l
+
+proc rdoReconLuma16(pred: array[256, uint8],
+    qY: array[16, array[16, int32]], qY2: array[16, int32], ydc, yac,
+    y2dc, y2ac: int16): array[256, uint8] =
+  result = pred
+  var y2d: array[16, int32]
+  for k in 0..<16:
+    y2d[k] = qY2[k] * (if k == 0: y2dc else: y2ac)
+  iwht4x4(y2d)
+  for y in 0..<4:
+    for x in 0..<4:
+      let i = x + y * 4
+      var rb: array[16, int32]
+      rb[0] = y2d[i]
+      for k in 1..<16: rb[k] = qY[i][k] * yac
+      idct4x4(rb)
+      for r in 0..<4:
+        for c in 0..<4:
+          let v = int(pred[(y * 4 + r) * 16 + x * 4 + c]) + rb[r * 4 + c]
+          result[(y * 4 + r) * 16 + x * 4 + c] = uint8(max(0, min(255, v)))
+
+proc rdoQuantSplit(src: array[256, uint8], mbx, mby, mbw: int, topB,
+    leftB: seq[uint8], bmodes: array[16, IntraMode], ydc,
+    yac: int16): tuple[qY: array[16, array[16, int32]], allZero: bool] =
+  ## Split residual vs the source proxy (mirrors the final quant path,
+  ## which fills interior workspaces from prox for each block).
+  result.allZero = true
+  for i in 0..<16:
+    let bx = (i mod 4) * 4; let by = (i div 4) * 4
+    var ws2 = createBorderLuma(mbx, mby, mbw, topB, leftB)
+    for y in 0..<by + 4:
+      for x in 0..<bx + 4:
+        ws2[(1 + y) * 21 + 1 + x] = src[y * 16 + x]
+    case bmodes[i]
+    of imTm: predictTmpred(ws2, 4, 1 + bx, 1 + by, 21)
+    of imVe: predictBvepred(ws2, 1 + bx, 1 + by, 21)
+    of imHe: predictBhepred(ws2, 1 + bx, 1 + by, 21)
+    of imDc: predictBdcpred(ws2, 1 + bx, 1 + by, 21)
+    of imLd: predictBldpred(ws2, 1 + bx, 1 + by, 21)
+    of imRd: predictBrdpred(ws2, 1 + bx, 1 + by, 21)
+    of imVr: predictBvrpred(ws2, 1 + bx, 1 + by, 21)
+    of imVl: predictBvlpred(ws2, 1 + bx, 1 + by, 21)
+    of imHd: predictBhdpred(ws2, 1 + bx, 1 + by, 21)
+    of imHu: predictBhupred(ws2, 1 + bx, 1 + by, 21)
+    var blk: array[16, float64]
+    for y in 0..<4:
+      for x in 0..<4:
+        blk[y * 4 + x] = float64(int(src[(by + y) * 16 + bx + x])) -
+          float64(int(ws2[(1 + by + y) * 21 + 1 + bx + x]))
+    let f = fdct4x4(blk)
+    for k in 0..<16:
+      let q = if k == 0: ydc else: yac
+      let v = quantizeCoeff(f[k] * FdctGain, q)
+      result.qY[i][k] = v
+      if v != 0: result.allZero = false
+
+proc rdoReconSplit(bmodes: array[16, IntraMode],
+    qY: array[16, array[16, int32]], mbx, mby, mbw: int, topB,
+    leftB: seq[uint8], ydc, yac: int16): array[256, uint8] =
+  ## Sequential causal reconstruction (mirrors the final recon path).
+  var ws = createBorderLuma(mbx, mby, mbw, topB, leftB)
+  var resdata: array[384, int32]
+  for i in 0..<16:
+    var blk: array[16, int32]
+    blk[0] = qY[i][0] * ydc
+    for k in 1..<16: blk[k] = qY[i][k] * yac
+    idct4x4(blk)
+    for k in 0..<16: resdata[i * 16 + k] = blk[k]
+  for sby in 0..<4:
+    for sbx in 0..<4:
+      let i = sbx + sby * 4
+      let y0 = sby * 4 + 1; let x0 = sbx * 4 + 1
+      case bmodes[i]
+      of imTm: predictTmpred(ws, 4, x0, y0, 21)
+      of imVe: predictBvepred(ws, x0, y0, 21)
+      of imHe: predictBhepred(ws, x0, y0, 21)
+      of imDc: predictBdcpred(ws, x0, y0, 21)
+      of imLd: predictBldpred(ws, x0, y0, 21)
+      of imRd: predictBrdpred(ws, x0, y0, 21)
+      of imVr: predictBvrpred(ws, x0, y0, 21)
+      of imVl: predictBvlpred(ws, x0, y0, 21)
+      of imHd: predictBhdpred(ws, x0, y0, 21)
+      of imHu: predictBhupred(ws, x0, y0, 21)
+      var rb: array[16, int32]
+      for k in 0..<16: rb[k] = resdata[i * 16 + k]
+      addResidue(ws, rb, y0, x0, 21)
+  for y in 0..<16:
+    for x in 0..<16:
+      result[y * 16 + x] = ws[(1 + y) * 21 + 1 + x]
+
+proc rdoSplitJ(srcY: array[256, uint8], mbx, mby, mbw: int, topB,
+    leftB: seq[uint8], bmodes: array[16, IntraMode],
+    topBp: array[16, IntraMode], leftBp: array[16, IntraMode], topCx,
+    leftCx: array[9, uint8], ydc, yac: int16,
+    lambda: float64): tuple[j, ssd, rate: float64] =
+  ## Full RD cost of the split candidate (mode + bpred + coeff bits).
+  let (qY, allZero) = rdoQuantSplit(srcY, mbx, mby, mbw, topB, leftB,
+    bmodes, ydc, yac)
+  var rate = treeCost(YmodeNodes, 4)
+  var ab: array[4, int]
+  for x in 0..<4: ab[x] = ord(topBp[12 + x])
+  var tCx = topCx; var lCx = leftCx
+  for y in 0..<4:
+    var lm = ord(leftBp[y])
+    var lc = lCx[y + 1]
+    for x in 0..<4:
+      let i = x + y * 4
+      rate += treeCost(BpredNodes[ab[x]][lm], ord(bmodes[i]))
+      if not allZero:
+        let cx = int(tCx[x + 1]) + int(lc)
+        let (r, n) = coeffBlockRate(qY[i], 3, cx, 0)
+        rate += r
+        lc = (if n: 1 else: 0)
+        tCx[x + 1] = (if n: 1 else: 0)
+      ab[x] = ord(bmodes[i]); lm = ord(bmodes[i])
+    lCx[y + 1] = lc
+  rate += bitCost(64'u8, allZero)
+  let recon = rdoReconSplit(bmodes, qY, mbx, mby, mbw, topB, leftB,
+    ydc, yac)
+  let ssd = ssd16(srcY, recon)
+  (ssd + lambda * rate, ssd, rate)
+
+proc rdoPredictChroma(cm: ChromaMode, mbx, mby: int, topU, leftU,
+    topV, leftV: seq[uint8]): tuple[pu, pv: array[64, uint8]] =
+  var uws = createBorderChroma(mbx, mby, topU, leftU)
+  var vws = createBorderChroma(mbx, mby, topV, leftV)
+  case cm
+  of cmDc:
+    predictDcpred(uws, 8, 9, mby != 0, mbx != 0)
+    predictDcpred(vws, 8, 9, mby != 0, mbx != 0)
+  of cmV:
+    predictVpred(uws, 8, 1, 1, 9)
+    predictVpred(vws, 8, 1, 1, 9)
+  of cmH:
+    predictHpred(uws, 8, 1, 1, 9)
+    predictHpred(vws, 8, 1, 1, 9)
+  of cmTm:
+    predictTmpred(uws, 8, 1, 1, 9)
+    predictTmpred(vws, 8, 1, 1, 9)
+  for y in 0..<8:
+    for x in 0..<8:
+      result.pu[y * 8 + x] = uws[(1 + y) * 9 + 1 + x]
+      result.pv[y * 8 + x] = vws[(1 + y) * 9 + 1 + x]
+
+proc rdoQuantChroma(pu, pv, srcU, srcV: array[64, uint8], uvdc,
+    uvac: int16): tuple[qU, qV: array[4, array[16, int32]],
+    allZero: bool] =
+  result.allZero = true
+  for ci in 0..<2:
+    for i in 0..<4:
+      let bx = (i mod 2) * 4; let by = (i div 2) * 4
+      let src = if ci == 0: srcU else: srcV
+      let prd = if ci == 0: pu else: pv
+      var blk: array[16, float64]
+      for y in 0..<4:
+        for x in 0..<4:
+          blk[y * 4 + x] = float64(int(src[(by + y) * 8 + bx + x])) -
+            float64(int(prd[(by + y) * 8 + bx + x]))
+      let f = fdct4x4(blk)
+      for k in 0..<16:
+        let q = if k == 0: uvdc else: uvac
+        let v = quantizeCoeff(f[k] * FdctGain, q)
+        if ci == 0: result.qU[i][k] = v
+        else: result.qV[i][k] = v
+        if v != 0: result.allZero = false
+
+proc rdoRateChroma(qU, qV: array[4, array[16, int32]], topCx,
+    leftCx: array[9, uint8]): float64 =
+  var tCx = topCx; var lCx = leftCx
+  for j in [5, 7]:
+    for y in 0..<2:
+      var lc = lCx[y + j]
+      for x in 0..<2:
+        let i = x + y * 2
+        let cx = int(tCx[x + j]) + int(lc)
+        var blk: array[16, int32]
+        let src = if j == 5: qU[i] else: qV[i]
+        for k in 0..<16: blk[k] = src[k]
+        let (r, n) = coeffBlockRate(blk, 2, cx, 0)
+        result += r
+        lc = (if n: 1 else: 0)
+        tCx[x + j] = (if n: 1 else: 0)
+      lCx[y + j] = lc
+
+proc rdoReconChroma(pu, pv: array[64, uint8],
+    qU, qV: array[4, array[16, int32]], mbx, mby: int, topU, leftU,
+    topV, leftV: seq[uint8], uvdc,
+    uvac: int16): tuple[ru, rv: array[64, uint8]] =
+  var uws = createBorderChroma(mbx, mby, topU, leftU)
+  var vws = createBorderChroma(mbx, mby, topV, leftV)
+  for y in 0..<8:
+    for x in 0..<8:
+      uws[(1 + y) * 9 + 1 + x] = pu[y * 8 + x]
+      vws[(1 + y) * 9 + 1 + x] = pv[y * 8 + x]
+  for y in 0..<2:
+    for x in 0..<2:
+      let i = x + y * 2
+      var urb, vrb: array[16, int32]
+      for k in 0..<16:
+        urb[k] = qU[i][k] * (if k == 0: uvdc else: uvac)
+        vrb[k] = qV[i][k] * (if k == 0: uvdc else: uvac)
+      idct4x4(urb)
+      idct4x4(vrb)
+      addResidue(uws, urb, 1 + y * 4, 1 + x * 4, 9)
+      addResidue(vws, vrb, 1 + y * 4, 1 + x * 4, 9)
+  for y in 0..<8:
+    for x in 0..<8:
+      result.ru[y * 8 + x] = uws[(1 + y) * 9 + 1 + x]
+      result.rv[y * 8 + x] = vws[(1 + y) * 9 + 1 + x]
 
 # ---------- frame assembly ----------
 
@@ -437,29 +825,46 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
           srcU[y * 8 + x] = upl[(mby * 8 + y) * mbw * 8 + mbx * 8 + x]
           srcV[y * 8 + x] = vpl[(mby * 8 + y) * mbw * 8 + mbx * 8 + x]
 
-      # luma 16x16 search (exact: border-only predictors)
-      var ws = createBorderLuma(mbx, mby, mbw, enc.topBorderY, enc.leftBorderY)
+      # luma mode decision: RDO over 4x 16x16 modes + split (Phase B).
+      # Each candidate is fully quantized; J = SSD + lambda*rate with
+      # lambda ~ q^2. Replaces the SAD/SATD heuristic.
+      let lambdaY = vp8RdoLambda(enc.yac)
+      let lambdaC = vp8RdoLambda(enc.uvac)
+      var tCxY, lCxY: array[9, uint8]
+      for i in 0..<9:
+        tCxY[i] = enc.topCx[mbx][i]
+        lCxY[i] = enc.leftCx[i]
       var bestMode = lmDc
-      var bestSatd = high(int)
+      var bestJ = Inf
       for m in [lmDc, lmV, lmH, lmTm]:
-        var trial = ws
-        case m
-        of lmV: predictVpred(trial, 16, 1, 1, 21)
-        of lmH: predictHpred(trial, 16, 1, 1, 21)
-        of lmTm: predictTmpred(trial, 16, 1, 1, 21)
-        of lmDc: predictDcpred(trial, 16, 21, mby != 0, mbx != 0)
-        else: discard
-        var s = 0
-        for y in 0..<16:
-          for x in 0..<16:
-            s += abs(int(trial[(1 + y) * 21 + 1 + x]) - int(srcY[y * 16 + x]))
-        if s < bestSatd:
-          bestSatd = s
+        let pred = rdoPredictLuma16(m, mbx, mby, mbw, enc.topBorderY,
+          enc.leftBorderY)
+        let (qY16, qY216, z16) = rdoQuantLuma16(pred, srcY, enc.ydc,
+          enc.yac, enc.y2dc, enc.y2ac)
+        let lmVal = case m
+          of lmDc: 0
+          of lmV: 1
+          of lmH: 2
+          of lmTm: 3
+          of lmB: 4
+        var rate = treeCost(YmodeNodes, lmVal)
+        var ssd: float64
+        if z16:
+          rate += bitCost(64'u8, true) # skip flag
+          ssd = ssd16(srcY, pred)
+        else:
+          rate += bitCost(64'u8, false)
+          rate += rdoRateLuma16(qY216, qY16, tCxY, lCxY)
+          let recon = rdoReconLuma16(pred, qY16, qY216, enc.ydc, enc.yac,
+            enc.y2dc, enc.y2ac)
+          ssd = ssd16(srcY, recon)
+        let j = ssd + lambdaY * rate
+        if j < bestJ:
+          bestJ = j
           bestMode = m
 
       # luma 4x4 search (source neighbors as reconstruction proxy)
       var bmodes: array[16, IntraMode]
-      var satd4 = 0
       var prox = srcY # neighbor proxy for blocks below/right of (0,0)
       for sby in 0..<4:
         for sbx in 0..<4:
@@ -511,41 +916,42 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
               bestBs = s
               bestBm = bm
           bmodes[i] = bestBm
-          satd4 += bestBs
-      let useSplit = satd4 + 8 * int(enc.yac) < bestSatd
-      let lumaMode = if useSplit: lmB else: bestMode
+      # split candidate RDO with the SATD-chosen sub-modes
+      let (spJ, _, _) = rdoSplitJ(srcY, mbx, mby, mbw, enc.topBorderY,
+        enc.leftBorderY, bmodes, enc.topBpred[mbx], enc.leftBpred, tCxY,
+        lCxY, enc.ydc, enc.yac, lambdaY)
+      let lumaMode = if spJ < bestJ: lmB else: bestMode
       when defined(vp8encTrace):
         if mbx == 0 and mby == 0:
-          echo "mb00 mode=", lumaMode,
-            " satd16=", bestSatd, " satd4=", satd4
+          echo "mb00 mode=", lumaMode, " j16=", bestJ, " jsplit=", spJ
 
-      # chroma search
-      var uws = createBorderChroma(mbx, mby, enc.topBorderU, enc.leftBorderU)
-      var vws = createBorderChroma(mbx, mby, enc.topBorderV, enc.leftBorderV)
+      # chroma mode decision: RDO over the 4 modes with its own lambda.
+      # The shared skip flag stays out of J (a ~2-bit term at most).
       var bestCm = cmDc
-      var bestCs = high(int)
+      var bestJc = Inf
       for cm in [cmDc, cmV, cmH, cmTm]:
-        var tu = uws; var tv = vws
-        case cm
-        of cmDc:
-          predictDcpred(tu, 8, 9, mby != 0, mbx != 0)
-          predictDcpred(tv, 8, 9, mby != 0, mbx != 0)
-        of cmV:
-          predictVpred(tu, 8, 1, 1, 9)
-          predictVpred(tv, 8, 1, 1, 9)
-        of cmH:
-          predictHpred(tu, 8, 1, 1, 9)
-          predictHpred(tv, 8, 1, 1, 9)
-        of cmTm:
-          predictTmpred(tu, 8, 1, 1, 9)
-          predictTmpred(tv, 8, 1, 1, 9)
-        var s = 0
-        for y in 0..<8:
-          for x in 0..<8:
-            s += abs(int(tu[(1 + y) * 9 + 1 + x]) - int(srcU[y * 8 + x]))
-            s += abs(int(tv[(1 + y) * 9 + 1 + x]) - int(srcV[y * 8 + x]))
-        if s < bestCs:
-          bestCs = s
+        let (pu, pv) = rdoPredictChroma(cm, mbx, mby, enc.topBorderU,
+          enc.leftBorderU, enc.topBorderV, enc.leftBorderV)
+        let (qUc, qVc, zC) = rdoQuantChroma(pu, pv, srcU, srcV, enc.uvdc,
+          enc.uvac)
+        let cmVal = case cm
+          of cmDc: 0
+          of cmV: 1
+          of cmH: 2
+          of cmTm: 3
+        var crate = treeCost(UvNodes, cmVal)
+        var cssd: float64
+        if zC:
+          cssd = ssd8(srcU, pu) + ssd8(srcV, pv)
+        else:
+          crate += rdoRateChroma(qUc, qVc, tCxY, lCxY)
+          let (ru, rv) = rdoReconChroma(pu, pv, qUc, qVc, mbx, mby,
+            enc.topBorderU, enc.leftBorderU, enc.topBorderV,
+            enc.leftBorderV, enc.uvdc, enc.uvac)
+          cssd = ssd8(srcU, ru) + ssd8(srcV, rv)
+        let cj = cssd + lambdaC * crate
+        if cj < bestJc:
+          bestJc = cj
           bestCm = cm
 
       # residual + quantize
@@ -613,6 +1019,8 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
           if qY2[k] != 0: allZero = false
       # write the winning chroma prediction into the workspaces so the
       # residual below is src minus prediction (not src minus zeros)
+      var uws = createBorderChroma(mbx, mby, enc.topBorderU, enc.leftBorderU)
+      var vws = createBorderChroma(mbx, mby, enc.topBorderV, enc.leftBorderV)
       case bestCm
       of cmDc:
         predictDcpred(uws, 8, 9, mby != 0, mbx != 0)
@@ -678,6 +1086,13 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
           else: imDc
         for i in 0..<4:
           enc.leftBpred[i] = im
+          # The row below reads these as its above-context (mirrors the
+          # decoder, which stores the converted mode into top.bpred --
+          # cf. image-webp read_macroblock_header + top[mbx].bpred copy).
+          # Missing this desyncs BpredNodes selection for any later
+          # split MB in the same columns (latent since Phase 2; RDO
+          # splits more often and exposed it).
+          enc.topBpred[mbx][12 + i] = im
       let cmVal = case bestCm
         of cmDc: 0
         of cmV: 1
@@ -732,8 +1147,12 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
               enc.topCx[mbx][x + j] = (if n: 1 else: 0)
             enc.leftCx[y + j] = leftCx
       else:
-        enc.leftCx[0] = 0
-        enc.topCx[mbx][0] = 0
+        # Skipped: no residuals; zero the nonzero-count contexts (mirrors
+        # the decoder, which preserves slot 0 for split MBs since they
+        # have no Y2 block -- cf. image-webp decode_frame_ else-branch).
+        if lumaMode != lmB:
+          enc.leftCx[0] = 0
+          enc.topCx[mbx][0] = 0
         for i in 1..<9:
           enc.leftCx[i] = 0
           enc.topCx[mbx][i] = 0

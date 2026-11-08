@@ -5,6 +5,7 @@ import image/codecs/webp
 import image/codecs/vp8
 import image/codecs/vp8tables
 import image/codecs/vp8enc
+import image/codecs/jpeg
 
 proc flatGray(w, h: int, v: uint8): RgbaImage =
   var px = newSeq[Rgba[uint8]](w * h)
@@ -139,3 +140,49 @@ test "vp8 token writer matches decoder trees":
                     ex = ex * 2 + (if readBit(d, t): 1 else: 0)
                   require ex == extra
                   require readFlag(d) == neg
+
+test "vp8 rdo bit costs follow the bool coder":
+  # prob/256 = P(0): the 0-branch gets a range*prob/256 split. Inverted
+  # costs silently mislead RDO (found as dominated size/PSNR on the
+  # photo matrix: bigger files with lower PSNR at every quality).
+  check abs(bitCost(128, false) - 1.0) < 1e-9
+  check abs(bitCost(128, true) - 1.0) < 1e-9
+  check bitCost(1, false) > 7.0
+  check bitCost(1, true) < 0.1
+  check bitCost(255, false) < 0.1
+  check bitCost(255, true) > 7.0
+  # cost grows as probability shrinks
+  check bitCost(64, false) > bitCost(192, false)
+  check bitCost(64, true) < bitCost(192, true)
+
+test "vp8 lossy low-quality photo crop round-trips":
+  # Regression: cross-MB predictor/context state must mirror the decoder
+  # exactly. Verified to fail ("truncated VP8 bitstream") when the
+  # non-split topBpred publish is removed: RDO splits below non-split
+  # rows select Bpred trees from stale contexts and desync the stream.
+  # Real photo content at low quality exercises split/skip interactions
+  # (including skipped splits, whose Y2-slot handling must also mirror
+  # the decoder) far better than synthetics.
+  var jf = open("tests/fixtures/pawel-czerwinski-dz4Kpq_8xRg-unsplash.jpg",
+    fmRead)
+  var raw = newSeq[uint8](getFileSize(jf))
+  discard readBytes(jf, raw, 0, raw.len)
+  close(jf)
+  let dj = decodeJpeg(raw)
+  require dj.ok
+  let c = cropImage(dj.value, 100, 100, 512, 512)
+  require c.ok
+  let rgba = c.value.toRgba8()
+  let f = encodeVp8Lossy(rgba, 50)
+  require f.ok
+  let d = decodeVp8Frame(f.value)
+  require d.ok
+  check d.value.width == 512 and d.value.height == 512
+  var se = 0.0
+  for i in 0..<rgba.pixels.len:
+    let (yy, _, _) = rgbToYuv601(rgba.pixels[i].data[0],
+      rgba.pixels[i].data[1], rgba.pixels[i].data[2])
+    let e = float(int(d.value.ybuf[i]) - int(yy))
+    se += e * e
+  let psnr = 10.0 * log10(65025.0 / max(se / float(rgba.pixels.len), 1e-9))
+  check psnr > 35.0
