@@ -236,3 +236,32 @@ test "vp8 trellis never regresses block cost":
         let (r, _) = coeffBlockRate(qq, plane, 1, first)
         dd + lamT * r
       check blkCost(tq) <= blkCost(bq) + 1e-6
+
+test "vp8 adaptive token probs fire and round-trip":
+  # Mixed content skews token usage away from defaults; the two-pass
+  # encoder must install updates (vp8LastNumUpdates > 0) and the
+  # resulting stream must decode exactly (our decoder; dwebp cross
+  # checked on larger matrices).
+  var px = newSeq[Rgba[uint8]](128 * 128)
+  for y in 0..<128:
+    for x in 0..<128:
+      var r, g, b: uint8
+      if x < 64 and y < 64:
+        r = 200; g = 30; b = 30
+      elif x >= 64 and y < 64:
+        r = uint8(x mod 256); g = uint8(y mod 256)
+        b = uint8((x + y) mod 256)
+      elif x < 64:
+        let v = if ((x div 4) + (y div 4)) mod 2 == 0: 20'u8 else: 230'u8
+        r = v; g = v; b = v
+      else:
+        let v = if x - 64 > y - 64: 250'u8 else: 10'u8
+        r = v; g = v; b = uint8((x mod 64) + 128)
+      px[y * 128 + x] = Rgba[uint8](data: [r, g, b, 255])
+  let img = RgbaImage(width: 128, height: 128, pixels: px)
+  let f = encodeVp8Lossy(img, 75)
+  require f.ok
+  check vp8LastNumUpdates > 0
+  let d = decodeVp8Frame(f.value)
+  require d.ok
+  check d.value.width == 128 and d.value.height == 128

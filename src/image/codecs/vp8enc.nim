@@ -329,9 +329,61 @@ proc resetTokTablesToDefaults() =
         for t in 0..<11:
           TokCntL[p][b][cx][t] = 0
           TokCntR[p][b][cx][t] = 0
-  vp8LastNumUpdates = 0
 
 resetTokTablesToDefaults() # module init so direct writeToken use is valid
+
+proc computeTokUpdates() =
+  ## Pass-1 visit counts -> per-node RD update decisions. A node updates
+  ## iff the new probability saves more token bits than the update costs
+  ## (update flag delta at CoeffUpdateProbs + 8-bit value). MLE with
+  ## clamp [1,255]; the fixed update cost self-regulates tiny counts.
+  vp8LastNumUpdates = 0
+  for p in 0..<4:
+    for b in 0..<8:
+      for cx in 0..<3:
+        for nd in 0..<11:
+          let L = TokCntL[p][b][cx][nd]
+          let R = TokCntR[p][b][cx][nd]
+          let pOld = CoeffProbs[p][b][cx][nd]
+          if L + R == 0:
+            TokUpdated[p][b][cx][nd] = false
+            CurTokProbs[p][b][cx][nd] = pOld
+            continue
+          var pNew = int((256 * R + (L + R) div 2) div (L + R))
+          if pNew < 1: pNew = 1
+          elif pNew > 255: pNew = 255
+          let oldC = float64(L) * bitCost(pOld, false) +
+            float64(R) * bitCost(pOld, true)
+          let cup = CoeffUpdateProbs[p][b][cx][nd]
+          let newC = float64(L) * bitCost(uint8(pNew), false) +
+            float64(R) * bitCost(uint8(pNew), true) +
+            bitCost(cup, true) + 8.0 - bitCost(cup, false)
+          if newC < oldC:
+            TokUpdated[p][b][cx][nd] = true
+            CurTokProbs[p][b][cx][nd] = uint8(pNew)
+            inc vp8LastNumUpdates
+          else:
+            TokUpdated[p][b][cx][nd] = false
+            CurTokProbs[p][b][cx][nd] = pOld
+
+proc rebuildCurTokTables() =
+  ## Rebuild per-frame emission nodes + decision costs from CurTokProbs.
+  for p in 0..<4:
+    for b in 0..<8:
+      for cx in 0..<3:
+        CurTokNodes[p][b][cx] = buildNodes(DctTokenTree, CurTokProbs[p][b][cx])
+  for s in 0..1:
+    for p in 0..<4:
+      for bnd in 0..<8:
+        for cx in 0..<3:
+          for tok in 0..11:
+            if s == 1 and tok == 11: continue # unreachable EOB
+            let nodes = TokNodePaths[s][p][bnd][cx][tok]
+            let path = TokPaths[s][p][bnd][cx][tok]
+            var c = 0.0
+            for zi in 0..<nodes.len:
+              c += bitCost(CurTokProbs[p][bnd][cx][nodes[zi]], path[zi].bit)
+            CurTokCosts[s][p][bnd][cx][tok] = c
 
 proc writeTreeVal(e: var BoolEnc, nodes: seq[TreeNode], v: int) =
   var idx = 0
@@ -933,51 +985,13 @@ func blockHasCoeffs(blk: array[16, int32], first: int): bool =
     if blk[i] != 0: return true
   false
 
-proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
-  ## Intra-only VP8 keyframe. Returns the raw VP8 frame bitstream
-  ## (body of a `VP8 ` RIFF chunk); wrap with encodeWebpLossy.
-  if quality < 1 or quality > 100:
-    return err[seq[uint8]](paramError(pkGeneric, "webp: quality 1..100"))
-  let w = int(img.width); let h = int(img.height)
-  if w == 0 or h == 0:
-    return err[seq[uint8]](paramError(pkDimensionMismatch, "webp: empty"))
-  if w > 16384 or h > 16384:
-    return err[seq[uint8]](limitError(lkDimensionError, "webp: too large"))
-  let qi = vp8QualityToQi(quality)
+proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
+    hdr, part: var BoolEnc, useUpdates: bool) =
+  ## One encode pass: bool header (optionally with token-prob updates)
+  ## + macroblock loop. Pass 1 uses defaults and counts tokens;
+  ## pass 2 uses RD-beneficial updates. State is fresh per pass.
   var enc = initVp8Enc(w, h, qi)
   let mbw = enc.mbw; let mbh = enc.mbh
-
-  # --- RGB -> YUV420, edge-padded to the MB grid ---
-  var ypl = newSeq[uint8](mbw * 16 * mbh * 16)
-  var upl = newSeq[uint8](mbw * 8 * mbh * 8)
-  var vpl = newSeq[uint8](mbw * 8 * mbh * 8)
-  for y in 0..<mbh * 16:
-    let sy = min(y, h - 1)
-    for x in 0..<mbw * 16:
-      let sx = min(x, w - 1)
-      let p = img.pixels[sy * w + sx]
-      let (yy, _, _) = rgbToYuv601(p.data[0], p.data[1], p.data[2])
-      ypl[y * mbw * 16 + x] = yy
-  # 4:2:0 box average over available samples (edges replicate)
-  for y in 0..<(mbh * 8):
-    for x in 0..<(mbw * 8):
-      var su, sv, n = 0
-      for dy in 0..1:
-        for dx in 0..1:
-          let sx = x * 2 + dx; let sy = y * 2 + dy
-          if sx < w and sy < h:
-            let p = img.pixels[sy * w + sx]
-            let (_, uu, vv) = rgbToYuv601(p.data[0], p.data[1], p.data[2])
-            su += int(uu); sv += int(vv); inc n
-      if n == 0:
-        upl[y * mbw * 8 + x] = 128
-        vpl[y * mbw * 8 + x] = 128
-      else:
-        upl[y * mbw * 8 + x] = uint8((su + n div 2) div n)
-        vpl[y * mbw * 8 + x] = uint8((sv + n div 2) div n)
-
-  var hdr = initBoolEnc()
-  var part = initBoolEnc()
 
   # --- bool header (mirrors readFrameHeader) ---
   hdr.putLiteral(0, 1) # colorspace
@@ -996,7 +1010,11 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
     for j in 0..<8:
       for k in 0..<3:
         for t in 0..<11:
-          hdr.putBit(false, CoeffUpdateProbs[i][j][k][t])
+          if useUpdates and TokUpdated[i][j][k][t]:
+            hdr.putBit(true, CoeffUpdateProbs[i][j][k][t])
+            hdr.putLiteral(CurTokProbs[i][j][k][t], 8)
+          else:
+            hdr.putBit(false, CoeffUpdateProbs[i][j][k][t])
   hdr.putLiteral(1, 1) # mbNoSkip
   hdr.putLiteral(64, 8) # skip probability 64
   # NOTE: no flush here — per-MB skip/mode bits follow into this same
@@ -1479,7 +1497,62 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
     for i in 0..<9: enc.leftBorderU[i] = 129
     enc.leftBorderV = newSeq[uint8](9)
     for i in 0..<9: enc.leftBorderV[i] = 129
+proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
+  ## Intra-only VP8 keyframe. Returns the raw VP8 frame bitstream
+  ## (body of a `VP8 ` RIFF chunk); wrap with encodeWebpLossy.
+  if quality < 1 or quality > 100:
+    return err[seq[uint8]](paramError(pkGeneric, "webp: quality 1..100"))
+  let w = int(img.width); let h = int(img.height)
+  if w == 0 or h == 0:
+    return err[seq[uint8]](paramError(pkDimensionMismatch, "webp: empty"))
+  if w > 16384 or h > 16384:
+    return err[seq[uint8]](limitError(lkDimensionError, "webp: too large"))
+  let qi = vp8QualityToQi(quality)
+  let mbw = (w + 15) div 16; let mbh = (h + 15) div 16
 
+  # --- RGB -> YUV420, edge-padded to the MB grid ---
+  var ypl = newSeq[uint8](mbw * 16 * mbh * 16)
+  var upl = newSeq[uint8](mbw * 8 * mbh * 8)
+  var vpl = newSeq[uint8](mbw * 8 * mbh * 8)
+  for y in 0..<mbh * 16:
+    let sy = min(y, h - 1)
+    for x in 0..<mbw * 16:
+      let sx = min(x, w - 1)
+      let p = img.pixels[sy * w + sx]
+      let (yy, _, _) = rgbToYuv601(p.data[0], p.data[1], p.data[2])
+      ypl[y * mbw * 16 + x] = yy
+  # 4:2:0 box average over available samples (edges replicate)
+  for y in 0..<(mbh * 8):
+    for x in 0..<(mbw * 8):
+      var su, sv, n = 0
+      for dy in 0..1:
+        for dx in 0..1:
+          let sx = x * 2 + dx; let sy = y * 2 + dy
+          if sx < w and sy < h:
+            let p = img.pixels[sy * w + sx]
+            let (_, uu, vv) = rgbToYuv601(p.data[0], p.data[1], p.data[2])
+            su += int(uu); sv += int(vv); inc n
+      if n == 0:
+        upl[y * mbw * 8 + x] = 128
+        vpl[y * mbw * 8 + x] = 128
+      else:
+        upl[y * mbw * 8 + x] = uint8((su + n div 2) div n)
+        vpl[y * mbw * 8 + x] = uint8((sv + n div 2) div n)
+
+  # pass 1: default probs, count tokens
+  resetTokTablesToDefaults()
+  vp8LastNumUpdates = 0
+  var hdr1 = initBoolEnc()
+  var part1 = initBoolEnc()
+  runVp8Pass(ypl, upl, vpl, w, h, qi, quality, hdr1, part1, false)
+  # pass 2: install RD-beneficial updates, re-encode
+  computeTokUpdates()
+  rebuildCurTokTables()
+  var hdr = initBoolEnc()
+  var part = initBoolEnc()
+  runVp8Pass(ypl, upl, vpl, w, h, qi, quality, hdr, part, true)
+  # isolate globals (test hygiene: direct writeToken use sees defaults)
+  resetTokTablesToDefaults()
   hdr.flush()
   part.flush()
 
