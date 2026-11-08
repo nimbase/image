@@ -1,12 +1,16 @@
 ## OpenEXR codec — references/image/src/codecs/openexr.rs + exr@1.74.0
-## Single-part scanline only (tiled/multipart/deep/PIZ/B44/DWAA/B44A/DWAB
-## return Unsupported). NONE/RLE/ZIP/ZIPS/PXR24 + half/float/uint -> 32F.
+## Single-part scanline only (tiled/multipart/deep/PIZ/DWAA/DWAB return
+## Unsupported). NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A + half/float/uint -> 32F.
 ## RLE/ZIP pipeline per OpenEXRCore internal_zip.c / internal_rle.c:
 ## separate even/odd halves, biased delta (first byte raw, rest cur-prev+128),
 ## then RLE (neg=literal -c bytes, pos=repeat c+1) / zlib-deflate.
 ## PXR24 per OpenEXRCore internal_pxr24.c: float->float24, per-row delta,
 ## MSB-first planes, zlib (reimplemented; no copied code).
+## B44/B44A per OpenEXRCore internal_b44.c + internal_b44_table_init.c:
+## 4x4 half blocks -> 14 bytes (3 for B44A flat fields), exact
+## shift-search, sign-magnitude ordering, exp/log tables for pLinear.
 import std/sequtils
+import std/math
 import ../color
 import ../error
 import ../buffer
@@ -22,8 +26,9 @@ proc halfToFloat*(h: uint16): float32 =
   if e == 0:
     if m == 0:
       return if s == 1: -0.0'f32 else: 0.0'f32
+    # Denormal: value is m * 2^-24 (no implicit leading 1).
     return (if s == 1: -1.0'f32 else: 1.0'f32) *
-      float32(m) / 1024.0'f32 * 5.960464477539063e-08'f32
+      float32(m) * 5.960464477539063e-08'f32
   elif e == 31:
     if m == 0:
       return cast[float32](if s == 1: 0xFF800000'u32 else: 0x7F800000'u32)
@@ -38,12 +43,14 @@ proc floatToHalf*(f: float32): uint16 =
   let xe = x and 0x7FFFFFFF'u32
   if (x and 0x7FFFFFFF'u32) > 0x7F800000'u32:
     return sign or 0x7E00'u16 # NaN
+  if xe == 0x7F800000'u32:
+    return sign or 0x7C00'u16 # infinities are preserved (Imath half)
   if xe >= 0x47800000'u32:
     return sign or 0x7BFF'u16 # overflow -> max finite
   elif xe >= 0x38800000'u32:
     # Normal range: round the 23-bit mantissa to 10 bits, ties to even
     # (matches Imath half; truncation here would disagree with reference
-    # files on values like -43.333332f32 -> 0xD917, not 0xD916).
+    # files on values like -43.333332f32 -> 0xD16B, not 0xD16A).
     let e = (xe shr 23) and 0xFF'u32
     var m = (xe and 0x7FFFFF'u32) + 0xFFF'u32 + ((xe shr 13) and 1'u32)
     var ee = e
@@ -63,6 +70,12 @@ proc floatToHalf*(f: float32): uint16 =
     let t = base + (if rest > halfway or
       (rest == halfway and (base and 1'u32) != 0): 1'u32 else: 0'u32)
     return sign or uint16(t and 0xFFFF)
+  elif xe >= 0x33000000'u32:
+    # E=102: value in [2^-25, 2^-24), rounds to 0 or 1 ULP. Exactly 0.5
+    # ULP (m32 == 0) ties to even (0); anything above rounds to 1.
+    # (Needed by the B44 exp table; plain truncation would give 0 here.)
+    if (xe and 0x7FFFFF'u32) != 0: return sign or 1'u16
+    return sign
   else:
     sign # underflow -> signed zero
 
@@ -114,7 +127,7 @@ proc differencesToSamples(data: var seq[uint8]) =
 ## own transform already produces/consumes planar rows, so it shares
 ## this boundary too.)
 
-proc planarToChunky(blk: openArray[uint8], w, rows: int,
+proc planarToChunky*(blk: openArray[uint8], w, rows: int,
     chanBytes: seq[int]): seq[uint8] =
   var coff = newSeq[int](chanBytes.len)
   var stride = 0
@@ -132,7 +145,7 @@ proc planarToChunky(blk: openArray[uint8], w, rows: int,
         for b in 0..<cb:
           result[dst + b] = blk[p]; inc(p)
 
-proc chunkyToPlanar(full: openArray[uint8], w, rows: int,
+proc chunkyToPlanar*(full: openArray[uint8], w, rows: int,
     chanBytes: seq[int]): seq[uint8] =
   var coff = newSeq[int](chanBytes.len)
   var stride = 0
@@ -354,12 +367,237 @@ proc pxr24Apply(blk: openArray[uint8], w, rows: int, chanBytes: seq[int],
         p += 4 * w
   output
 
-# ---------- header parsing ----------
+type ExrChannel* = object
+  name*: string
+  pixelType*: int32 # 0=uint 1=half 2=float
+  pLinear*: bool
+  xSamp*, ySamp*: int32
 
-type ExrChannel = object
-  name: string
-  pixelType: int32 # 0=uint 1=half 2=float
-  xSamp, ySamp: int32
+# ---------- B44/B44A (fixed-rate lossy for half; float/uint passthrough) ---
+# Reimplements OpenEXRCore internal_b44.c (pack/unpack/shift search) and
+# internal_b44_table_init.c (exp/log tables for pLinear channels).
+# Only the pLinear path needs the tables; all other channels skip them.
+
+var b44ExpTable*: seq[uint16]
+var b44LogTable*: seq[uint16]
+
+proc ensureB44Tables*() =
+  ## y = exp(x/8), x = 8*log(y) in half, exactly per
+  ## internal_b44_table_init.c (float32 libm ops, round-half-even).
+  if b44ExpTable.len != 0: return
+  b44ExpTable = newSeq[uint16](65536)
+  b44LogTable = newSeq[uint16](65536)
+  for i in 0..<65536:
+    let x = uint16(i)
+    # exp table
+    if (x and 0x7C00'u16) == 0x7C00'u16:
+      b44ExpTable[i] = 0
+    elif x >= 0x558C'u16 and x < 0x8000'u16:
+      b44ExpTable[i] = 0x7BFF'u16
+    else:
+      b44ExpTable[i] = floatToHalf(exp(halfToFloat(x) / 8.0f32))
+    # log table
+    if (x and 0x7C00'u16) == 0x7C00'u16:
+      b44LogTable[i] = 0
+    elif x > 0x8000'u16:
+      b44LogTable[i] = 0
+    else:
+      b44LogTable[i] = floatToHalf(8.0f32 * ln(halfToFloat(x)))
+
+proc b44ShiftAndRound*(x, shift: int): int =
+  ## y = x * 2^-shift rounded to nearest, ties to even.
+  var a = x shl 1
+  let m = (1 shl shift) - 1
+  let s = shift + 1
+  let b = (a shr s) and 1
+  (a + m + b) shr s
+
+proc b44Pack*(s: array[16, uint16], flatFields, exactMax: bool): seq[uint8] =
+  ## Compress one 4x4 half block (sign-magnitude preordered) to 14 or
+  ## (flat fields + B44A) 3 bytes. Mirrors pack() in internal_b44.c.
+  var t: array[16, uint16]
+  for i in 0..<16:
+    if (s[i] and 0x7C00'u16) == 0x7C00'u16:
+      t[i] = 0x8000'u16
+    elif (s[i] and 0x8000'u16) != 0:
+      t[i] = not s[i]
+    else:
+      t[i] = s[i] or 0x8000'u16
+  var tMax = 0'u16
+  for v in t:
+    if tMax < v: tMax = v
+  var d: array[16, int]
+  var r: array[15, int]
+  var shift = -1
+  var rMin, rMax = 0
+  const bias = 0x20
+  while true:
+    inc(shift)
+    for i in 0..<16:
+      d[i] = b44ShiftAndRound(int(tMax) - int(t[i]), shift)
+    r[0] = d[0]-d[4]+bias; r[1] = d[4]-d[8]+bias; r[2] = d[8]-d[12]+bias
+    r[3] = d[0]-d[1]+bias; r[4] = d[4]-d[5]+bias; r[5] = d[8]-d[9]+bias
+    r[6] = d[12]-d[13]+bias
+    r[7] = d[1]-d[2]+bias; r[8] = d[5]-d[6]+bias; r[9] = d[9]-d[10]+bias
+    r[10] = d[13]-d[14]+bias
+    r[11] = d[2]-d[3]+bias; r[12] = d[6]-d[7]+bias; r[13] = d[10]-d[11]+bias
+    r[14] = d[14]-d[15]+bias
+    rMin = r[0]; rMax = r[0]
+    for i in 1..<15:
+      if rMin > r[i]: rMin = r[i]
+      if rMax < r[i]: rMax = r[i]
+    if rMin >= 0 and rMax <= 0x3F: break
+  if rMin == bias and rMax == bias and flatFields:
+    return @[uint8(t[0] shr 8), uint8(t[0]), 0xFC'u8]
+  var t0 = t[0]
+  if exactMax:
+    t0 = tMax - uint16(d[0] shl shift)
+  result = newSeq[uint8](14)
+  result[0] = uint8(t0 shr 8); result[1] = uint8(t0)
+  result[2] = uint8((shift shl 2) or (r[0] shr 4))
+  result[3] = uint8((r[0] shl 4) or (r[1] shr 2))
+  result[4] = uint8((r[1] shl 6) or r[2])
+  result[5] = uint8((r[3] shl 2) or (r[4] shr 4))
+  result[6] = uint8((r[4] shl 4) or (r[5] shr 2))
+  result[7] = uint8((r[5] shl 6) or r[6])
+  result[8] = uint8((r[7] shl 2) or (r[8] shr 4))
+  result[9] = uint8((r[8] shl 4) or (r[9] shr 2))
+  result[10] = uint8((r[9] shl 6) or r[10])
+  result[11] = uint8((r[11] shl 2) or (r[12] shr 4))
+  result[12] = uint8((r[12] shl 4) or (r[13] shr 2))
+  result[13] = uint8((r[13] shl 6) or r[14])
+
+proc b44Unpack*(b: openArray[uint8], flat: bool): array[16, uint16] =
+  ## Inverse of b44Pack (mirrors unpack14/unpack3 in internal_b44.c).
+  if flat:
+    var s0 = (uint16(b[0]) shl 8) or uint16(b[1])
+    if (s0 and 0x8000'u16) != 0: s0 = s0 and 0x7FFF'u16
+    else: s0 = not s0
+    for i in 0..<16: result[i] = s0
+    return
+  var s: array[16, uint16]
+  s[0] = (uint16(b[0]) shl 8) or uint16(b[1])
+  let shift = int(b[2] shr 2)
+  let bias = 0x20'u16 shl shift
+  # Column-major runs match the pack() diagram (r[0..2] down column 0, …).
+  s[4] = uint16(uint32(s[0]) + ((((uint32(b[2]) shl 4) or (uint32(b[3]) shr 4)) and 0x3Fu32) shl shift) - uint32(bias))
+  s[8] = uint16(uint32(s[4]) + ((((uint32(b[3]) shl 2) or (uint32(b[4]) shr 6)) and 0x3Fu32) shl shift) - uint32(bias))
+  s[12] = uint16(uint32(s[8]) + ((uint32(b[4]) and 0x3Fu32) shl shift) - uint32(bias))
+  s[1] = uint16(uint32(s[0]) + ((uint32(b[5]) shr 2) shl shift) - uint32(bias))
+  s[5] = uint16(uint32(s[4]) + ((((uint32(b[5]) shl 4) or (uint32(b[6]) shr 4)) and 0x3Fu32) shl shift) - uint32(bias))
+  s[9] = uint16(uint32(s[8]) + ((((uint32(b[6]) shl 2) or (uint32(b[7]) shr 6)) and 0x3Fu32) shl shift) - uint32(bias))
+  s[13] = uint16(uint32(s[12]) + ((uint32(b[7]) and 0x3Fu32) shl shift) - uint32(bias))
+  s[2] = uint16(uint32(s[1]) + ((uint32(b[8]) shr 2) shl shift) - uint32(bias))
+  s[6] = uint16(uint32(s[5]) + ((((uint32(b[8]) shl 4) or (uint32(b[9]) shr 4)) and 0x3Fu32) shl shift) - uint32(bias))
+  s[10] = uint16(uint32(s[9]) + ((((uint32(b[9]) shl 2) or (uint32(b[10]) shr 6)) and 0x3Fu32) shl shift) - uint32(bias))
+  s[14] = uint16(uint32(s[13]) + ((uint32(b[10]) and 0x3Fu32) shl shift) - uint32(bias))
+  s[3] = uint16(uint32(s[2]) + ((uint32(b[11]) shr 2) shl shift) - uint32(bias))
+  s[7] = uint16(uint32(s[6]) + ((((uint32(b[11]) shl 4) or (uint32(b[12]) shr 4)) and 0x3Fu32) shl shift) - uint32(bias))
+  s[11] = uint16(uint32(s[10]) + ((((uint32(b[12]) shl 2) or (uint32(b[13]) shr 6)) and 0x3Fu32) shl shift) - uint32(bias))
+  s[15] = uint16(uint32(s[14]) + ((uint32(b[13]) and 0x3Fu32) shl shift) - uint32(bias))
+  for i in 0..<16:
+    if (s[i] and 0x8000'u16) != 0: s[i] = s[i] and 0x7FFF'u16
+    else: s[i] = not s[i]
+  s
+
+proc b44ApplyChunk*(planar: openArray[uint8], w, rows: int,
+    chanBytes: seq[int], ptypes: seq[int32], pLinears: seq[bool],
+    flatFields: bool): seq[uint8] =
+  ## Encode one chunk to B44/B44A: 4x4 half blocks via b44Pack (with
+  ## edge replication and pLinear exp conversion), float/uint channels
+  ## verbatim. Mirrors compress() in internal_b44.c.
+  ensureB44Tables()
+  var poff = newSeq[int](chanBytes.len)
+  var lineBytes = 0
+  for ci in 0..<chanBytes.len:
+    poff[ci] = lineBytes
+    lineBytes += w * chanBytes[ci]
+  result = @[]
+  for ci in 0..<chanBytes.len:
+    if ptypes[ci] != 1:
+      # float/uint ride along verbatim (planar row segments, in order)
+      for r in 0..<rows:
+        for i in 0..<w * chanBytes[ci]:
+          result.add(planar[r * lineBytes + poff[ci] + i])
+      continue
+    var by = 0
+    while by < rows:
+      var bx = 0
+      while bx < w:
+        var s: array[16, uint16]
+        for iy in 0..<4:
+          let yy = min(by + iy, rows - 1)
+          for ix in 0..<4:
+            let xx = min(bx + ix, w - 1)
+            let o = yy * lineBytes + poff[ci] + xx * 2
+            s[iy * 4 + ix] = uint16(planar[o]) or (uint16(planar[o + 1]) shl 8)
+        if pLinears[ci]:
+          for i in 0..<16: s[i] = b44ExpTable[s[i]]
+        let enc = b44Pack(s, flatFields, not pLinears[ci])
+        for b in enc: result.add(b)
+        bx += 4
+      by += 4
+
+proc b44UndoChunk*(comp: openArray[uint8], w, rows: int,
+    channels: seq[ExrChannel], chanBytes: seq[int]): ImageResult[seq[uint8]] =
+  ## Decode one B44/B44A chunk to planar-per-scanline rows. Mirrors
+  ## uncompress_b44_impl in internal_b44.c (4x4 blocks, edge replication,
+  ## flat-field 3-byte form, pLinear log conversion, float/uint passthrough).
+  ensureB44Tables()
+  # Planar-per-scanline offsets: channel ci's row segment starts at
+  # poff[ci] within each row (NOT the chunky within-pixel coff).
+  var poff = newSeq[int](channels.len)
+  var lineBytes = 0
+  for ci in 0..<channels.len:
+    poff[ci] = lineBytes
+    lineBytes += w * chanBytes[ci]
+  var output = newSeq[uint8](rows * lineBytes)
+  var p = 0
+  for ci in 0..<channels.len:
+    let nx = w
+    let ny = rows
+    let cb = chanBytes[ci]
+    if channels[ci].pixelType != 1:
+      # UINT/FLOAT passthrough: planar row segments map straight across.
+      if p + ny * nx * cb > comp.len:
+        return err[seq[uint8]](decodingError("exr: short b44 chunk"))
+      for r in 0..<ny:
+        for i in 0..<nx * cb:
+          output[r * lineBytes + poff[ci] + i] = comp[p + r * nx * cb + i]
+      p += ny * nx * cb
+      continue
+    var by = 0
+    while by < ny:
+      var bx = 0
+      while bx < nx:
+        if p + 3 > comp.len:
+          return err[seq[uint8]](decodingError("exr: short b44 chunk"))
+        var s: array[16, uint16]
+        if comp[p + 2] >= (13 shl 2):
+          s = b44Unpack(comp.toOpenArray(p, p + 2), true)
+          p += 3
+        else:
+          if p + 14 > comp.len:
+            return err[seq[uint8]](decodingError("exr: short b44 chunk"))
+          s = b44Unpack(comp.toOpenArray(p, p + 13), false)
+          p += 14
+        if channels[ci].pLinear:
+          for i in 0..<16: s[i] = b44LogTable[s[i]]
+        for iy in 0..<4:
+          let yy = by + iy
+          if yy >= ny: continue
+          for ix in 0..<4:
+            let xx = bx + ix
+            if xx >= nx: continue
+            let v = s[iy * 4 + ix]
+            let o = yy * lineBytes + poff[ci] + xx * 2
+            output[o] = uint8(v and 0xFF)
+            output[o + 1] = uint8(v shr 8)
+        bx += 4
+      by += 4
+  ok(output)
+
+# ---------- header parsing ----------
 
 proc rd32le(d: openArray[uint8], off: int): uint32 =
   uint32(d[off]) or (uint32(d[off+1]) shl 8) or (uint32(d[off+2]) shl 16) or
@@ -425,9 +663,11 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
         var nm = ""
         for k in q..<e2: nm.add(char(val[k]))
         let pt = rdI32le(val, e2 + 1)
+        let pl = val[e2 + 5] != 0
         let xs = rdI32le(val, e2 + 9)
         let ys = rdI32le(val, e2 + 13)
-        channels.add(ExrChannel(name: nm, pixelType: pt, xSamp: xs, ySamp: ys))
+        channels.add(ExrChannel(name: nm, pixelType: pt, pLinear: pl,
+          xSamp: xs, ySamp: ys))
         q = e2 + 17
     of "compression":
       if val.len >= 1: compression = int(val[0])
@@ -476,6 +716,7 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
     case compression
     of 0, 1, 2: 1
     of 3, 5: 16
+    of 6, 7: 32
     else:
       return err[seq[DynamicImage]](unsupportedError(ukGenericFeature,
         "exr: compression " & $compression))
@@ -568,6 +809,17 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
       else:
         if not inflated.ok: return err[seq[DynamicImage]](inflated.err)
         return err[seq[DynamicImage]](decodingError("exr: short pxr24 chunk"))
+    of 6, 7:
+      # B44/B44A: fixed 14-byte (or 3-byte flat) 4x4 half blocks;
+      # float/uint channels ride along uncompressed.
+      if comp.len == exp:
+        # encoder stored the chunk raw (B44 output larger than input,
+        # e.g. tiny images); treat as final planar bytes.
+        blk = comp[0..<exp]
+      else:
+        var u = b44UndoChunk(comp, w, rows, channels, chanBytes)
+        if not u.ok: return err[seq[DynamicImage]](u.err)
+        blk = move(u.value)
     else: discard
     # Disk layout is planar-per-scanline for every compression; convert
     # once to our chunky `full` buffer. (PXR24's undo already emits
@@ -668,16 +920,14 @@ proc putBox(dst: var seq[uint8], x0, y0, x1, y1: int32) =
     putU32le(dst, cast[uint32](v))
 
 proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]] =
-  ## Scanline writer (ZIP default, PXR24 opt-in). Accepts
+  ## Scanline writer (ZIP default; PXR24/B44/B44A opt-in). Accepts
   ## Rgb32F/Rgba32F/Luma32F (convert first). PXR24 rounds float channels
-  ## to 24 bits on write (lossy); HALF/UINT-exactness only matters on
-  ## decode of foreign files since this writer emits float channels.
+  ## to 24 bits on write (lossy). B44 only compresses half channels, so
+  ## this float-only writer stores them uncompressed (spec passthrough).
+  ## HALF/UINT-exactness only matters on decode of foreign files.
   ## Channel data is packed alphabetically by name (B,G,R / A,B,G,R),
   ## per the file layout; the chlist is written in the same order.
-  if compression notin [3, 5]:
-    return err[seq[uint8]](unsupportedError(ukGenericFeature,
-      "exr: encode compression " & $compression))
-  if compression notin [3, 5]:
+  if compression notin [3, 5, 6, 7]:
     return err[seq[uint8]](unsupportedError(ukGenericFeature,
       "exr: encode compression " & $compression))
   var w, h: int
@@ -743,8 +993,8 @@ proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]
   putAttr(output, "screenWindowCenter", "v2f", @[0'u8,0,0,0, 0,0,0,0])
   putAttr(output, "screenWindowWidth", "float", @[0'u8,0,0,0])
   output.add(0) # end of header
-  # chunks: ZIP/PXR24 = 16 rows each
-  let rowsPer = 16
+  # chunks: ZIP/PXR24 = 16 rows, B44/B44A = 32 rows each
+  let rowsPer = if compression == 6 or compression == 7: 32 else: 16
   let lineBytes = w * chNames.len * 4
   let nChunks = (h + rowsPer - 1) div rowsPer
   # offset table placeholder
@@ -754,9 +1004,11 @@ proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]
   var chunkData: seq[seq[uint8]] = @[]
   var ptypesEnc = newSeq[int32](chNames.len)
   var cbytesEnc = newSeq[int](chNames.len)
+  var pLinEnc = newSeq[bool](chNames.len)
   for i in 0..<chNames.len:
     ptypesEnc[i] = 2
     cbytesEnc[i] = 4
+    pLinEnc[i] = false
   for ci in 0..<nChunks:
     let y0 = ci * rowsPer
     let rows = min(rowsPer, h - y0)
@@ -770,6 +1022,13 @@ proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]
       if not cr.ok: return err[seq[uint8]](cr.err)
       # internal_pxr24.c: store packed (planar) when deflate grows it.
       payload = if cr.value.len <= planar.len: cr.value else: planar
+    elif compression == 6 or compression == 7:
+      # B44/B44A: float channels ride along uncompressed (spec); half
+      # channels would pack here. Reference stores planar when packing
+      # grows the chunk (`>=`).
+      let t = b44ApplyChunk(planar, w, rows, cbytesEnc, ptypesEnc, pLinEnc,
+        compression == 7)
+      payload = if t.len < planar.len: t else: planar
     else:
       var tb = planar
       separateHalves(tb)

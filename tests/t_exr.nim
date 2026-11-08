@@ -21,6 +21,12 @@ test "half conversions":
   check floatToHalf(-43.333332f32) == 0xD16B'u16
   check floatToHalf(0.33333334f32) == 0x3555'u16
   check floatToHalf(65504.0f32) == 0x7BFF'u16
+  check floatToHalf(Inf.float32) == 0x7C00'u16
+  check floatToHalf(-Inf.float32) == 0xFC00'u16
+  # denormals: m * 2^-24 exactly (a /1024 bug here once broke B44 tables)
+  check halfToFloat(0x0001'u16) == 5.9604645e-8f32
+  check halfToFloat(0x03FF'u16) == 1023.0f32 * 5.9604645e-8f32
+  check halfToFloat(0x8401'u16) == -(1025.0f32 * 5.9604645e-8f32)
 
 test "exr rgb32f round-trip (ZIP)":
   var px = @[Rgb[float32](data: [1.0f32, 0.5, 0.25]),
@@ -168,6 +174,83 @@ test "exr foreign lossless files decode bit-exact":
   let fx = float32(10) / 15.0f32
   check refPx[10].data[0] == fx*100.0f32 - 50.0f32
   check refPx[10].data[1] == -1.0f32
+
+test "exr b44 tables match reference":
+  # Spot anchors from OpenEXR's b44ExpLogTable (exact formula verified
+  # over all 65536 entries during development): exp(x/8), 8*log(x).
+  ensureB44Tables()
+  check b44ExpTable[0x0000] == 0x3C00'u16 # exp(0) = 1
+  check b44ExpTable[0x3C00] == 0x3C88'u16 # exp(1/8)
+  check b44ExpTable[0x7BFF] == 0x7BFF'u16 # overflow clamps to HALF_MAX
+  check b44ExpTable[0x7C00] == 0x0000'u16 # inf -> 0
+  check b44LogTable[0x0000] == 0xFC00'u16 # 8*log(0) = -inf, preserved
+  check b44LogTable[0x3C00] == 0x0000'u16 # 8*log(1) = 0
+  check b44LogTable[0x4000] == 0x458C'u16 # 8*ln(2)
+  check b44LogTable[0x7C00] == 0x0000'u16 # +inf -> 0
+  check b44LogTable[0xBC00] == 0x0000'u16 # negatives -> 0
+
+test "exr b44 pack/unpack round-trips":
+  # Flat block (B44A short form + B44 long form agree after decode).
+  var flat: array[16, uint16]
+  for i in 0..<16: flat[i] = 0x3800'u16 # 0.5
+  let p3 = b44Pack(flat, true, true)
+  check p3.len == 3 and p3[2] == 0xFC'u8
+  let p14 = b44Pack(flat, false, true)
+  check p14.len == 14
+  check b44Unpack(p3, true) == flat
+  check b44Unpack(p14, false) == flat
+  # NaN/Inf inputs are replaced with zeroes before packing.
+  var special: array[16, uint16]
+  for i in 0..<16: special[i] = 0x3C00'u16
+  special[0] = 0x7C00'u16 # +inf
+  special[1] = 0xFFFF'u16 # NaN
+  let ps = b44Pack(special, false, true)
+  let back = b44Unpack(ps, false)
+  check back[0] == 0x0000'u16
+  check back[1] == 0x0000'u16
+  check back[2] == 0x3C00'u16
+
+test "exr b44 official files decode bit-exact":
+  # Fixtures minted with the reference library (C++ API): B44/B44A half
+  # files (20x20 with flat region, extremes, inf/nan/denormal + 7x5 odd
+  # sizes) must decode bit-identically to the reference lib's own
+  # B44->NONE conversions. NaN compares unequal to itself, so compare
+  # lanes with NaN-aware equality (payloads verified identical).
+  proc readRaw(p: string): seq[uint8] =
+    var f = open(p, fmRead)
+    result = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, result, 0, result.len)
+    close(f)
+  proc samePixels(a, b: seq[Rgb[float32]]): bool =
+    if a.len != b.len: return false
+    for i in 0..<a.len:
+      for c in 0..2:
+        let x = a[i].data[c]; let y = b[i].data[c]
+        if x != x and y != y: continue
+        if x != y: return false
+    true
+  for (cf, cn) in [("b44-reference-half.exr", "b44-reference-half-none.exr"),
+      ("b44a-reference-half.exr", "b44a-reference-half-none.exr"),
+      ("b44-reference-odd.exr", "b44-reference-odd-none.exr"),
+      ("b44a-reference-odd.exr", "b44a-reference-odd-none.exr"),
+      ("b44-reference-float.exr", "b44-reference-float-none.exr")]:
+    let a = decodeExr(readRaw(fixturesDir / "exr" / cf))
+    let b = decodeExr(readRaw(fixturesDir / "exr" / cn))
+    check a.ok and b.ok
+    check a.value.kind == dkRgb32F and b.value.kind == dkRgb32F
+    check samePixels(a.value.rgb32f.pixels, b.value.rgb32f.pixels)
+
+test "exr b44 encode float passes through losslessly":
+  # Our writer emits float channels, which B44 stores uncompressed.
+  var px = @[Rgb[float32](data: [1.0f32, 0.5f32, -0.25f32]),
+             Rgb[float32](data: [100.0f32, -2.0f32, 65504.0f32])]
+  let img = DynamicImage(kind: dkRgb32F, rgb32f: Rgb32FImage(width: 2, height: 1, pixels: px))
+  for comp in [6, 7]:
+    let enc = encodeExr(img, comp)
+    check enc.ok
+    let dec = decodeExr(enc.value)
+    check dec.ok
+    check dec.value.rgb32f.pixels == px
 
 test "exr bad magic":
   check decodeExr(@[0'u8, 1, 2, 3]).ok == false
