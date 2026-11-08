@@ -255,6 +255,31 @@ test "webp vp8l predictor tames gradients":
     check [p.data[0], p.data[1], p.data[2]] ==
       [px[i].data[0], px[i].data[1], px[i].data[2]]
 
+test "webp vp8l color transform wins on photo":
+  # Per-block cross-color (R -= d(g2r,G), B -= d(g2b,G) + d(r2b,R)) on top
+  # of predictor + subtract-green. Kept only when the actual payload is
+  # smaller, so other content never regresses (flat/noise/tex fall back
+  # to the pre-color size exactly).
+  let p = fixturesDir / "pawel-czerwinski-dz4Kpq_8xRg-unsplash.jpg"
+  var f = open(p, fmRead)
+  var raw = newSeq[uint8](getFileSize(f))
+  discard readBytes(f, raw, 0, raw.len)
+  close(f)
+  let d = decodeJpeg(raw)
+  require d.ok
+  let c = cropImage(d.value, 100, 100, 512, 512)
+  require c.ok
+  let rgba = c.value.toRgba8()
+  let e = encodeWebp(DynamicImage(kind: dkRgba8, rgba8: rgba))
+  require e.ok
+  check e.value.len < 106500 # pre-color baseline 106796; color 105854
+  let back = decodeWebp(e.value)
+  check back.ok
+  require back.value.kind == dkRgb8
+  for i, px in back.value.rgb8.pixels:
+    check [px.data[0], px.data[1], px.data[2]] ==
+      [rgba.pixels[i].data[0], rgba.pixels[i].data[1], rgba.pixels[i].data[2]]
+
 test "webp vp8l length prefix codes round-trip":
   # lengthSymExtra must invert copyDist for every length 1..4096.
   proc fwdCopyDist(prefix, extra: int): int =

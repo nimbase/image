@@ -1377,6 +1377,189 @@ proc applySubGreenFwd*(px: var seq[Rgba[uint8]]) =
     px[i].data[0] = uint8((int(px[i].data[0]) - g) and 0xFF)
     px[i].data[2] = uint8((int(px[i].data[2]) - g) and 0xFF)
 
+# ---------- color transform (encode) ----------
+
+const ColSizeBits = 4
+  ## Cross-color block exponent (16px tiles, same grid as predictor).
+
+const Vp8lUseColor = true
+  ## Master switch for the per-block color transform. Always on (measured
+  ## win on photos/gradients; tiny overhead on incompressible data).
+
+var ColLogTable: array[257, float]
+var ColLogInitDone = false
+
+proc colLogInit() =
+  if not ColLogInitDone:
+    ColLogTable[0] = 0.0
+    for n in 1..256: ColLogTable[n] = float(n) * log2(float(n))
+    ColLogInitDone = true
+
+func transRedFwd(R, G: uint8, t: int): uint8 =
+  let d = colorDelta(int8(t), cast[int8](G))
+  uint8((int(R) - int(d)) and 0xFF)
+
+func transBlueFwd(B, G, R: uint8, tgb, trb: int): uint8 =
+  let d1 = colorDelta(int8(tgb), cast[int8](G))
+  let d2 = colorDelta(int8(trb), cast[int8](R))
+  uint8((int(B) - int(d1) - int(d2)) and 0xFF)
+
+proc colorCostHisto(histo: array[256, int], n: int): float =
+  var s = ColLogTable[n]
+  for c in histo:
+    if c != 0: s -= ColLogTable[c]
+  s
+
+
+proc chooseColorParams*(px: seq[Rgba[uint8]], w, h,
+    sizeBits: int): seq[array[3, uint8]] =
+  ## Per-tile (g2r, g2b, r2b) as uint8 bit patterns. Least-squares estimate
+  ## on signed residuals selects the start, then local-entropy refinement:
+  ## red tries the +-2 neighborhood, blue coordinate-descends twice. Small
+  ## bonus for zero/neighbor matches keeps the transform image
+  ## compressible. The caller keeps the transform only if the actual
+  ## payload with these params is smaller, so proposals stay aggressive.
+  colLogInit()
+  let bxs = subSize(w, sizeBits)
+  let bys = subSize(h, sizeBits)
+  var params = newSeq[array[3, uint8]](bxs * bys)
+  var histo: array[256, int]
+  for by in 0..<bys:
+    for bx in 0..<bxs:
+      let x0 = bx shl sizeBits
+      let x1 = min(x0 + (1 shl sizeBits), w)
+      let y0 = by shl sizeBits
+      let y1 = min(y0 + (1 shl sizeBits), h)
+      let bi = by * bxs + bx
+      let n = (y1 - y0) * (x1 - x0)
+      var pxPrev = [0'u8, 0, 0]; var pyPrev = [0'u8, 0, 0]
+      if bx > 0: pxPrev = params[bi - 1]
+      if by > 0: pyPrev = params[bi - bxs]
+      template rawCostR(t: int): float =
+        block:
+          zeroMem(addr histo[0], sizeof(histo))
+          for yy in y0..<y1:
+            for xx in x0..<x1:
+              let pp = px[yy * w + xx].data
+              histo[int(transRedFwd(pp[0], pp[1], t))] += 1
+          colorCostHisto(histo, n)
+      template costR(t: int): float =
+        block:
+          var cc = rawCostR(t)
+          if t == 0: cc -= 1.0
+          if uint8(t and 0xFF) == pxPrev[0]: cc -= 0.75
+          if uint8(t and 0xFF) == pyPrev[0]: cc -= 0.75
+          cc
+      template rawCostB(gb, rb: int): float =
+        block:
+          zeroMem(addr histo[0], sizeof(histo))
+          for yy in y0..<y1:
+            for xx in x0..<x1:
+              let pp = px[yy * w + xx].data
+              histo[int(transBlueFwd(pp[2], pp[1], pp[0], gb, rb))] += 1
+          colorCostHisto(histo, n)
+      template costB(gb, rb: int): float =
+        block:
+          var cc = rawCostB(gb, rb)
+          if gb == 0: cc -= 1.0
+          if rb == 0: cc -= 1.0
+          if uint8(gb and 0xFF) == pxPrev[1]: cc -= 0.75
+          if uint8(rb and 0xFF) == pxPrev[2]: cc -= 0.75
+          if uint8(gb and 0xFF) == pyPrev[1]: cc -= 0.75
+          if uint8(rb and 0xFF) == pyPrev[2]: cc -= 0.75
+          cc
+      var allG0 = true; var allR0 = true
+      var sGG, sRR, sGR, sGB, sRB: int = 0
+      for yy in y0..<y1:
+        for xx in x0..<x1:
+          let pp = px[yy * w + xx].data
+          if pp[1] != 0: allG0 = false
+          if pp[0] != 0: allR0 = false
+          let g = int(cast[int8](pp[1]))
+          let r = int(cast[int8](pp[0]))
+          let b = int(cast[int8](pp[2]))
+          sGG += g * g; sRR += r * r; sGR += g * r
+          sGB += g * b; sRB += r * b
+      var bestGr = 0
+      var bestCR = high(float)
+      if not allG0:
+        var estGr = 0
+        if sGG > 0:
+          estGr = clamp(int(round(32.0 * float(sGR) / float(sGG))), -128, 127)
+        # start at the estimate (never at zero: the caller keeps the
+        # transform only if the actual payload wins, so proposals should
+        # be aggressive, not conservative)
+        bestGr = estGr
+        for t in [estGr, estGr - 2, estGr - 1, estGr + 1, estGr + 2]:
+          if t < -128 or t > 127: continue
+          let c = costR(t)
+          if c < bestCR:
+            bestCR = c
+            bestGr = t
+      var bestGb = 0; var bestRb = 0
+      var bestCB = high(float)
+      if not (allG0 and allR0):
+        var estGb = 0; var estRb = 0
+        let det = sGG * sRR - sGR * sGR
+        if det != 0:
+          let a = float(sGB * sRR - sRB * sGR) / float(det)
+          let b = float(sGG * sRB - sGR * sGB) / float(det)
+          estGb = clamp(int(round(32.0 * a)), -128, 127)
+          estRb = clamp(int(round(32.0 * b)), -128, 127)
+        bestGb = estGb; bestRb = estRb
+        for (gb, rb) in [(estGb, estRb), (estGb - 2, estRb),
+            (estGb + 2, estRb), (estGb, estRb - 2), (estGb, estRb + 2)]:
+          if gb < -128 or gb > 127 or rb < -128 or rb > 127: continue
+          let c = costB(gb, rb)
+          if c < bestCB:
+            bestCB = c
+            bestGb = gb
+            bestRb = rb
+        for _ in 0..1:
+          for t in max(bestGb - 2, -128)..min(bestGb + 2, 127):
+            if t == bestGb: continue
+            let c = costB(t, bestRb)
+            if c < bestCB:
+              bestCB = c
+              bestGb = t
+          for t in max(bestRb - 2, -128)..min(bestRb + 2, 127):
+            if t == bestRb: continue
+            let c = costB(bestGb, t)
+            if c < bestCB:
+              bestCB = c
+              bestRb = t
+      params[bi] = [uint8(bestGr and 0xFF), uint8(bestGb and 0xFF),
+        uint8(bestRb and 0xFF)]
+  params
+
+proc applyColorFwd*(px: var seq[Rgba[uint8]], w, h, sizeBits: int,
+    params: seq[array[3, uint8]]) =
+  ## Forward cross-color: R -= d(g2r,G); B -= d(g2b,G) + d(r2b,R_orig).
+  ## (Decoder adds them back, using reconstructed R for the last term,
+  ## which equals R_orig exactly.)
+  let bxs = subSize(w, sizeBits)
+  let bys = subSize(h, sizeBits)
+  for by in 0..<bys:
+    for bx in 0..<bxs:
+      let bi = by * bxs + bx
+      let g2r = cast[int8](params[bi][0])
+      let g2b = cast[int8](params[bi][1])
+      let r2b = cast[int8](params[bi][2])
+      let x0 = bx shl sizeBits
+      let x1 = min(x0 + (1 shl sizeBits), w)
+      let y0 = by shl sizeBits
+      let y1 = min(y0 + (1 shl sizeBits), h)
+      for y in y0..<y1:
+        for x in x0..<x1:
+          let i = y * w + x
+          let R = px[i].data[0]; let G = px[i].data[1]; let B = px[i].data[2]
+          let r8 = cast[int8](R); let g8 = cast[int8](G)
+          let rt = (int(R) - int(colorDelta(g2r, g8))) and 0xFF
+          let bt = (int(B) - int(colorDelta(g2b, g8)) -
+            int(colorDelta(r2b, r8))) and 0xFF
+          px[i].data[0] = uint8(rt)
+          px[i].data[2] = uint8(bt)
+
 proc encodeStreamInto(w2: var Vp8lBitWriter, img: RgbaImage,
     writeMeta: bool) =
   ## LZ77 + Huffman stream (decodeStream format): cache flag, optional
@@ -1470,32 +1653,22 @@ const Vp8lUseTransforms = true
   ## Master switch for predictor + subtract-green. Always on (measured
   ## wins across content; tiny overhead on incompressible data).
 
-proc encodeVp8l*(img: RgbaImage): seq[uint8] =
-  ## VP8L encoder: predictor + subtract-green transforms, LZ77 backward
-  ## matches + color cache, no meta-Huffman yet. Pixel-exact output any
-  ## spec decoder accepts.
+proc encodeVp8lPayload(img: RgbaImage, pxMain: seq[Rgba[uint8]],
+    modes: seq[uint8], colParams: seq[array[3, uint8]]): seq[uint8] =
+  ## Full VP8L payload: header, transforms, main stream. Both color on/off
+  ## variants are built standalone so the caller can keep the smaller.
   let w = int(img.width); let h = int(img.height)
   var hasAlpha = false
   for p in img.pixels:
     if p.data[3] != 255: hasAlpha = true; break
-  # predictor transform (always on for v1; residuals compress better
-  # across content and cost only a small mode image)
-  var px = img.pixels
-  var modes: seq[uint8] = @[]
-  var bxs = 0; var bys = 0
-  if Vp8lUseTransforms:
-    modes = choosePredictorModes(img.pixels, w, h, PredSizeBits)
-    px = applyPredictorFwd(img.pixels, w, h, PredSizeBits, modes)
-    # subtract-green (always on for v1; decorrelates R/B from G)
-    applySubGreenFwd(px)
   var w2: Vp8lBitWriter
   w2.data.add(0x2F)
   var hdr = uint32(w - 1) or (uint32(h - 1) shl 14)
   if hasAlpha: hdr = hdr or (1'u32 shl 28)
   for k in 0..3: w2.data.add(uint8((hdr shr (8*k)) and 0xFF))
-  # transform 0: predictor
   if Vp8lUseTransforms:
-    bxs = subSize(w, PredSizeBits); bys = subSize(h, PredSizeBits)
+    let bxs = subSize(w, PredSizeBits); let bys = subSize(h, PredSizeBits)
+    # transform 0: predictor
     w2.emitBits(1, 1); w2.emitBits(0, 2); w2.emitBits(PredSizeBits - 2, 3)
     var mpx = newSeq[Rgba[uint8]](bxs * bys)
     for i, m in modes: mpx[i] = Rgba[uint8](data: [0'u8, m, 0, 0])
@@ -1504,13 +1677,53 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
       false)
     # transform 2: subtract-green (no data)
     w2.emitBits(1, 1); w2.emitBits(2, 2)
+    # transform 1: cross-color (per-block multipliers)
+    if colParams.len > 0:
+      w2.emitBits(1, 1); w2.emitBits(1, 2); w2.emitBits(ColSizeBits - 2, 3)
+      let cxs = subSize(w, ColSizeBits); let cys = subSize(h, ColSizeBits)
+      var cpx = newSeq[Rgba[uint8]](cxs * cys)
+      for i, cp in colParams:
+        # decoder reads byte0=r2b, byte1=g2b, byte2=g2r
+        cpx[i] = Rgba[uint8](data: [cp[2], cp[1], cp[0], 0'u8])
+      encodeStreamInto(w2,
+        RgbaImage(width: uint32(cxs), height: uint32(cys), pixels: move(cpx)),
+        false)
   w2.emitBits(0, 1) # end of transforms (none if transforms off)
   # NB: decodeStream reads the cache flag BEFORE the meta-huffman flag
   # (all-zero order was invisible when every flag was 0).
-  var timg = RgbaImage(width: img.width, height: img.height, pixels: move(px))
+  var timg = RgbaImage(width: img.width, height: img.height,
+    pixels: pxMain)
   encodeStreamInto(w2, timg, true)
   w2.emitFlush()
   w2.data
+
+proc encodeVp8l*(img: RgbaImage): seq[uint8] =
+  ## VP8L encoder: predictor + subtract-green + (when it wins) per-block
+  ## color transform, LZ77 backward matches + color cache, no meta-Huffman
+  ## yet. Pixel-exact output any spec decoder accepts. The color variant is
+  ## kept only when its actual payload is smaller (reference philosophy:
+  ## never trust estimates).
+  let w = int(img.width); let h = int(img.height)
+  if not Vp8lUseTransforms:
+    return encodeVp8lPayload(img, img.pixels, @[], @[])
+  # predictor transform (always on for v1; residuals compress better
+  # across content and cost only a small mode image)
+  let modes = choosePredictorModes(img.pixels, w, h, PredSizeBits)
+  var px = applyPredictorFwd(img.pixels, w, h, PredSizeBits, modes)
+  # subtract-green (always on for v1; decorrelates R/B from G)
+  applySubGreenFwd(px)
+  let plain = encodeVp8lPayload(img, px, modes, @[])
+  if Vp8lUseColor:
+    let colParams = chooseColorParams(px, w, h, ColSizeBits)
+    var anyNz = false
+    for cp in colParams:
+      if cp != [0'u8, 0, 0]: anyNz = true; break
+    if anyNz:
+      var pxC = px
+      applyColorFwd(pxC, w, h, ColSizeBits, colParams)
+      let color = encodeVp8lPayload(img, move(pxC), modes, colParams)
+      if color.len < plain.len: return color
+  plain
 
 proc encodeWebp*(img: DynamicImage): ImageResult[seq[uint8]] =
   let rgba = img.toRgba8()
