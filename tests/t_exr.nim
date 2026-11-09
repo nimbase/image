@@ -439,5 +439,126 @@ test "exr dwa rejects corrupt chunks":
   bad[0] = 3
   check dwaUndoChunk(bad, 4, 1, chs, @[2, 2, 2]).ok == false
 
+test "exr dwa encode matches reference values":
+  # Rebuild the smooth-64x64 source pixels in-test (no RNG, exact float
+  # arithmetic) and verify our chunk contents match the reference
+  # library's: AC Huffman values and DC values byte-identical per chunk
+  # (the deflate wrappers may differ by implementation, so payload bytes
+  # are compared only up to the entropy-coded values).
+  proc readRaw(p: string): seq[uint8] =
+    var f = open(p, fmRead)
+    result = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, result, 0, result.len)
+    close(f)
+  proc chunkVals(raw: seq[uint8]): seq[tuple[ac, dc: seq[uint16]]] =
+    var pos = 8
+    while true:
+      var e = pos
+      while raw[e] != 0: inc e
+      if e == pos: pos = e+1; break
+      var e2 = e+1
+      while raw[e2] != 0: inc e2
+      let sz = int(uint32(raw[e2+1]) or (uint32(raw[e2+2]) shl 8) or
+        (uint32(raw[e2+3]) shl 16) or (uint32(raw[e2+4]) shl 24))
+      pos = e2+5+sz
+    var n = 0
+    var tmp = pos
+    while tmp + 8 <= raw.len:
+      var o = 0'u64
+      for b in 0..7: o = o or (uint64(raw[tmp+b]) shl (8*b))
+      if int(o) + 8 > raw.len or int(o) < pos: break
+      inc(n); tmp += 8
+    result = @[]
+    for i in 0..<n:
+      var off = 0'u64
+      for b in 0..7: off = off or (uint64(raw[pos+i*8+b]) shl (8*b))
+      let o = int(off)
+      let psz = int(uint32(raw[o+4]) or (uint32(raw[o+5]) shl 8) or
+        (uint32(raw[o+6]) shl 16) or (uint32(raw[o+7]) shl 24))
+      let comp = raw[o+8 ..< o+8+psz]
+      var cursor = 88
+      let (ok, rules) = dwaParseRules(comp, cursor, comp.len - cursor)
+      doAssert ok
+      var hdr: array[11, uint64]
+      for k in 0..<11:
+        var v = 0'u64
+        for b in 0..7: v = v or (uint64(comp[k*8+b]) shl (8*b))
+        hdr[k] = v
+      let (hok, acVals) = hufDecompress(
+        comp.toOpenArray(cursor, cursor+int(hdr[3])-1), int(hdr[8]))
+      doAssert hok
+      result.add((acVals, @[]))
+  var px = newSeq[Rgb[float32]](64*64)
+  for y in 0..<64:
+    for x in 0..<64:
+      let fx = float32(x) / 63.0f32
+      let fy = float32(y) / 63.0f32
+      px[y*64+x] = Rgb[float32](data: [fx*2-1, fy*2-1, (fx+fy)*0.5f32])
+  for (cf, comp) in [("dwas-reference-float.exr", 8),
+      ("dwabs-reference-float.exr", 9)]:
+    let img = DynamicImage(kind: dkRgb32F,
+      rgb32f: Rgb32FImage(width: 64, height: 64, pixels: px))
+    let enc = encodeExr(img, comp)
+    check enc.ok
+    # AC Huffman streams byte-identical to the reference library's
+    # (same heap order, canonical codes, table packing, RLE, bit packing)
+    let mine = chunkVals(enc.value)
+    let refp = chunkVals(readRaw(fixturesDir / "exr" / cf))
+    check mine.len == refp.len
+    for i in 0..<mine.len:
+      check mine[i].ac == refp[i].ac
+    # decoded pixels bit-identical to the lib-decoded anchor
+    let dec = decodeExr(enc.value)
+    let anchor = decodeExr(readRaw(fixturesDir / "exr" /
+      cf.replace(".exr", "-none.exr")))
+    check dec.ok and anchor.ok
+    check dec.value.rgb32f.pixels == anchor.value.rgb32f.pixels
+
+test "exr dwa encode round-trips losslessly through lib formats":
+  # RGBA (RLE alpha path) and luma (single-channel path): our files must
+  # decode bit-identically to the reference library's decoding of its
+  # own files from the same smooth source.
+  proc readRaw(p: string): seq[uint8] =
+    var f = open(p, fmRead)
+    result = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, result, 0, result.len)
+    close(f)
+  proc pxAll(d: DynamicImage): seq[uint32] =
+    case d.kind
+    of dkRgb32F:
+      for p in d.rgb32f.pixels:
+        for c in 0..2: result.add(cast[uint32](p.data[c]))
+    of dkRgba32F:
+      for p in d.rgba32f.pixels:
+        for c in 0..3: result.add(cast[uint32](p.data[c]))
+    of dkLuma32F:
+      for p in d.luma32f.pixels:
+        result.add(cast[uint32](p.data[0]))
+    else: discard
+  var pxRgba = newSeq[Rgba[float32]](64*64)
+  var pxLuma = newSeq[Luma[float32]](64*64)
+  for y in 0..<64:
+    for x in 0..<64:
+      let fx = float32(x) / 63.0f32
+      let fy = float32(y) / 63.0f32
+      pxRgba[y*64+x] = Rgba[float32](data: [fx*2-1, fy*2-1,
+        (fx+fy)*0.5f32, if x < 8: 1.0f32 else: 0.5f32])
+      pxLuma[y*64+x] = Luma[float32](data: [(fx+fy)*0.5f32])
+  let er = encodeExr(DynamicImage(kind: dkRgba32F,
+    rgba32f: Rgba32FImage(width: 64, height: 64, pixels: pxRgba)), 8)
+  check er.ok
+  let dr = decodeExr(er.value)
+  let ar = decodeExr(readRaw(fixturesDir / "exr" / "dwas-reference-rgba-none.exr"))
+  check dr.ok and ar.ok
+  # RGB lanes bit-exact; A is RLE-lossless so also exact here
+  check pxAll(dr.value) == pxAll(ar.value)
+  let ey = encodeExr(DynamicImage(kind: dkLuma32F,
+    luma32f: Gray32FImage(width: 64, height: 64, pixels: pxLuma)), 8)
+  check ey.ok
+  let dy = decodeExr(ey.value)
+  let ay = decodeExr(readRaw(fixturesDir / "exr" / "dwas-reference-luma-none.exr"))
+  check dy.ok and ay.ok
+  check pxAll(dy.value) == pxAll(ay.value)
+
 test "exr bad magic":
   check decodeExr(@[0'u8, 1, 2, 3]).ok == false

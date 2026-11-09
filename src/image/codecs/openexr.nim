@@ -1153,6 +1153,7 @@ proc pizUndoChunk*(comp: openArray[uint8], w, rows: int,
 
 # ---------- DWAA/DWAB decode (lossy DCT; see openexr_dwa.nim) ----------
 include openexr_dwa
+include openexr_dwa_enc
 
 # ---------- B44/B44A (fixed-rate lossy for half; float/uint passthrough) ---
 # Reimplements OpenEXRCore internal_b44.c (pack/unpack/shift search) and
@@ -1726,7 +1727,7 @@ proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]
   ## HALF/UINT-exactness only matters on decode of foreign files.
   ## Channel data is packed alphabetically by name (B,G,R / A,B,G,R),
   ## per the file layout; the chlist is written in the same order.
-  if compression notin [3, 4, 5, 6, 7]:
+  if compression notin [3, 4, 5, 6, 7, 8, 9]:
     return err[seq[uint8]](unsupportedError(ukGenericFeature,
       "exr: encode compression " & $compression))
   var w, h: int
@@ -1792,8 +1793,9 @@ proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]
   putAttr(output, "screenWindowCenter", "v2f", @[0'u8,0,0,0, 0,0,0,0])
   putAttr(output, "screenWindowWidth", "float", @[0'u8,0,0,0])
   output.add(0) # end of header
-  # chunks: ZIP/PXR24 = 16 rows, PIZ/B44/B44A = 32 rows each
-  let rowsPer = if compression == 3 or compression == 5: 16 else: 32
+  # chunks: ZIP/PXR24 = 16 rows, DWAB = 256 rows, rest lossy = 32 rows
+  let rowsPer = if compression == 3 or compression == 5: 16
+    elif compression == 9: 256 else: 32
   let lineBytes = w * chNames.len * 4
   let nChunks = (h + rowsPer - 1) div rowsPer
   # offset table placeholder
@@ -1833,6 +1835,17 @@ proc encodeExr*(img: DynamicImage, compression: int = 3): ImageResult[seq[uint8]
       # (mirrors the nOut < packedbytes gate in internal_exr_apply_piz).
       let (pok, t) = pizApplyChunk(planar, w, rows, cbytesEnc, ptypesEnc)
       if not pok: return err[seq[uint8]](encodingError("exr: piz failed"))
+      payload = if t.len < planar.len: t else: planar
+    elif compression == 8 or compression == 9:
+      # DWAA/DWAB: lossy DCT + quantize at the default level 45.0 (the
+      # reference omits dwaCompressionLevel at default); raw planar
+      # fallback when the encoding does not win (nWritten >= packed).
+      var ech: seq[ExrChannel] = @[]
+      for i, n in chNames:
+        ech.add(ExrChannel(name: n, pixelType: 2, pLinear: false,
+          xSamp: 1, ySamp: 1))
+      let (dok, t) = dwaApplyChunk(planar, w, rows, ech, cbytesEnc)
+      if not dok: return err[seq[uint8]](encodingError("exr: dwa failed"))
       payload = if t.len < planar.len: t else: planar
     else:
       var tb = planar

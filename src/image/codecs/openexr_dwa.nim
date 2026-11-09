@@ -598,7 +598,9 @@ proc dwaUndoChunk*(comp: openArray[uint8], w, rows: int,
   for ci in 0..<channels.len:
     if scheme[ci] == 1:
       halfRows[ci] = newSeq[uint16](w * rows)
-      if not channels[ci].pLinear:
+      # NB: the reference applies toLinear unconditionally for CSC sets
+      # (ignoring pLinear); singles honor pLinear. Match it exactly.
+      if not channels[ci].pLinear or dwaInSets(ci, sets):
         hasLin[ci] = true
         linTabs[ci] = dwaToLinearTab
   var acPos = 0

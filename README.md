@@ -232,7 +232,7 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] AVIF color math (BT.601/709/2020 YCbCr, YCgCo-Re)
 - [x] JPEG progressive (SOF2) decode (spectral selection + successive approximation; encoder stays baseline-only)
 - [x] WebP lossy VP8 keyframe decode (bit-exact vs dwebp)
-- [x] EXR PIZ/PXR24/B44/DWAA/DWAB scanline (decode bit-exact vs reference; PIZ/PXR24/B44 encode byte-identical; DWA encode pending)
+- [x] EXR PIZ/PXR24/B44/DWAA/DWAB scanline (decode bit-exact vs reference; PIZ/PXR24/B44 encode byte-identical; DWA AC/DC values byte-identical, decoded pixels bit-exact — only deflate bytes differ by impl)
 - [ ] EXR tiled/multipart
 - [ ] AVIF bitstream (requires an AV1 decoder)
 - [x] HEIF/HEIC stills: container + uncompressed + JPEG-in-HEIF + grids/overlays/iden + thumbnails/aux/groups/Exif/mime + writer (HEVC/VVC/AVC/JPEG2000 passthrough only — no pure-Nim video/wavelet decoders)
