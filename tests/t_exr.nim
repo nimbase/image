@@ -380,5 +380,64 @@ test "exr piz round-trips losslessly":
   check u.ok
   check u.value == planar
 
+test "exr dwa tables match reference":
+  # Spot anchors for the perceptual half<->half LUTs (exact formulas
+  # verified over all 65536 entries during development): identity at 1,
+  # inf/nan map to 0, sign preserved.
+  ensureDwaTables()
+  check dwaToLinearTab[0x0000] == 0x0000'u16
+  check dwaToLinearTab[0x3C00] == 0x3C00'u16 # pow(1, 2.2) = 1
+  check dwaToLinearTab[0xBC00] == 0xBC00'u16 # sign preserved
+  check dwaToLinearTab[0x7C00] == 0x0000'u16 # inf -> 0
+  check dwaToLinearTab[0x7E00] == 0x0000'u16 # nan -> 0
+  check dwaToNonLinearTab[0x0000] == 0x0000'u16
+  check dwaToNonLinearTab[0x3C00] == 0x3C00'u16
+  check dwaToNonLinearTab[0xBC00] == 0xBC00'u16
+  check dwaToNonLinearTab[0x7C00] == 0x0000'u16
+
+test "exr dwa official files decode bit-exact":
+  # Fixtures minted directly with the reference library (C++ API):
+  # DWAA 64x64 half (RGBA) + float at level 45 (2 chunks each), DWAB
+  # 64x64 half (1 chunk), and a smooth level-200 half exercising the
+  # sparse-AC DCT variants, each with a lib-decoded NONE anchor.
+  # Bit-exact at the uint32 level (no NaN lanes in these fixtures).
+  proc readRaw(p: string): seq[uint8] =
+    var f = open(p, fmRead)
+    result = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, result, 0, result.len)
+    close(f)
+  proc pxAll(d: DynamicImage): seq[uint32] =
+    case d.kind
+    of dkRgb32F:
+      for p in d.rgb32f.pixels:
+        for c in 0..2: result.add(cast[uint32](p.data[c]))
+    of dkRgba32F:
+      for p in d.rgba32f.pixels:
+        for c in 0..2: result.add(cast[uint32](p.data[c]))
+    else: discard
+  for (cf, cn) in [("dwaa-reference-half.exr", "dwaa-reference-half-none.exr"),
+      ("dwaa-reference-float.exr", "dwaa-reference-float-none.exr"),
+      ("dwab-reference-half.exr", "dwab-reference-half-none.exr"),
+      ("dwavar-reference-half.exr", "dwavar-reference-half-none.exr")]:
+    let a = decodeExr(readRaw(fixturesDir / "exr" / cf))
+    let b = decodeExr(readRaw(fixturesDir / "exr" / cn))
+    check a.ok and b.ok
+    let pa = pxAll(a.value)
+    let pb = pxAll(b.value)
+    check pa.len == pb.len
+    check pa == pb
+
+test "exr dwa rejects corrupt chunks":
+  var chs: seq[ExrChannel] = @[
+    ExrChannel(name: "B", pixelType: 1, pLinear: false, xSamp: 1, ySamp: 1),
+    ExrChannel(name: "G", pixelType: 1, pLinear: false, xSamp: 1, ySamp: 1),
+    ExrChannel(name: "R", pixelType: 1, pLinear: false, xSamp: 1, ySamp: 1)]
+  check dwaUndoChunk(@[], 4, 1, chs, @[2, 2, 2]).ok == false
+  check dwaUndoChunk(newSeq[uint8](100), 4, 1, chs, @[2, 2, 2]).ok == false
+  # bad version (>= 3)
+  var bad = newSeq[uint8](88)
+  bad[0] = 3
+  check dwaUndoChunk(bad, 4, 1, chs, @[2, 2, 2]).ok == false
+
 test "exr bad magic":
   check decodeExr(@[0'u8, 1, 2, 3]).ok == false

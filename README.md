@@ -36,7 +36,7 @@
 Codec support (`o` = decode, `w` = encode):
 
 - BMP: o+w — 1/4/8-bit palette, 16-bit bitfields, 24/32-bit, RLE4/RLE8
-- EXR: o+w — scanline NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A/PIZ, half/float/uint to 32F; DWAA/tiled/multipart unsupported
+- EXR: o+w — scanline NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A/PIZ/DWAA/DWAB, half/float/uint to 32F; tiled/multipart unsupported
 - Farbfeld: o+w — `Rgba16`
 - GIF: o+w — animation, disposal, interlace, loop count, LZW
 - HDR: o+w — Radiance RGBE, flat + new/old RLE
@@ -232,7 +232,8 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] AVIF color math (BT.601/709/2020 YCbCr, YCgCo-Re)
 - [x] JPEG progressive (SOF2) decode (spectral selection + successive approximation; encoder stays baseline-only)
 - [x] WebP lossy VP8 keyframe decode (bit-exact vs dwebp)
-- [ ] EXR PIZ/PXR24/B44/DWAA + tiled/multipart
+- [x] EXR PIZ/PXR24/B44/DWAA/DWAB scanline (decode bit-exact vs reference; PIZ/PXR24/B44 encode byte-identical; DWA encode pending)
+- [ ] EXR tiled/multipart
 - [ ] AVIF bitstream (requires an AV1 decoder)
 - [x] HEIF/HEIC stills: container + uncompressed + JPEG-in-HEIF + grids/overlays/iden + thumbnails/aux/groups/Exif/mime + writer (HEVC/VVC/AVC/JPEG2000 passthrough only — no pure-Nim video/wavelet decoders)
 - [ ] JPEG XL (jxl)

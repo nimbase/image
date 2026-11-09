@@ -1,6 +1,6 @@
 ## OpenEXR codec — references/image/src/codecs/openexr.rs + exr@1.74.0
-## Single-part scanline only (tiled/multipart/deep/DWAA/DWAB return
-## Unsupported). NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A/PIZ + half/float/uint.
+## Single-part scanline only (tiled/multipart/deep return Unsupported).
+## NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A/PIZ/DWAA/DWAB + half/float/uint.
 ## RLE/ZIP pipeline per OpenEXRCore internal_zip.c / internal_rle.c:
 ## separate even/odd halves, biased delta (first byte raw, rest cur-prev+128),
 ## then RLE (neg=literal -c bytes, pos=repeat c+1) / zlib-deflate.
@@ -1151,6 +1151,9 @@ proc pizUndoChunk*(comp: openArray[uint8], w, rows: int,
     base += rows * w * wc
   ok(output)
 
+# ---------- DWAA/DWAB decode (lossy DCT; see openexr_dwa.nim) ----------
+include openexr_dwa
+
 # ---------- B44/B44A (fixed-rate lossy for half; float/uint passthrough) ---
 # Reimplements OpenEXRCore internal_b44.c (pack/unpack/shift search) and
 # internal_b44_table_init.c (exp/log tables for pLinear channels).
@@ -1494,7 +1497,8 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
     case compression
     of 0, 1, 2: 1
     of 3, 5: 16
-    of 4, 6, 7: 32
+    of 4, 6, 7, 8: 32
+    of 9: 256
     else:
       return err[seq[DynamicImage]](unsupportedError(ukGenericFeature,
         "exr: compression " & $compression))
@@ -1605,6 +1609,14 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
         blk = comp[0..<exp]
       else:
         var u = pizUndoChunk(comp, w, rows, channels, chanBytes)
+        if not u.ok: return err[seq[DynamicImage]](u.err)
+        blk = move(u.value)
+    of 8, 9:
+      # DWAA (32 rows/chunk) / DWAB (256 rows/chunk): lossy DCT.
+      if comp.len == exp:
+        blk = comp[0..<exp]
+      else:
+        var u = dwaUndoChunk(comp, w, rows, channels, chanBytes)
         if not u.ok: return err[seq[DynamicImage]](u.err)
         blk = move(u.value)
     else: discard
