@@ -10,6 +10,15 @@
 # with R->G,B grouped via CSC when they share a name prefix.
 
 {.passL: "-lm".}
+when not defined(vcc):
+  # Forbid FP contraction (FMA fusion) in this codec's compilation unit.
+  # The DWA decode/encode float paths (DCT, CSC) must round exactly like
+  # the reference's SSE2 codegen: one rounding per mul/add. On AArch64
+  # FMA is baseline, so compilers fuse `a*b+c` into `fmadd` by default
+  # (verified: same C source compiles to mulss/addss on x86-64 but fmadd
+  # on arm64-apple), changing low bits and breaking bit-exact conformance
+  # (CI macos-15). MSVC does not contract by default, hence the guard.
+  {.passC: "-ffp-contract=off".}
 proc dwaPowf(x, y: float32): float32 {.importc: "powf", header: "<math.h>".}
 proc dwaLogf(x: float32): float32 {.importc: "logf", header: "<math.h>".}
 proc dwaCosf(x: float32): float32 {.importc: "cosf", header: "<math.h>".}
