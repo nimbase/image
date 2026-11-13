@@ -1,8 +1,9 @@
 ## HEIF/HEIC facade (clean-room): container + uncompressed + JPEG-in-HEIF
 ## decode. Item/box layout per ISO/IEC 23008-12; uncompressed descriptors
-## per ISO/IEC 23001-17. HEVC/VVC/AVC/JPEG2000 bitstreams, tiled layouts,
-## grids/overlays and sequences stay Unsupported (pure-Nim v1 has no video
-## or wavelet decoders — same precedent as AVIF bitstream).
+## per ISO/IEC 23001-17. HEVC/VVC/AVC/EVC/JPEG2000 bitstreams stay
+## Unsupported for pixels (passthrough via extractors). Supports stills,
+## collections, derived grid/overlay/iden, tiled iloc construction-1/2,
+## timed pict sequences (unci v1 / jpeg) and EVC brands.
 import ../../error
 import ../../buffer
 import ../../dynamic
@@ -15,10 +16,12 @@ import ./unc
 import ./derived
 import ./groups
 import ./writer
+import ./sequence
 
 export groups
 export writer
 export derived
+export sequence
 
 proc rotateCcw[P](img: ImageBuffer[P], turns: int): ImageBuffer[P] =
   let t = ((turns mod 4) + 4) mod 4
@@ -56,7 +59,7 @@ proc flipImg[P](img: ImageBuffer[P], topBottom: bool): ImageBuffer[P] =
   ImageBuffer[P](width: img.width, height: img.height, pixels: px)
 
 const KnownDescriptive = ["ispe", "pixi", "colr", "hvcC", "lhvC", "vvcC",
-  "avcC", "jpgC", "j2kH", "uncC", "cmpd", "cmpC", "pasp", "auxC", "rloc",
+  "avcC", "evcC", "jpgC", "j2kH", "uncC", "cmpd", "cmpC", "pasp", "auxC", "rloc",
   "lsel", "clli", "mdcv", "cclv", "amve", "ndwt", "rref", "tols", "subs",
   "oinf", "udes", "altt", "crtt", "mdft"]
 const KnownTransformative = ["irot", "imir", "clap", "iscl"]
@@ -289,9 +292,12 @@ proc decodePrimary(data: seq[uint8], meta: HeifMeta,
   if item.typ == "vvc1" or item.typ == "vvi1":
     return err[DynamicImage](unsupportedError(ukFormat,
       "heif: VVC bitstream decoding not implemented in pure-Nim v1"))
-  if item.typ == "avc1":
+  if item.typ == "avc1" or item.typ == "avci" or item.typ == "avcs":
     return err[DynamicImage](unsupportedError(ukFormat,
       "heif: AVC bitstream decoding not implemented in pure-Nim v1"))
+  if item.typ == "evc1" or item.typ == "evci" or item.typ == "evcs":
+    return err[DynamicImage](unsupportedError(ukFormat,
+      "heif: EVC bitstream decoding not implemented in pure-Nim v1"))
   if item.typ == "j2k1":
     return err[DynamicImage](unsupportedError(ukFormat,
       "heif: JPEG2000 bitstream decoding not implemented in pure-Nim v1"))
@@ -366,7 +372,8 @@ proc decodePrimary(data: seq[uint8], meta: HeifMeta,
 
 proc decodeHeif*(data: seq[uint8]): ImageResult[DynamicImage] =
   ## Decode a HEIF/HEIC still (primary item). Handles uncompressed,
-  ## JPEG, and derived grid/overlay/identity stills. Video bitstreams
+  ## JPEG, and derived grid/overlay/identity stills, plus tiled items
+  ## assembled via iloc construction-1/2. Video bitstreams (including EVC)
   ## stay Unsupported (passthrough via extractors).
   if data.len < 12:
     return err[DynamicImage](decodingError("heif: too short"))
@@ -374,6 +381,10 @@ proc decodeHeif*(data: seq[uint8]): ImageResult[DynamicImage] =
     let meta = parseMeta(data)
     if not meta.hasPrimary:
       return err[DynamicImage](decodingError("heif: missing pitm"))
+    let (found, pit) = findItem(meta, meta.primaryId)
+    if found and (pit.typ == "Exif" or pit.typ == "mime" or
+        pit.typ == "uri "):
+      return err[DynamicImage](decodingError("heif: primary must be image"))
     decodePrimary(data, meta, meta.primaryId)
   except HeifDecodeError as e:
     err[DynamicImage](decodingError(e.msg))
@@ -447,6 +458,90 @@ proc heifMetadata*(data: seq[uint8]): ImageResult[seq[tuple[id: uint32,
 proc decodeHeic*(data: seq[uint8]): ImageResult[DynamicImage] =
   ## Alias: HEIC is HEIF with an HEVC brand; same container path.
   decodeHeif(data)
+
+proc heifMovieInfo*(data: seq[uint8]): ImageResult[HeifMovie] =
+  ## Parse the timed-sequence container (`moov` with `pict` tracks).
+  if data.len < 12:
+    return err[HeifMovie](decodingError("heif: too short"))
+  try:
+    ok(parseMovie(data))
+  except HeifDecodeError as e:
+    err[HeifMovie](decodingError(e.msg))
+
+proc decodeSequenceSample(track: HeifTrack,
+    sample: seq[uint8]): ImageResult[DynamicImage] =
+  if track.coding == "unci":
+    if track.uncC.len == 0:
+      return err[DynamicImage](decodingError("heif: sequence missing uncC"))
+    var prof: UncProfile
+    try:
+      prof = parseUncC(track.uncC)
+    except HeifDecodeError as e:
+      return err[DynamicImage](decodingError(e.msg))
+    if not prof.isV1:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "heif: sequence unci v0 unsupported"))
+    if track.width <= 0 or track.height <= 0 or
+        track.width > 16384 or track.height > 16384:
+      return err[DynamicImage](decodingError("heif: bad sequence dimensions"))
+    let dec = decodeUncompressed(sample, prof, @[],
+      PixInfo(bits: @[]), track.width, track.height, 6, true)
+    if not dec.ok: return dec
+    ok(dec.value)
+  elif track.coding == "jpeg":
+    let dec = decodeJpeg(sample)
+    if not dec.ok:
+      return err[DynamicImage](decodingError(
+        "heif: sequence JPEG failed: " & dec.err.msg))
+    ok(dec.value)
+  else:
+    err[DynamicImage](unsupportedError(ukFormat,
+      "heif: sequence coding '" & track.coding & "' unsupported"))
+
+proc decodeHeifSequenceSample*(data: seq[uint8], trackIdx = 0,
+    sampleIdx = 0): ImageResult[DynamicImage] =
+  ## Decode one timed-sequence sample (unci v1 / jpeg only).
+  if data.len < 12:
+    return err[DynamicImage](decodingError("heif: too short"))
+  try:
+    let mv = parseMovie(data)
+    if mv.hasMoof:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "heif: fragmented sequences unsupported"))
+    if trackIdx < 0 or trackIdx >= mv.tracks.len:
+      return err[DynamicImage](decodingError("heif: bad track index"))
+    let tr = mv.tracks[trackIdx]
+    if sampleIdx < 0 or sampleIdx >= tr.samples.len:
+      return err[DynamicImage](decodingError("heif: bad sample index"))
+    let s = tr.samples[sampleIdx]
+    checkRange(data, s.offset, s.size, "sample data")
+    decodeSequenceSample(tr, data[s.offset ..< s.offset + s.size])
+  except HeifDecodeError as e:
+    err[DynamicImage](decodingError(e.msg))
+
+proc decodeHeifSequenceAll*(data: seq[uint8],
+    trackIdx = 0): ImageResult[seq[DynamicImage]] =
+  ## Decode every sample in one `pict` track.
+  if data.len < 12:
+    return err[seq[DynamicImage]](decodingError("heif: too short"))
+  try:
+    let mv = parseMovie(data)
+    if mv.hasMoof:
+      return err[seq[DynamicImage]](unsupportedError(ukGenericFeature,
+        "heif: fragmented sequences unsupported"))
+    if trackIdx < 0 or trackIdx >= mv.tracks.len:
+      return err[seq[DynamicImage]](decodingError("heif: bad track index"))
+    let tr = mv.tracks[trackIdx]
+    var outs: seq[DynamicImage] = @[]
+    for s in tr.samples:
+      checkRange(data, s.offset, s.size, "sample data")
+      let d = decodeSequenceSample(tr,
+        data[s.offset ..< s.offset + s.size])
+      if not d.ok: return err[seq[DynamicImage]](d.err)
+      outs.add(d.value)
+    ok(outs)
+  except HeifDecodeError as e:
+    err[seq[DynamicImage]](decodingError(e.msg))
 
 proc extractItemBytes*(data: seq[uint8]): ImageResult[seq[uint8]] =
   ## Raw coded bytes of the primary item (e.g. JPEG2000 codestream access

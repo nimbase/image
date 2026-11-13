@@ -15,9 +15,13 @@ type
     itemUri*: string ## for 'uri ' items
 
   ItemExtent* = object
-    ## Absolute file offset + length of one data run.
+    ## One data run. For file/idat the offset is absolute
+    ## (file) or idat-relative (base+eoff); for item references it is
+    ## an offset inside the referenced source item's bytes.
+    kind*: int ## 0=file, 1=idat, 2=item
     offset*: int
-    length*: int
+    length*: int ## -1 = implied (to end of file/source)
+    srcIndex*: int ## 1-based extent_index for kind==2, else 0
 
   RawProperty* = object
     kind*: string
@@ -61,8 +65,8 @@ proc parseFtyp(data: seq[uint8], b: Box,
     off += 4
 
 const HeifBrands = ["mif1", "mif2", "msf1", "mif3", "heic", "heix", "hevc",
-  "hevx", "vvic", "vvis", "avic", "avis", "jpeg", "j2ki", "unci", "miaf",
-  "miff", "1pic", "pred"]
+  "hevx", "vvic", "vvis", "avic", "avis", "avci", "avcs", "evc1", "evci",
+  "evcs", "jpeg", "j2ki", "j2ks", "unci", "miaf", "miff", "1pic", "pred"]
 
 proc isHeifBrand*(s: string): bool =
   for b in HeifBrands:
@@ -219,27 +223,48 @@ proc parseIloc(data: seq[uint8], b: Box, meta: var HeifMeta) =
       off += 4
     var runs: seq[ItemExtent] = @[]
     for _ in 0 ..< extCount:
+      var eidx = 1
       if idxSize > 0:
-        off += idxSize # extent_index (order within item, ignored)
+        if off + idxSize > p.len:
+          raise heifErr("heif: truncated iloc")
+        var v: uint64 = 0
+        for i in 0 ..< idxSize: v = (v shl 8) or uint64(p[off + i])
+        off += idxSize
+        eidx = int(v)
       let eoff = readSized(data, p, off, offSize, "extent_offset")
       off += offSize
-      let elen = readSized(data, p, off, lenSize, "extent_length")
-      off += lenSize
+      var elen: int64 = -1
+      if lenSize == 0:
+        elen = -1 # implied: to end of file/source, resolved at read time
+      else:
+        let lv = readSized(data, p, off, lenSize, "extent_length")
+        off += lenSize
+        if lv > uint64(high(int)):
+          raise heifErr("heif: iloc extent overflow")
+        elen = int64(lv)
+      if construction < 0 or construction > 2:
+        raise heifErr("heif: bad iloc construction_method")
       if construction == 0:
         let abs = base + eoff
-        if abs + elen > uint64(high(int)):
+        if elen >= 0 and abs + uint64(elen) > uint64(high(int)):
           raise heifErr("heif: iloc extent overflow")
-        runs.add(ItemExtent(offset: int(abs), length: int(elen)))
+        let ln = if elen < 0: -1 else: int(elen)
+        runs.add(ItemExtent(kind: 0, offset: int(abs), length: ln,
+          srcIndex: 0))
       elif construction == 1:
-        if not meta.hasIdat:
-          raise heifErr("heif: idat construction without idat box")
-        let abs = uint64(meta.idatOff) + base + eoff
-        if abs + elen > uint64(high(int)):
+        # Deferred: idat may come after iloc; resolve in itemBytes.
+        let rel = base + eoff
+        if elen >= 0 and rel + uint64(elen) > uint64(high(int)):
           raise heifErr("heif: iloc extent overflow")
-        runs.add(ItemExtent(offset: int(abs), length: int(elen)))
+        let ln = if elen < 0: -1 else: int(elen)
+        runs.add(ItemExtent(kind: 1, offset: int(rel), length: ln,
+          srcIndex: 0))
       else:
-        raise heifErr(
-          "heif: unsupported iloc construction_method (item offsets)")
+        # construction 2: item offset into iloc-referenced source.
+        let rel = base + eoff
+        let ln = if elen < 0: -1 else: int(elen)
+        runs.add(ItemExtent(kind: 2, offset: int(rel), length: ln,
+          srcIndex: eidx))
     meta.extents.add((id, runs))
 
 proc parseIpma(data: seq[uint8], b: Box, ipco: seq[Box],
@@ -371,19 +396,59 @@ proc findItem*(meta: HeifMeta, id: uint32): tuple[found: bool, item: HeifItem] =
     if it.id == id: return (true, it)
   (false, HeifItem())
 
-proc itemBytes*(data: seq[uint8], meta: HeifMeta,
-    id: uint32): seq[uint8] =
-  ## Concatenate an item's extents. Bounds-checked; raises HeifDecodeError.
+proc itemBytesInner(data: seq[uint8], meta: HeifMeta, id: uint32,
+    depth: int): seq[uint8] =
+  if depth > 8:
+    raise heifErr("heif: iloc reference too deep")
   result = @[]
   var found = false
   for (eid, runs) in meta.extents:
     if eid == id:
       found = true
       for r in runs:
-        checkRange(data, r.offset, r.length, "item data")
-        result.add(data[r.offset ..< r.offset + r.length])
+        if r.kind == 0:
+          let ln = if r.length < 0: data.len - r.offset else: r.length
+          if ln < 0: raise heifErr("heif: bad implied extent")
+          checkRange(data, r.offset, ln, "item data")
+          result.add(data[r.offset ..< r.offset + ln])
+        elif r.kind == 1:
+          if not meta.hasIdat:
+            raise heifErr("heif: idat construction without idat box")
+          let abs = meta.idatOff + r.offset
+          let ln = if r.length < 0: (meta.idatOff + meta.idatLen) - abs
+            else: r.length
+          if ln < 0: raise heifErr("heif: bad implied idat extent")
+          checkRange(data, abs, ln, "idat data")
+          result.add(data[abs ..< abs + ln])
+        else:
+          # construction 2: slice of another item's bytes via iref 'iloc'.
+          var toIds: seq[uint32] = @[]
+          var hasRef = false
+          for rf in meta.refs:
+            if rf.fromId == id and rf.refType == "iloc":
+              toIds = rf.toIds
+              hasRef = true
+              break
+          if not hasRef or toIds.len == 0:
+            raise heifErr("heif: item construction without iloc reference")
+          let idx = if r.srcIndex <= 0: 1 else: r.srcIndex
+          if idx < 1 or idx > toIds.len:
+            raise heifErr("heif: bad iloc extent_index")
+          let src = itemBytesInner(data, meta, toIds[idx - 1], depth + 1)
+          let ln = if r.length < 0: src.len - r.offset else: r.length
+          if r.offset < 0 or ln < 0 or r.offset + ln > src.len:
+            raise heifErr("heif: item extent out of source range")
+          result.add(src[r.offset ..< r.offset + ln])
+      break
   if not found:
     raise heifErr("heif: item has no iloc extents")
+
+proc itemBytes*(data: seq[uint8], meta: HeifMeta,
+    id: uint32): seq[uint8] =
+  ## Concatenate an item's extents. Bounds-checked; raises HeifDecodeError.
+  ## Supports construction 0 (file), 1 (idat) and 2 (item offsets via
+  ## iref 'iloc' + extent_index).
+  itemBytesInner(data, meta, id, 0)
 
 proc itemProps*(meta: HeifMeta, id: uint32): seq[RawProperty] =
   for (eid, props) in meta.props:

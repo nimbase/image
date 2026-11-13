@@ -8,6 +8,7 @@ import ./isobmff
 import ./props
 import ./derived
 import ./groups
+import ./sequence
 import ../../error
 import ../../buffer
 import ../../dynamic
@@ -24,6 +25,7 @@ type
     hikExif
     hikMime
     hikUri
+    hikPass ## passthrough coded still (evc1, hvc1, vvc1, avc1, j2k1, ...)
 
   HeifItemSpec* = object
     kind*: HeifItemKind
@@ -36,14 +38,20 @@ type
     overlayOffs*: seq[tuple[x, y: int]]
     overlayOutW*, overlayOutH*: int
     hidden*: bool
-    ispeW*, ispeH*: uint32 ## explicit extents for derived/iden
+    ispeW*, ispeH*: uint32 ## explicit extents for derived/iden/pass
     auxType*: string ## "" = not aux
     thmbTo*: int ## -1 = none, else collection index of master
     dimgTo*: seq[int] ## for iden/grid/overlay
     cdscTo*: seq[int] ## metadata describes these items
+    ilocTo*: seq[int] ## construction-2 sources (virtual tiling); empty = flat
+    useIdat*: bool ## store bytes in meta/idat with construction-1
     mimeType*: string ## for hikMime
     uriType*: string ## for hikUri
     metaBytes*: seq[uint8] ## raw payload for Exif/mime/uri
+    passType*: string ## 4CC for hikPass, e.g. "evc1"
+    passConfigKind*: string ## e.g. "evcC", "" = none
+    passConfig*: seq[uint8] ## raw property payload (incl. FullBox if any)
+    passBytes*: seq[uint8] ## coded bytes for hikPass
     irotTurns*: int ## -1 = none
     imirTopBottom*: int ## -1 none, 0 top-bottom, 1 left-right
     clapRect*: tuple[has: bool, w, h: uint32, x, y: int32]
@@ -131,7 +139,6 @@ proc buildHdlr*(): seq[uint8] =
   makeFullBox("hdlr", 0, 0, p)
 
 proc buildPitm*(id: uint32): seq[uint8] =
-  var p: seq[uint8] = @[]
   if id < 65536:
     var q: seq[uint8] = @[]
     q.putU16BE(uint16(id))
@@ -201,6 +208,34 @@ proc buildIloc*(entries: seq[tuple[id: uint32, offset, length: int]]): seq[uint8
     p.putU32BE(uint32(e.length))
   makeBox("iloc", p)
 
+type
+  IlocEntry* = object
+    id*: uint32
+    construction*: int ## 0=file, 1=idat, 2=item
+    extents*: seq[tuple[srcIndex: int, offset, length: int]]
+
+proc buildIlocEx*(entries: seq[IlocEntry]): seq[uint8] =
+  ## v1 with 4-byte ids, off/len/base = 4, index = 2. Same size for
+  ## dummy/final when constructions and extent counts match.
+  var p: seq[uint8] = @[]
+  p.putFullHeader(1, 0)
+  p.add(0x44); p.add(0x42) # off=4 len=4 base=4 idx=2
+  p.putU16BE(uint16(entries.len))
+  for e in entries:
+    p.putU32BE(e.id)
+    p.add(uint8(e.construction))
+    p.putU16BE(0) # data_reference_index
+    p.putU32BE(0) # base_offset
+    p.putU16BE(uint16(e.extents.len))
+    for ex in e.extents:
+      p.putU16BE(uint16(ex.srcIndex))
+      p.putU32BE(uint32(ex.offset))
+      p.putU32BE(uint32(ex.length))
+  makeBox("iloc", p)
+
+proc buildIdat*(payload: seq[uint8]): seq[uint8] =
+  makeBox("idat", payload)
+
 proc buildIref*(refs: seq[tuple[fromId: uint32, typ: string,
     toIds: seq[uint32]]]): seq[uint8] =
   if refs.len == 0: return @[]
@@ -242,7 +277,8 @@ proc buildIprp*(propPayloads: seq[tuple[kind: string,
 # --- Collection writer ---
 
 proc sKindIsEmpty*(s: HeifItemSpec): bool =
-  s.kind == hikIden
+  s.kind == hikIden or
+    (s.ilocTo.len > 0) # virtual: no direct mdat bytes
 
 proc itemTypeOf*(s: HeifItemSpec): string =
   case s.kind
@@ -254,6 +290,9 @@ proc itemTypeOf*(s: HeifItemSpec): string =
   of hikExif: result = "Exif"
   of hikMime: result = "mime"
   of hikUri: result = "uri "
+  of hikPass:
+    if s.passType.len == 4: result = s.passType
+    else: result = "evc1"
 
 proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
   if coll.items.len == 0 or coll.items.len > 100:
@@ -263,6 +302,20 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
   let pk = coll.items[coll.primary].kind
   if pk == hikExif or pk == hikMime or pk == hikUri:
     return err[seq[uint8]](encodingError("heif: primary must be an image"))
+  # Validate tiling / idat / passthrough refs up front.
+  for i, s in coll.items:
+    for t in s.ilocTo:
+      if t < 0 or t >= coll.items.len or t == i:
+        return err[seq[uint8]](encodingError("heif: bad ilocTo index"))
+      if coll.items[t].ilocTo.len > 0:
+        return err[seq[uint8]](encodingError("heif: nested virtual tiling"))
+    if s.kind == hikPass:
+      if s.passType.len != 4:
+        return err[seq[uint8]](encodingError("heif: bad passthrough type"))
+      if s.ispeW == 0 or s.ispeH == 0 or s.ispeW > 16384 or s.ispeH > 16384:
+        return err[seq[uint8]](encodingError("heif: bad passthrough extents"))
+    if s.ilocTo.len > 0 and s.useIdat:
+      return err[seq[uint8]](encodingError("heif: virtual item cannot use idat"))
   # 1. Item data blobs
   var blobs = newSeq[seq[uint8]](coll.items.len)
   var ispeWH = newSeq[tuple[w, h: uint32]](coll.items.len)
@@ -270,26 +323,47 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
     for i, s in coll.items:
       case s.kind
       of hikUnc:
-        let (bytes, u, c, pixi, w, h) = encodeUncFrame(s.image)
-        blobs[i] = bytes
-        ispeWH[i] = (w, h)
+        if s.ilocTo.len > 0:
+          let (w, h) = s.image.dimensions()
+          if w == 0 or h == 0 or w > 16384 or h > 16384:
+            return err[seq[uint8]](encodingError("heif: bad virtual extents"))
+          blobs[i] = @[] # virtual: assembled from sources
+          ispeWH[i] = (w, h)
+        else:
+          let (bytes, u, c, pixi, w, h) = encodeUncFrame(s.image)
+          discard u; discard c; discard pixi
+          blobs[i] = bytes
+          ispeWH[i] = (w, h)
       of hikJpeg:
         let enc = encodeJpeg(s.image, s.jpegQuality)
         if not enc.ok: return err[seq[uint8]](enc.err)
+        if s.ilocTo.len > 0:
+          return err[seq[uint8]](encodingError("heif: jpeg virtual unsupported"))
         blobs[i] = enc.value
         let (w, h) = s.image.dimensions()
         ispeWH[i] = (w, h)
       of hikGrid:
+        if s.ilocTo.len > 0:
+          return err[seq[uint8]](encodingError("heif: grid virtual unsupported"))
         blobs[i] = buildGrid(s.gridRows, s.gridCols, s.gridOutW, s.gridOutH)
         ispeWH[i] = (uint32(s.gridOutW), uint32(s.gridOutH))
       of hikOverlay:
+        if s.ilocTo.len > 0:
+          return err[seq[uint8]](encodingError("heif: overlay virtual unsupported"))
         blobs[i] = buildOverlay(s.overlayOutW, s.overlayOutH, s.overlayOffs)
         ispeWH[i] = (uint32(s.overlayOutW), uint32(s.overlayOutH))
       of hikIden:
         blobs[i] = @[]
         ispeWH[i] = (s.ispeW, s.ispeH)
       of hikExif, hikMime, hikUri:
+        if s.ilocTo.len > 0:
+          return err[seq[uint8]](encodingError("heif: metadata virtual unsupported"))
         blobs[i] = s.metaBytes
+      of hikPass:
+        if s.ilocTo.len > 0:
+          return err[seq[uint8]](encodingError("heif: pass virtual unsupported"))
+        blobs[i] = s.passBytes
+        ispeWH[i] = (s.ispeW, s.ispeH)
   except CatchableError as e:
     return err[seq[uint8]](encodingError("heif: " & e.msg))
   # 2. Properties per item (dedup later)
@@ -318,6 +392,11 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
         addProp(i, "colr", buildNclx(1, 13, 1, true))
       of hikGrid, hikOverlay, hikIden:
         addProp(i, "ispe", buildIspe(ispeWH[i][0], ispeWH[i][1]))
+      of hikPass:
+        addProp(i, "ispe", buildIspe(ispeWH[i][0], ispeWH[i][1]))
+        if s.passConfigKind.len == 4 and s.passConfig.len > 0:
+          addProp(i, s.passConfigKind, s.passConfig, true)
+        addProp(i, "colr", buildNclx(1, 13, 1, true))
       of hikExif, hikMime, hikUri:
         discard
       if s.auxType.len > 0:
@@ -368,16 +447,25 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
       var tids: seq[uint32] = @[]
       for t in s.cdscTo: tids.add(uint32(t + 1))
       refs.add((fid, "cdsc", tids))
-  # 5. Layout: compute sizes with placeholder iloc, then final offsets
+    if s.ilocTo.len > 0:
+      var tids: seq[uint32] = @[]
+      for t in s.ilocTo: tids.add(uint32(t + 1))
+      refs.add((fid, "iloc", tids))
+  # 5. Layout: idat + iloc v1 (constructions 0/1/2), then final offsets
   let brandMajor = if coll.brand.len == 4: coll.brand else: "mif1"
   var compat = @["mif1", "miaf", "1pic"]
   var hasJpeg = false
   var hasUnc = false
+  var hasEvc = false
   for s in coll.items:
     if s.kind == hikJpeg: hasJpeg = true
     if s.kind == hikUnc: hasUnc = true
+    if s.kind == hikPass and
+        (s.passType == "evc1" or s.passType == "evci"):
+      hasEvc = true
   if hasJpeg: compat.add("jpeg")
   if hasUnc: compat.add("unci")
+  if hasEvc and ("evc1" notin compat): compat.add("evc1")
   let ftyp = buildFtyp(brandMajor, compat)
   # iprp needs item ids remapped (assocIdx is 0-based order; buildIprp
   # expects 1-based sequential which matches our ids)
@@ -399,25 +487,68 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
   let iinf = buildIinf(iinfItems)
   let iref = buildIref(refs)
   let grpl = buildGroupsBox(coll.groups)
-  # iloc placeholder to measure meta size
-  var dummyEntries: seq[tuple[id: uint32, offset, length: int]] = @[]
+  # idat payload: concat of useIdat blobs in item order.
+  var idatPayload: seq[uint8] = @[]
+  var idatRel = newSeq[int](coll.items.len) # relative offset inside idat
   for i, b in blobs:
-    dummyEntries.add((uint32(i + 1), 0, b.len))
-  let ilocDummy = buildIloc(dummyEntries)
+    if coll.items[i].useIdat and not sKindIsEmpty(coll.items[i]):
+      idatRel[i] = idatPayload.len
+      idatPayload.putBytes(b)
+  let idatBox = if idatPayload.len > 0: buildIdat(idatPayload) else: @[]
+  # iloc entries with constructions.
+  proc makeEntries(mdatStart: int): seq[IlocEntry] =
+    result = @[]
+    var cur = mdatStart
+    # idat relative offsets already in idatRel; mdat offsets assigned here
+    var mdatCur = cur
+    for i in 0 ..< coll.items.len:
+      let s = coll.items[i]
+      if s.ilocTo.len > 0:
+        var ex: seq[tuple[srcIndex: int, offset, length: int]] = @[]
+        var pos = 1
+        for t in s.ilocTo:
+          ex.add((pos, 0, blobs[t].len))
+          inc(pos)
+        result.add(IlocEntry(id: uint32(i + 1), construction: 2,
+          extents: ex))
+      elif sKindIsEmpty(s) and s.ilocTo.len == 0:
+        # iden with no data: single empty extent construction 0
+        result.add(IlocEntry(id: uint32(i + 1), construction: 0,
+          extents: @[(0, 0, 0)]))
+      elif s.useIdat:
+        result.add(IlocEntry(id: uint32(i + 1), construction: 1,
+          extents: @[(0, idatRel[i], blobs[i].len)]))
+      else:
+        result.add(IlocEntry(id: uint32(i + 1), construction: 0,
+          extents: @[(0, mdatCur, blobs[i].len)]))
+        mdatCur += blobs[i].len
+  # Dummy to measure meta size (same shape, zero offsets).
+  var dummyEx: seq[IlocEntry] = @[]
+  for i in 0 ..< coll.items.len:
+    let s = coll.items[i]
+    if s.ilocTo.len > 0:
+      var ex: seq[tuple[srcIndex: int, offset, length: int]] = @[]
+      var pos = 1
+      for t in s.ilocTo:
+        ex.add((pos, 0, blobs[t].len))
+        inc(pos)
+      dummyEx.add(IlocEntry(id: uint32(i + 1), construction: 2, extents: ex))
+    elif sKindIsEmpty(s):
+      dummyEx.add(IlocEntry(id: uint32(i + 1), construction: 0,
+        extents: @[(0, 0, 0)]))
+    elif s.useIdat:
+      dummyEx.add(IlocEntry(id: uint32(i + 1), construction: 1,
+        extents: @[(0, 0, blobs[i].len)]))
+    else:
+      dummyEx.add(IlocEntry(id: uint32(i + 1), construction: 0,
+        extents: @[(0, 0, blobs[i].len)]))
+  let ilocDummy = buildIlocEx(dummyEx)
   var metaInnerLen = 4 + hdlr.len + pitm.len + ilocDummy.len + iinf.len +
-    iprp.len + iref.len + grpl.len
+    iprp.len + iref.len + grpl.len + idatBox.len
   let metaLen = 8 + metaInnerLen
   let mdatStart = ftyp.len + metaLen + 8
-  var entries: seq[tuple[id: uint32, offset, length: int]] = @[]
-  var cur = mdatStart
-  for i, b in blobs:
-    if sKindIsEmpty(coll.items[i]):
-      entries.add((uint32(i + 1), 0, 0))
-    else:
-      entries.add((uint32(i + 1), cur, b.len))
-      cur += b.len
-  let iloc = buildIloc(entries)
-  # rebuild meta with final iloc (same size as dummy)
+  let entries = makeEntries(mdatStart)
+  let iloc = buildIlocEx(entries)
   doAssert iloc.len == ilocDummy.len
   var metaPayload: seq[uint8] = @[]
   metaPayload.putFullHeader(0, 0)
@@ -428,12 +559,18 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
   metaPayload.putBytes(iprp)
   if iref.len > 0: metaPayload.putBytes(iref)
   if grpl.len > 0: metaPayload.putBytes(grpl)
+  if idatBox.len > 0: metaPayload.putBytes(idatBox)
   let meta = makeBox("meta", metaPayload)
   doAssert meta.len == metaLen
   var mdatPayload: seq[uint8] = @[]
   for i, b in blobs:
-    if not sKindIsEmpty(coll.items[i]):
-      mdatPayload.putBytes(b)
+    let s = coll.items[i]
+    if s.ilocTo.len > 0: continue
+    if sKindIsEmpty(s) and s.ilocTo.len == 0:
+      # iden empty: skip unless it somehow has bytes (no)
+      continue
+    if s.useIdat: continue # in idat
+    if b.len > 0: mdatPayload.putBytes(b)
   let mdat = makeBox("mdat", mdatPayload)
   ok(ftyp & meta & mdat)
 
@@ -449,3 +586,93 @@ proc encodeHeifJpeg*(img: DynamicImage, quality = 90): ImageResult[seq[uint8]] =
   var coll = HeifCollection(primary: 0, brand: "mif1")
   coll.items.add(s)
   writeCollection(coll)
+
+# --- Timed sequence writer (moov/pict, 1 sample per chunk) ---
+
+proc writeHeifSequence*(frames: seq[DynamicImage],
+    kind: HeifItemKind = hikUnc, jpegQuality = 90,
+    timescale: uint32 = 1, frameDuration: uint32 = 1): ImageResult[seq[uint8]] =
+  if frames.len == 0 or frames.len > 100000:
+    return err[seq[uint8]](encodingError("heif: bad sequence length"))
+  if kind != hikUnc and kind != hikJpeg:
+    return err[seq[uint8]](encodingError("heif: sequence kind must be unci/jpeg"))
+  if timescale == 0 or frameDuration == 0:
+    return err[seq[uint8]](encodingError("heif: bad sequence timing"))
+  var sampleBytes = newSeq[seq[uint8]](frames.len)
+  var w0: uint32 = 0
+  var h0: uint32 = 0
+  var uncCBox: seq[uint8] = @[]
+  var coding = ""
+  try:
+    for i, f in frames:
+      let (w, h) = f.dimensions()
+      if i == 0:
+        w0 = w; h0 = h
+        if w == 0 or h == 0 or w > 16384 or h > 16384:
+          return err[seq[uint8]](encodingError("heif: bad sequence size"))
+      elif w != w0 or h != h0:
+        return err[seq[uint8]](encodingError("heif: sequence size mismatch"))
+      if kind == hikUnc:
+        let (bytes, u, c, pixi, _, _) = encodeUncFrame(f)
+        if c.len > 0 or pixi.len > 4:
+          # v0 uncompressed sequences need cmpd in the sample entry;
+          # v1 profile path below is the supported writer profile.
+          return err[seq[uint8]](encodingError(
+            "heif: sequence unci v0 unsupported"))
+        if i == 0:
+          uncCBox = makeBox("uncC", u)
+          coding = "unci"
+        elif makeBox("uncC", u) != uncCBox:
+          return err[seq[uint8]](encodingError("heif: sequence profile mismatch"))
+        sampleBytes[i] = bytes
+      else:
+        let enc = encodeJpeg(f, jpegQuality)
+        if not enc.ok: return err[seq[uint8]](enc.err)
+        coding = "jpeg"
+        sampleBytes[i] = enc.value
+  except CatchableError as e:
+    return err[seq[uint8]](encodingError("heif: " & e.msg))
+  var sizes: seq[int] = @[]
+  for b in sampleBytes: sizes.add(b.len)
+  let codecBoxes = if coding == "unci": @[uncCBox] else: @[]
+  let entry = buildVisualEntry(coding, int(w0), int(h0), codecBoxes)
+  let stsd = buildStsd(@[entry])
+  let stts = buildStts(frames.len, frameDuration)
+  let stsc = buildStsc(sampleBytes.len)
+  let stsz = buildStsz(sizes)
+  # Dummy stco to measure moov, then final offsets (same box size).
+  let dummyOffsets = newSeq[int](sampleBytes.len)
+  let stcoDummy = buildStco(dummyOffsets)
+  proc buildMoov(stco: seq[uint8]): seq[uint8] =
+    let stbl = makeBox("stbl", stsd & stts & stsc & stsz & stco)
+    let minf = makeBox("minf", buildVmhd() & buildDinf() & stbl)
+    let mdiaInner = buildMdhd(timescale,
+        uint32(frames.len) * frameDuration) &
+      buildHdlr() & minf
+    let mdia = makeBox("mdia", mdiaInner)
+    let trakInner = buildTkhd(1, uint32(frames.len) * frameDuration,
+        int(w0), int(h0)) & mdia
+    let trak = makeBox("trak", trakInner)
+    let moovInner = buildMvhd(timescale,
+        uint32(frames.len) * frameDuration) & trak
+    makeBox("moov", moovInner)
+  let moovDummy = buildMoov(stcoDummy)
+  let brandMajor = "msf1"
+  var compat = @["msf1", "mif1", "miaf", "1pic"]
+  if coding == "unci": compat.add("unci")
+  else: compat.add("jpeg")
+  let ftyp = buildFtyp(brandMajor, compat)
+  let mdatStart = ftyp.len + moovDummy.len + 8
+  var offs: seq[int] = @[]
+  var cur = mdatStart
+  for b in sampleBytes:
+    offs.add(cur)
+    cur += b.len
+  let stco = buildStco(offs)
+  doAssert stco.len == stcoDummy.len
+  let moov = buildMoov(stco)
+  doAssert moov.len == moovDummy.len
+  var mdatPayload: seq[uint8] = @[]
+  for b in sampleBytes: mdatPayload.putBytes(b)
+  let mdat = makeBox("mdat", mdatPayload)
+  ok(ftyp & moov & mdat)

@@ -38,7 +38,7 @@ func fromExtension*(ext: string): tuple[found: bool, f: ImageFormat] =
   of "pbm", "pam", "ppm", "pgm", "pnm": (true, fmtPnm)
   of "ff": (true, fmtFarbfeld)
   of "qoi": (true, fmtQoi)
-  of "heif", "heic", "hif": (true, fmtHeif)
+  of "heif", "heic", "hif", "heifs", "heics": (true, fmtHeif)
   else: (false, fmtPng)
 
 func fromPath*(path: string): ImageResult[ImageFormat] =
@@ -69,6 +69,7 @@ func fromMimeType*(mime: string): tuple[found: bool, f: ImageFormat] =
   of "image/heif": (true, fmtHeif)
   of "image/heic": (true, fmtHeif)
   of "image/heif-sequence": (true, fmtHeif)
+  of "image/heic-sequence": (true, fmtHeif)
   else: (false, fmtPng)
 
 func toMimeType*(f: ImageFormat): string =
@@ -105,7 +106,7 @@ func extensionsStr*(f: ImageFormat): seq[string] =
   of fmtFarbfeld: @["ff"]
   of fmtAvif: @["avif"]
   of fmtQoi: @["qoi"]
-  of fmtHeif: @["heif", "heic", "hif"]
+  of fmtHeif: @["heif", "heic", "hif", "heifs", "heics"]
 
 func allFormats*(): seq[ImageFormat] =
   @[fmtGif, fmtIco, fmtJpeg, fmtPng, fmtBmp, fmtTiff, fmtTga, fmtPnm,

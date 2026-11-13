@@ -143,3 +143,88 @@ test "heif exif and xmp roundtrip":
   let md = heifMetadata(enc.value)
   check md.ok
   check md.value.len == 2
+
+test "heif idat construction-1 roundtrip":
+  var coll = HeifCollection(primary: 0, brand: "mif1")
+  var s = defaultItemSpec(mkSolid(8, 8, 9, 9, 9))
+  s.useIdat = true
+  coll.items.add(s)
+  let enc = writeCollection(coll)
+  check enc.ok
+  let dec = decodeHeif(enc.value)
+  check dec.ok
+  check dec.value.dimensions() == (8'u32, 8'u32)
+  check pixelSum(dec.value) == 8*8*(9+9+9).uint64
+
+test "heif iloc construction-2 tiling roundtrip":
+  let full = mkSolid(8, 4, 10, 20, 30)
+  let (fbytes, u, c, pixi, w, h) = encodeUncFrame(full)
+  check fbytes.len == 8*4*3
+  let half = fbytes.len div 2
+  var coll = HeifCollection(primary: 2, brand: "mif1")
+  var m0 = HeifItemSpec(kind: hikMime, hidden: true, thmbTo: -1,
+    irotTurns: -1, imirTopBottom: -1)
+  m0.mimeType = "application/octet-stream"
+  m0.metaBytes = fbytes[0 ..< half]
+  var m1 = HeifItemSpec(kind: hikMime, hidden: true, thmbTo: -1,
+    irotTurns: -1, imirTopBottom: -1)
+  m1.mimeType = "application/octet-stream"
+  m1.metaBytes = fbytes[half .. ^1]
+  var virt = defaultItemSpec(full)
+  virt.ilocTo = @[0, 1]
+  coll.items.add(m0); coll.items.add(m1); coll.items.add(virt)
+  let enc = writeCollection(coll)
+  check enc.ok
+  let dec = decodeHeif(enc.value)
+  check dec.ok
+  check pixelSum(dec.value) == pixelSum(full)
+
+test "heif evc passthrough brand":
+  var coll = HeifCollection(primary: 0, brand: "evc1")
+  var p = HeifItemSpec(kind: hikPass, hidden: false, thmbTo: -1,
+    irotTurns: -1, imirTopBottom: -1)
+  p.passType = "evc1"
+  p.ispeW = 64; p.ispeH = 48
+  p.passBytes = @[0'u8, 1, 2, 3, 4, 5]
+  p.passConfigKind = "evcC"
+  p.passConfig = @[1'u8, 0, 0, 0]
+  coll.items.add(p)
+  let enc = writeCollection(coll)
+  check enc.ok
+  check (not decodeHeif(enc.value).ok)
+  let items = listHeifItems(enc.value)
+  check items.ok
+  check items.value.len == 1
+  check items.value[0].typ == "evc1"
+  let ext = extractItemBytes(enc.value)
+  check ext.ok
+  check ext.value.len == 6
+
+test "heif timed pict sequence unci":
+  let frames = @[mkSolid(8, 8, 10, 0, 0), mkSolid(8, 8, 0, 20, 0),
+    mkSolid(8, 8, 0, 0, 30)]
+  let enc = writeHeifSequence(frames, hikUnc)
+  check enc.ok
+  let mv = heifMovieInfo(enc.value)
+  check mv.ok
+  check mv.value.tracks.len == 1
+  check mv.value.tracks[0].coding == "unci"
+  check mv.value.tracks[0].samples.len == 3
+  let all = decodeHeifSequenceAll(enc.value, 0)
+  check all.ok
+  check all.value.len == 3
+  check pixelSum(all.value[0]) == 8*8*10'u64
+  check pixelSum(all.value[1]) == 8*8*20'u64
+  check pixelSum(all.value[2]) == 8*8*30'u64
+  let one = decodeHeifSequenceSample(enc.value, 0, 1)
+  check one.ok
+  check pixelSum(one.value) == 8*8*20'u64
+
+test "heif timed pict sequence jpeg":
+  let frames = @[mkSolid(8, 8, 10, 0, 0), mkSolid(8, 8, 0, 20, 0)]
+  let enc = writeHeifSequence(frames, hikJpeg, 90)
+  check enc.ok
+  let all = decodeHeifSequenceAll(enc.value, 0)
+  check all.ok
+  check all.value.len == 2
+  check all.value[0].dimensions() == (8'u32, 8'u32)

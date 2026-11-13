@@ -49,7 +49,7 @@ Codec support (`o` = decode, `w` = encode):
 - TIFF: o+w — strips/tiles, chunky/planar, None/LZW/Deflate/PackBits, YCbCr/CMYK/palette
 - WebP: o+w — lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green, per-block color and meta-Huffman transforms) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100); animation / VP8X alpha unsupported
 - AVIF: color math only (BT.601/709/2020 YCbCr, YCgCo-Re); AV1 bitstream unsupported
-- HEIF/HEIC: o+w — ISOBMFF container + uncompressed (`unci` v0/v1, 8/16-bit) + JPEG-in-HEIF + `iden`/`grid`/`iovl` + `irot`/`imir`/`clap`/`iscl` + thumbnails/aux/groups/Exif/mime; HEVC/VVC/AVC/JPEG2000 passthrough only, sequences unsupported
+- HEIF/HEIC: o+w — ISOBMFF container + uncompressed (`unci` v0/v1, 8/16-bit) + JPEG-in-HEIF + `iden`/`grid`/`iovl` + `irot`/`imir`/`clap`/`iscl` + thumbnails/aux/groups/Exif/mime + tiled `iloc` construction-1/2 + timed `pict` sequences (`unci` v1 / `jpeg`) + EVC brand passthrough; HEVC/VVC/AVC/EVC/JPEG2000 pixels unsupported (extractors only)
 
 Not ported (out of scope): `imageops` processing functions, rayon parallelism.
 
@@ -201,7 +201,10 @@ let dec2 = decodeHeic(bytes)  # alias (HEIC = HEVC-branded HEIF)
 let raw = extractJ2kCodestream(bytes)  # raw codestream for external decoders
 let enc = encodeHeif(img).value          # uncompressed still
 let encJ = encodeHeifJpeg(img, 90).value # JPEG-in-HEIF
-let coll = writeCollection(myCollection).value # thumbs/aux/grid/iovl/groups
+let coll = writeCollection(myCollection).value # thumbs/aux/grid/iovl/groups/tiling/idat/EVC
+let seq = writeHeifSequence(frames, hikUnc).value # timed pict sequence
+let mv = heifMovieInfo(seq).value        # tracks/samples
+let fr0 = decodeHeifSequenceSample(seq, 0, 0).value
 ```
 
 ### Format detection
@@ -235,10 +238,11 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] EXR PIZ/PXR24/B44/DWAA/DWAB scanline (decode bit-exact vs reference; PIZ/PXR24/B44 encode byte-identical; DWA AC/DC values byte-identical, decoded pixels bit-exact — only deflate bytes differ by impl)
 - [ ] EXR tiled/multipart
 - [ ] AVIF bitstream (requires an AV1 decoder)
-- [x] HEIF/HEIC stills: container + uncompressed + JPEG-in-HEIF + grids/overlays/iden + thumbnails/aux/groups/Exif/mime + writer (HEVC/VVC/AVC/JPEG2000 passthrough only — no pure-Nim video/wavelet decoders)
+- [x] HEIF/HEIC stills: container + uncompressed + JPEG-in-HEIF + grids/overlays/iden + thumbnails/aux/groups/Exif/mime + writer (HEVC/VVC/AVC/EVC/JPEG2000 passthrough only — no pure-Nim video/wavelet decoders)
 - [ ] JPEG XL (jxl)
 - [ ] JPEG 2000 (jp2)
-- [ ] HEIF sequences/timed tracks, tiled `iloc` construction-2, EVC brand
+- [x] HEIF sequences/timed pict tracks (`unci` v1 / `jpeg`), tiled `iloc` construction-1 (`idat`) / construction-2 (item offsets), EVC brand
+- [ ] HEIF fragmented (`moof`) sequences, `unci` v0 sequences, internal `uncC` tile geometry
 - [ ] RAW (a family of formats, not one codec; often requires camera-specific metadata and processing)
 - [x] SIMD: PNG Up filter, JPEG IDCT/FDCT, YCbCr row batch via nimsimd (runtime auto-dispatch SSE2/AVX2/NEON, bit-identical scalar fallback; `-ffp-contract=off`)
 - [ ] SIMD: PNG Average/Paeth/Sub (scalar by design — small rows stay scalar)
