@@ -31,6 +31,8 @@ type
     kind*: HeifItemKind
     image*: DynamicImage ## for hikUnc / hikJpeg
     jpegQuality*: int ## for hikJpeg
+    tileCols*: int ## tiled uncompressed grid columns (0 = flat)
+    tileRows*: int ## tiled uncompressed grid rows (0 = flat)
     gridTiles*: seq[int] ## item indexes (0-based into collection) for grid
     gridRows*, gridCols*: int
     gridOutW*, gridOutH*: int
@@ -120,6 +122,63 @@ proc encodeUncFrame*(img: DynamicImage): tuple[bytes: seq[uint8],
     if img.kind == dkLumaA8 or img.kind == dkLumaA16:
       raise newException(CatchableError, "heif writer: alpha-gray unsupported")
     raise newException(CatchableError, "heif writer: color kind unsupported")
+
+proc encodeUncTiled*(img: DynamicImage, cols, rows: int): tuple[
+    bytes: seq[uint8], uncC: seq[uint8], cmpd: seq[uint8], pixi: seq[int],
+    w, h: uint32] =
+  ## Tile-component ("TL" profile) encoding: v0, sampling 0, interleave 4,
+  ## outer components in cmpd order, inner tiles row-major. Only flat
+  ## full-resolution kinds are accepted (no subsampled YUV input exists).
+  let (w, h) = img.dimensions()
+  if cols < 1 or rows < 1 or cols > int(w) or rows > int(h):
+    raise newException(CatchableError, "heif writer: bad tile grid")
+  if w == 0 or h == 0 or w > 16384 or h > 16384:
+    raise newException(CatchableError, "heif writer: bad tiled extents")
+  let (flat, _, _, _, _, _) = encodeUncFrame(img)
+  var ncomp, bpc, depth: int
+  var ctypes: seq[int] = @[]
+  case img.kind
+  of dkRgb8: ncomp = 3; bpc = 1; depth = 8; ctypes = @[4, 5, 6]
+  of dkRgba8: ncomp = 4; bpc = 1; depth = 8; ctypes = @[4, 5, 6, 7]
+  of dkLuma8: ncomp = 1; bpc = 1; depth = 8; ctypes = @[1]
+  of dkRgb16: ncomp = 3; bpc = 2; depth = 16; ctypes = @[4, 5, 6]
+  of dkRgba16: ncomp = 4; bpc = 2; depth = 16; ctypes = @[4, 5, 6, 7]
+  of dkLuma16: ncomp = 1; bpc = 2; depth = 16; ctypes = @[1]
+  else:
+    raise newException(CatchableError, "heif writer: tiled kind unsupported")
+  let W = int(w); let H = int(h)
+  if flat.len != W * H * ncomp * bpc:
+    raise newException(CatchableError, "heif writer: flat size mismatch")
+  # Deinterleave the pixel-interleaved flat bytes into full-res planes.
+  var planes = newSeq[seq[uint16]](ncomp)
+  for k in 0 ..< ncomp: planes[k] = newSeq[uint16](W * H)
+  for y in 0 ..< H:
+    for x in 0 ..< W:
+      let base = (y * W + x) * ncomp * bpc
+      for k in 0 ..< ncomp:
+        let o = base + k * bpc
+        planes[k][y * W + x] =
+          if bpc == 1: uint16(flat[o])
+          else: (uint16(flat[o]) shl 8) or uint16(flat[o + 1])
+  # Retile: components outer, tiles row-major, samples contiguous.
+  var outb: seq[uint8] = @[]
+  let tw0 = (W + cols - 1) div cols
+  let th0 = (H + rows - 1) div rows
+  for k in 0 ..< ncomp:
+    for tr in 0 ..< rows:
+      for tc in 0 ..< cols:
+        let tw = min(tw0, W - tc * tw0)
+        let th = min(th0, H - tr * th0)
+        for yy in 0 ..< th:
+          for xx in 0 ..< tw:
+            let v = planes[k][(tr * th0 + yy) * W + (tc * tw0 + xx)]
+            if bpc == 1: outb.add(uint8(v))
+            else:
+              outb.add(uint8(v shr 8)); outb.add(uint8(v and 0xFF))
+  var pixi: seq[int] = @[]
+  for _ in 0 ..< ncomp: pixi.add(depth)
+  (outb, buildUncCTiled(depth, ctypes, cols, rows), buildCmpd(ctypes),
+    pixi, w, h)
 
 # --- Box builders ---
 
@@ -316,6 +375,10 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
         return err[seq[uint8]](encodingError("heif: bad passthrough extents"))
     if s.ilocTo.len > 0 and s.useIdat:
       return err[seq[uint8]](encodingError("heif: virtual item cannot use idat"))
+    if (s.tileCols != 0 or s.tileRows != 0) and s.kind != hikUnc:
+      return err[seq[uint8]](encodingError("heif: tiling needs uncompressed"))
+    if (s.tileCols != 0 or s.tileRows != 0) and s.ilocTo.len > 0:
+      return err[seq[uint8]](encodingError("heif: tiled virtual unsupported"))
     # Derivation reference validation (spec §6.6.2: iden exactly 1 dimg,
     # grid count must equal rows*cols, overlay needs >= 1 input).
     if s.kind == hikIden and s.dimgTo.len != 1:
@@ -345,6 +408,12 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
           if w == 0 or h == 0 or w > 16384 or h > 16384:
             return err[seq[uint8]](encodingError("heif: bad virtual extents"))
           blobs[i] = @[] # virtual: assembled from sources
+          ispeWH[i] = (w, h)
+        elif s.tileCols > 0 or s.tileRows > 0:
+          let (bytes, u, c, pixi, w, h) =
+            encodeUncTiled(s.image, s.tileCols, s.tileRows)
+          discard u; discard c; discard pixi
+          blobs[i] = bytes
           ispeWH[i] = (w, h)
         else:
           let (bytes, u, c, pixi, w, h) = encodeUncFrame(s.image)
@@ -397,11 +466,18 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
         let img = s.image
         let (w, h) = img.dimensions()
         addProp(i, "ispe", buildIspe(w, h))
-        # uncC / cmpd / pixi
-        let (_, u, c, pixi, _, _) = encodeUncFrame(img)
-        addProp(i, "uncC", u, true)
-        if c.len > 0: addProp(i, "cmpd", c)
-        addProp(i, "pixi", buildPixi(pixi))
+        # uncC / cmpd / pixi (tiled profile when a tile grid is set)
+        if s.tileCols > 0 or s.tileRows > 0:
+          let (_, u, c, pixi, _, _) = encodeUncTiled(img, s.tileCols,
+            s.tileRows)
+          addProp(i, "uncC", u, true)
+          addProp(i, "cmpd", c)
+          addProp(i, "pixi", buildPixi(pixi))
+        else:
+          let (_, u, c, pixi, _, _) = encodeUncFrame(img)
+          addProp(i, "uncC", u, true)
+          if c.len > 0: addProp(i, "cmpd", c)
+          addProp(i, "pixi", buildPixi(pixi))
         addProp(i, "colr", buildNclx(1, 13, 6, true))
       of hikJpeg:
         let (w, h) = s.image.dimensions()
@@ -615,13 +691,19 @@ proc encodeHeifJpeg*(img: DynamicImage, quality = 90): ImageResult[seq[uint8]] =
 
 proc writeHeifSequence*(frames: seq[DynamicImage],
     kind: HeifItemKind = hikUnc, jpegQuality = 90,
-    timescale: uint32 = 1, frameDuration: uint32 = 1): ImageResult[seq[uint8]] =
+    timescale: uint32 = 1, frameDuration: uint32 = 1,
+    tileCols = 0, tileRows = 0): ImageResult[seq[uint8]] =
   if frames.len == 0 or frames.len > 100000:
     return err[seq[uint8]](encodingError("heif: bad sequence length"))
   if kind != hikUnc and kind != hikJpeg:
     return err[seq[uint8]](encodingError("heif: sequence kind must be unci/jpeg"))
   if timescale == 0 or frameDuration == 0:
     return err[seq[uint8]](encodingError("heif: bad sequence timing"))
+  let tiled = tileCols > 0 or tileRows > 0
+  if tiled and kind != hikUnc:
+    return err[seq[uint8]](encodingError("heif: tiling needs uncompressed"))
+  if tiled and (tileCols < 1 or tileRows < 1):
+    return err[seq[uint8]](encodingError("heif: bad tile grid"))
   var sampleBytes = newSeq[seq[uint8]](frames.len)
   var w0: uint32 = 0
   var h0: uint32 = 0
@@ -637,7 +719,9 @@ proc writeHeifSequence*(frames: seq[DynamicImage],
       elif w != w0 or h != h0:
         return err[seq[uint8]](encodingError("heif: sequence size mismatch"))
       if kind == hikUnc:
-        let (bytes, u, c, pixi, _, _) = encodeUncFrame(f)
+        let (bytes, u, c, pixi, _, _) =
+          if tiled: encodeUncTiled(f, tileCols, tileRows)
+          else: encodeUncFrame(f)
         let boxes =
           if c.len > 0: @[makeBox("uncC", u), makeBox("cmpd", c),
             makeBox("pixi", buildPixi(pixi))]

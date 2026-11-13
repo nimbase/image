@@ -39,6 +39,8 @@ type
     sampling*: int # 0=444/none, 1=422, 2=420 (YUV orders only)
     interleave*: int # 0=component, 1=pixel, 2=mixed, 3=row, 4=tile
     tiled*: bool # nonzero tile-geometry tail bytes (see parseUncC)
+    tileCols*: int ## tile grid columns (clean-room "TL" profile only)
+    tileRows*: int ## tile grid rows (clean-room "TL" profile only)
 
   CmpEntry* = object
     compType*: int
@@ -181,8 +183,21 @@ proc parseUncC*(payload: seq[uint8]): UncProfile =
       if payload[i] != 0:
         tiled = true
         break
+    var tcols, trows = 0
+    if tiled:
+      # Clean-room "TL" tiled profile (MIT writer, see buildUncCTiled):
+      # tail is exactly ['T','L', cols u16 BE, rows u16 BE]. Any other
+      # nonzero tail keeps tiled=true with no geometry and decoders must
+      # report Unsupported rather than guess.
+      let t0 = 18 + 5 * int(n)
+      if payload.len == t0 + 6 and payload[t0] == uint8('T') and
+          payload[t0 + 1] == uint8('L'):
+        tcols = (int(payload[t0 + 2]) shl 8) or int(payload[t0 + 3])
+        trows = (int(payload[t0 + 4]) shl 8) or int(payload[t0 + 5])
+        if tcols <= 0 or trows <= 0 or tcols > 16384 or trows > 16384:
+          tcols = 0; trows = 0
     return UncProfile(isV1: false, bitDepth: depth, sampling: sampling,
-      interleave: interleave, tiled: tiled)
+      interleave: interleave, tiled: tiled, tileCols: tcols, tileRows: trows)
   else:
     raise heifErr("heif: unsupported uncC version")
 
@@ -364,6 +379,17 @@ proc buildUncCV0*(depth: int, sampling, interleave: int,
   result.add(uint8(sampling))
   result.add(uint8(interleave))
   result.putU32BE(0) # zero word after interleave (always 0 observed)
+
+proc buildUncCTiled*(depth: int, compTypes: openArray[int],
+    cols, rows: int): seq[uint8] =
+  ## Clean-room "TL" tiled profile: v0 with tile-component interleave (4)
+  ## and a 6-byte tail ['T','L', cols u16 BE, rows u16 BE]. Sampling is 0
+  ## (tiling applies to full-resolution planes; subsampled YUV stays
+  ## Unsupported). Readers must validate the tail strictly.
+  result = buildUncCV0(depth, 0, 4, compTypes)
+  result.add(uint8('T')); result.add(uint8('L'))
+  result.putU16BE(uint16(cols))
+  result.putU16BE(uint16(rows))
 
 proc buildCmpd*(compTypes: openArray[int]): seq[uint8] =
   result = @[]

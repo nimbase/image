@@ -86,9 +86,6 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
     if depth != 8 and depth != 16:
       return err[DynamicImage](unsupportedError(ukGenericFeature,
         "heif: uncompressed bit depth unsupported"))
-    if prof.tiled:
-      return err[DynamicImage](unsupportedError(ukGenericFeature,
-        "heif: tiled uncompressed layout unsupported"))
     for c in comps: order.add(c.compType)
     interleave = prof.interleave
     sampling = prof.sampling
@@ -120,8 +117,20 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
       ch = (height + 1) div 2
   let monoOk = (n == 1 and (order[0] == 1 or order[0] == 0))
   if interleave == 4:
+    # Tile-component interleave: only the clean-room "TL" profile is
+    # decoded (geometry in uncC tail). Any other tiled layout, including
+    # a missing geometry, reports Unsupported rather than guessing.
+    if not prof.tiled or prof.tileCols < 1 or prof.tileRows < 1:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "heif: tile-component interleave unsupported"))
+    if sampling != 0:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "heif: tiled subsampled uncompressed unsupported"))
+    if prof.tileCols > width or prof.tileRows > height:
+      return err[DynamicImage](decodingError("heif: bad tile grid"))
+  elif prof.tiled:
     return err[DynamicImage](unsupportedError(ukGenericFeature,
-      "heif: tile-component interleave unsupported"))
+      "heif: tiled uncompressed layout unsupported"))
   if interleave == 3 and isYuv and sampling != 0:
     return err[DynamicImage](unsupportedError(ukGenericFeature,
       "heif: row interleave with subsampling unsupported"))
@@ -132,7 +141,9 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
       expected = (width * height + 2 * cw * ch) * bpc
     else:
       expected = width * height * n * bpc
-  elif interleave == 1 or interleave == 3:
+  elif interleave == 1 or interleave == 3 or interleave == 4:
+    # Tiled frames partition the full-resolution planes exactly, so the
+    # total matches the flat component layout (subsampled+tiled rejected).
     expected = width * height * n * bpc
   else: # mixed: Y plane + interleaved CbCr
     if not isYuv or sampling == 0:
@@ -192,6 +203,27 @@ proc decodeUncompressed*(frame: seq[uint8], prof: UncProfile,
                 planes[k][oy * width + ox] = v
           else:
             planes[k][yy * width + xx] = v
+  elif interleave == 4:
+    # Tile-component ("TL" profile): outer components in cmpd order,
+    # inner tiles row-major, each tile's samples contiguous. Tiles cover
+    # the canvas exactly (right/bottom edges clip, as in grid derivation).
+    let cols = prof.tileCols
+    let rows = prof.tileRows
+    let tw0 = (width + cols - 1) div cols
+    let th0 = (height + rows - 1) div rows
+    var pos = 0
+    for k in 0 ..< n:
+      for tr in 0 ..< rows:
+        for tc in 0 ..< cols:
+          let tw = min(tw0, width - tc * tw0)
+          let th = min(th0, height - tr * th0)
+          for yy in 0 ..< th:
+            for xx in 0 ..< tw:
+              planes[k][(tr * th0 + yy) * width + (tc * tw0 + xx)] =
+                compBytesAt(frame, pos, bpc)
+              pos += bpc
+    if pos != frame.len:
+      return err[DynamicImage](decodingError("heif: tiled size mismatch"))
   else: # mixed
     # Y plane (full) at the Y component's position; the two chroma
     # components share one interleaved pair block at the first chroma

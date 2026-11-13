@@ -3,7 +3,8 @@
 ## per ISO/IEC 23001-17. HEVC/VVC/AVC/EVC/JPEG2000 bitstreams stay
 ## Unsupported for pixels (passthrough via extractors). Supports stills,
 ## collections, derived grid/overlay/iden, tiled iloc construction-1/2,
-## timed pict sequences (unci v1 / jpeg) and EVC brands.
+## tiled uncC (clean-room "TL" tile-component profile), timed pict
+## sequences incl. fragmented moov+moof (unci v0/v1 / jpeg) and EVC brands.
 import ../../error
 import ../../buffer
 import ../../dynamic
@@ -629,9 +630,8 @@ proc decodeSequenceSample(track: HeifTrack,
       for b in bits:
         if b != prof.bitDepth:
           return err[DynamicImage](decodingError("heif: sequence pixi/uncC mismatch"))
-      if prof.tiled:
-        return err[DynamicImage](unsupportedError(ukGenericFeature,
-          "heif: tiled uncompressed layout unsupported"))
+      # Tiled v0 samples decode through the shared tile-component path in
+      # decodeUncompressed (unknown geometry stays Unsupported there).
       let dec = decodeUncompressed(sample, prof, comps,
         PixInfo(bits: bits), track.width, track.height, 6, true)
       if not dec.ok: return dec
@@ -648,14 +648,12 @@ proc decodeSequenceSample(track: HeifTrack,
 
 proc decodeHeifSequenceSample*(data: seq[uint8], trackIdx = 0,
     sampleIdx = 0): ImageResult[DynamicImage] =
-  ## Decode one timed-sequence sample (unci v1 / jpeg only).
+  ## Decode one timed-sequence sample (unci v0/v1 / jpeg only). Fragmented
+  ## (moof) samples are merged into their tracks before decoding.
   if data.len < 12:
     return err[DynamicImage](decodingError("heif: too short"))
   try:
     let mv = parseMovie(data)
-    if mv.hasMoof:
-      return err[DynamicImage](unsupportedError(ukGenericFeature,
-        "heif: fragmented sequences unsupported"))
     if trackIdx < 0 or trackIdx >= mv.tracks.len:
       return err[DynamicImage](decodingError("heif: bad track index"))
     let tr = mv.tracks[trackIdx]
@@ -669,14 +667,11 @@ proc decodeHeifSequenceSample*(data: seq[uint8], trackIdx = 0,
 
 proc decodeHeifSequenceAll*(data: seq[uint8],
     trackIdx = 0): ImageResult[seq[DynamicImage]] =
-  ## Decode every sample in one `pict` track.
+  ## Decode every sample in one `pict` track (moof merged when present).
   if data.len < 12:
     return err[seq[DynamicImage]](decodingError("heif: too short"))
   try:
     let mv = parseMovie(data)
-    if mv.hasMoof:
-      return err[seq[DynamicImage]](unsupportedError(ukGenericFeature,
-        "heif: fragmented sequences unsupported"))
     if trackIdx < 0 or trackIdx >= mv.tracks.len:
       return err[seq[DynamicImage]](decodingError("heif: bad track index"))
     let tr = mv.tracks[trackIdx]

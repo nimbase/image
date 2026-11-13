@@ -1,7 +1,8 @@
 ## Timed image sequences (clean-room, MIT).
-## Parses ISOBMFF `moov` with `pict` tracks (sample tables) and builds
-## matching files. Only uncompressed v1 (`rgb3`/`rgba`) and JPEG samples
-## are decoded; video bitstreams stay Unsupported (passthrough).
+## Parses ISOBMFF `moov` with `pict` tracks (sample tables) plus fragmented
+## `moof`/`traf`/`trun` (merged into tracks by tfhd track_ID) and builds
+## matching non-fragmented files. Uncompressed v0/v1 and JPEG samples are
+## decoded; video bitstreams stay Unsupported (passthrough).
 ## Layout is our own minimal profile: visual sample entries with a 78-byte
 ## header (width/height at payload offsets 24/26) followed by codec boxes
 ## (`uncC` etc.). Real-world files with the same header shape decode;
@@ -250,11 +251,15 @@ proc parseTrak(data: seq[uint8], trak: Box): HeifTrack =
     # Uniform size: count must come from stts totals or chunks; use stts sum.
     var tot = 0
     for e in stts: tot += int(e.n)
-    if tot == 0 or tot > 100000: raise heifErr("heif: bad sequence length")
+    if tot > 100000: raise heifErr("heif: bad sequence length")
     count = tot
   else:
     count = stszSizes.len
-  if count == 0 or count > 100000: raise heifErr("heif: bad sequence length")
+  if count > 100000: raise heifErr("heif: bad sequence length")
+  if count == 0:
+    # No moov samples: valid for fragmented files (samples arrive via
+    # moof). Durations and chunk tables are irrelevant here.
+    return
   if chunks.len == 0 or stsc.len == 0:
     raise heifErr("heif: missing chunk table")
   # Expand sample-to-chunk: per-chunk sample counts.
@@ -311,26 +316,159 @@ proc parseTrak(data: seq[uint8], trak: Box): HeifTrack =
     result.samples.add(HeifSample(offset: offs[i], size: sizes[i],
       duration: durs[i], isSync: isSync[i]))
 
+proc parseTfhd(data: seq[uint8], b: Box): tuple[trackId: uint32,
+    baseOff: uint64, hasBase: bool, defDur, defSize: uint32,
+    hasDur, hasSize: bool, empty: bool] =
+  let p = boxPayload(data, b)
+  if p.len < 8: raise heifErr("heif: truncated tfhd")
+  let flags = (uint32(p[1]) shl 16) or (uint32(p[2]) shl 8) or uint32(p[3])
+  result.trackId = rdU32(p, 4)
+  var off = 8
+  result.hasBase = false
+  result.hasDur = false
+  result.hasSize = false
+  result.empty = (flags and 0x010000'u32) != 0
+  if (flags and 0x000001'u32) != 0:
+    if p.len < off + 8: raise heifErr("heif: truncated tfhd")
+    result.baseOff = rdU64(p, off)
+    result.hasBase = true
+    off += 8
+  if (flags and 0x000002'u32) != 0:
+    if p.len < off + 4: raise heifErr("heif: truncated tfhd")
+    off += 4 # sample-description-index (single entry assumed)
+  if (flags and 0x000008'u32) != 0:
+    if p.len < off + 4: raise heifErr("heif: truncated tfhd")
+    result.defDur = rdU32(p, off)
+    result.hasDur = true
+    off += 4
+  if (flags and 0x000010'u32) != 0:
+    if p.len < off + 4: raise heifErr("heif: truncated tfhd")
+    result.defSize = rdU32(p, off)
+    result.hasSize = true
+    off += 4
+  # default-sample-flags (0x000020) and unknown flags: not interpreted;
+  # trailing bytes are skipped so forward-compatible flags survive.
+  if (flags and 0x020000'u32) != 0 and not result.hasBase:
+    # default-base-is-moof: samples are addressed from this moof.
+    result.hasBase = false # resolved by the caller to the moof offset
+
+proc mergeTrun(data: seq[uint8], moofOff: int, t: Box, base: uint64,
+    defDur, defSize: uint32, hasDur, hasSize: bool,
+    track: var HeifTrack) =
+  let p = boxPayload(data, t)
+  if p.len < 8: raise heifErr("heif: truncated trun")
+  let v = p[0]
+  if v > 1: raise heifErr("heif: unsupported trun version")
+  let flags = (uint32(p[1]) shl 16) or (uint32(p[2]) shl 8) or uint32(p[3])
+  var off = 4
+  var dataOff: int64 = 0
+  if (flags and 0x000001'u32) != 0:
+    if p.len < off + 4: raise heifErr("heif: truncated trun")
+    let u = rdU32(p, off)
+    dataOff = if u >= 0x80000000'u32: int64(u) - 0x100000000'i64 else: int64(u)
+    off += 4
+  if (flags and 0x000004'u32) != 0:
+    if p.len < off + 4: raise heifErr("heif: truncated trun")
+    off += 4 # first-sample-flags (sync assumes decodable samples)
+  if p.len < off + 4: raise heifErr("heif: truncated trun")
+  let scount = rdU32(p, off)
+  off += 4
+  if scount > 100000: raise heifErr("heif: bad trun sample count")
+  let wantDur = (flags and 0x000100'u32) != 0
+  let wantSize = (flags and 0x000200'u32) != 0
+  let wantFlags = (flags and 0x000400'u32) != 0
+  let wantCts = (flags and 0x000800'u32) != 0
+  let per = (if wantDur: 4 else: 0) + (if wantSize: 4 else: 0) +
+    (if wantFlags: 4 else: 0) + (if wantCts: 4 else: 0)
+  if p.len < off + int(scount) * per: raise heifErr("heif: truncated trun")
+  if not wantSize and not hasSize:
+    raise heifErr("heif: moof sample size unknown")
+  discard moofOff
+  var cur = int64(base) + dataOff
+  for _ in 0 ..< int(scount):
+    var dur = defDur
+    if wantDur:
+      dur = rdU32(p, off); off += 4
+    elif not hasDur:
+      dur = 0 # timing unknown; samples still decode independently
+    var sz = defSize
+    if wantSize:
+      sz = rdU32(p, off); off += 4
+    if wantFlags: off += 4
+    if wantCts: off += 4
+    if sz == 0 or sz > 64*1024*1024:
+      raise heifErr("heif: bad moof sample size")
+    if cur < 0 or cur + int64(sz) > int64(data.len):
+      raise heifErr("heif: moof sample out of range")
+    checkRange(data, int(cur), int(sz), "sample data")
+    track.samples.add(HeifSample(offset: int(cur), size: int(sz),
+      duration: dur, isSync: true))
+    cur += int64(sz)
+
+proc mergeMoofSamples(data: seq[uint8], moof: Box, movie: var HeifMovie) =
+  ## Append one moof's traf/trun samples to their tracks (tfhd track_ID).
+  for traf in childBoxes(data, moof):
+    if not traf.isTypeStr("traf"): continue
+    var hasTfhd = false
+    var trackId: uint32 = 0
+    var base: uint64 = uint64(moof.boxOff) # default-base-is-moof
+    var defDur: uint32 = 0
+    var defSize: uint32 = 0
+    var hasDur, hasSize = false
+    var empty = false
+    var truns: seq[Box] = @[]
+    for c in childBoxes(data, traf):
+      if c.isTypeStr("tfhd"):
+        let t = parseTfhd(data, c)
+        hasTfhd = true
+        trackId = t.trackId
+        if t.hasBase: base = t.baseOff
+        defDur = t.defDur; defSize = t.defSize
+        hasDur = t.hasDur; hasSize = t.hasSize
+        empty = t.empty
+      elif c.isTypeStr("trun"):
+        truns.add(c)
+      # tfdt/mfhd/sdtp/saio: timing/offsets handled via base+data_offset
+    if not hasTfhd: raise heifErr("heif: traf missing tfhd")
+    if empty: continue
+    var ti = -1
+    for i, tr in movie.tracks:
+      if tr.trackId == trackId:
+        ti = i
+        break
+    if ti < 0: raise heifErr("heif: moof references unknown track")
+    for t in truns:
+      mergeTrun(data, moof.boxOff, t, base, defDur, defSize, hasDur,
+        hasSize, movie.tracks[ti])
+
 proc parseMovie*(data: seq[uint8]): HeifMovie =
   ## Top-level moov parse. Raises HeifDecodeError on truncation.
+  ## Fragmented files (moof) have their samples merged into the matching
+  ## tracks (by tfhd track_ID) in file order after the moov is parsed.
   result = HeifMovie()
+  var moovBox = Box()
   var foundMoov = false
+  var moofBoxes: seq[Box] = @[]
   for b in topLevelBoxes(data):
     if b.isTypeStr("moof"):
       result.hasMoof = true
+      moofBoxes.add(b)
     if b.isTypeStr("moov") and not foundMoov:
       foundMoov = true
-      var mvTs: uint32 = 0
-      var mvDur: uint64 = 0
-      for c in childBoxes(data, b):
-        if c.isTypeStr("mvhd"):
-          parseMvhd(data, c, mvTs, mvDur)
-        elif c.isTypeStr("trak"):
-          result.tracks.add(parseTrak(data, c))
-      result.timescale = mvTs
-      result.duration = mvDur
+      moovBox = b
   if not foundMoov:
     raise heifErr("heif: missing moov box")
+  var mvTs: uint32 = 0
+  var mvDur: uint64 = 0
+  for c in childBoxes(data, moovBox):
+    if c.isTypeStr("mvhd"):
+      parseMvhd(data, c, mvTs, mvDur)
+    elif c.isTypeStr("trak"):
+      result.tracks.add(parseTrak(data, c))
+  result.timescale = mvTs
+  result.duration = mvDur
+  for m in moofBoxes:
+    mergeMoofSamples(data, m, result)
 
 proc hasMovie*(data: seq[uint8]): bool =
   for b in topLevelBoxes(data):

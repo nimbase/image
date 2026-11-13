@@ -4,6 +4,7 @@ import unittest
 import std/os
 import image
 import image/codecs/heif/heif
+import image/codecs/heif/isobmff
 
 let fixturesDir = currentSourcePath().parentDir() / "fixtures" / "heif"
 
@@ -369,3 +370,162 @@ test "heif derivation validation rejects bad refs":
     gridCols: 2, gridOutW: 8, gridOutH: 4, thmbTo: -1, irotTurns: -1,
     imirTopBottom: -1, dimgTo: @[0]))
   check (not writeCollection(badGrid).ok)
+
+test "heif tiled uncompressed still roundtrip":
+  var coll = HeifCollection(primary: 0, brand: "mif1")
+  var s = defaultItemSpec(mkSolid(8, 8, 10, 20, 30))
+  s.tileCols = 2; s.tileRows = 2
+  coll.items.add(s)
+  let enc = writeCollection(coll)
+  check enc.ok
+  let dec = decodeHeif(enc.value)
+  check dec.ok
+  check dec.value.kind == dkRgb8
+  check dec.value.dimensions() == (8'u32, 8'u32)
+  check pixelSum(dec.value) == 8*8*(10+20+30).uint64
+
+test "heif tiled uncompressed uneven tiles roundtrip":
+  # 7x5 with 2x2 tiles exercises right/bottom edge clipping.
+  var coll = HeifCollection(primary: 0, brand: "mif1")
+  var s = defaultItemSpec(mkSolid(7, 5, 1, 2, 3))
+  s.tileCols = 2; s.tileRows = 2
+  coll.items.add(s)
+  let enc = writeCollection(coll)
+  check enc.ok
+  let dec = decodeHeif(enc.value)
+  check dec.ok
+  check dec.value.dimensions() == (7'u32, 5'u32)
+  check pixelSum(dec.value) == 7*5*(1+2+3).uint64
+
+test "heif tiled uncompressed luma roundtrip":
+  var coll = HeifCollection(primary: 0, brand: "mif1")
+  var s = defaultItemSpec(mkMono(8, 4, 77))
+  s.tileCols = 2; s.tileRows = 1
+  coll.items.add(s)
+  let enc = writeCollection(coll)
+  check enc.ok
+  let dec = decodeHeif(enc.value)
+  check dec.ok
+  check dec.value.kind == dkLuma8
+  check pixelSum(dec.value) == 8*4*77'u64
+
+test "heif unknown tile geometry stays unsupported":
+  var coll = HeifCollection(primary: 0, brand: "mif1")
+  var s = defaultItemSpec(mkSolid(8, 8, 10, 20, 30))
+  s.tileCols = 2; s.tileRows = 2
+  coll.items.add(s)
+  let enc = writeCollection(coll)
+  check enc.ok
+  var bad = enc.value
+  var idx = -1
+  for i in 0 ..< bad.len - 1:
+    if bad[i] == uint8('T') and bad[i+1] == uint8('L'):
+      idx = i
+      break
+  check idx >= 0
+  bad[idx] = uint8('X') # break the "TL" magic; tail stays nonzero
+  let dec = decodeHeif(bad)
+  check (not dec.ok)
+  check dec.err.kind == ekUnsupported
+
+test "heif tiled writer rejects bad grids":
+  var c0 = HeifCollection(primary: 0, brand: "mif1")
+  var s0 = defaultItemSpec(mkSolid(8, 8, 1, 2, 3))
+  s0.tileCols = 0; s0.tileRows = 2 # half-specified grid
+  c0.items.add(s0)
+  check (not writeCollection(c0).ok)
+  var c1 = HeifCollection(primary: 0, brand: "mif1")
+  var s1 = defaultItemSpec(mkSolid(8, 8, 1, 2, 3))
+  s1.tileCols = 16; s1.tileRows = 1 # more columns than pixels
+  c1.items.add(s1)
+  check (not writeCollection(c1).ok)
+  var c2 = HeifCollection(primary: 0, brand: "mif1")
+  var s2 = defaultItemSpec(mkSolid(8, 8, 1, 2, 3))
+  s2.kind = hikJpeg
+  s2.tileCols = 2; s2.tileRows = 2 # tiling needs uncompressed
+  c2.items.add(s2)
+  check (not writeCollection(c2).ok)
+
+test "heif timed pict sequence tiled unci":
+  let frames = @[mkSolid(8, 8, 10, 0, 0), mkSolid(8, 8, 0, 20, 0)]
+  let enc = writeHeifSequence(frames, hikUnc, 90, 1, 1, 2, 2)
+  check enc.ok
+  let all = decodeHeifSequenceAll(enc.value, 0)
+  check all.ok
+  check all.value.len == 2
+  check pixelSum(all.value[0]) == 8*8*10'u64
+  check pixelSum(all.value[1]) == 8*8*20'u64
+
+proc buildFragmentedSeq(samples: seq[seq[uint8]], entry: seq[uint8],
+    trackId: uint32, moofTrack = 0'u32): seq[uint8] =
+  ## Minimal fragmented file: ftyp + moov (empty sample tables, valid
+  ## descriptions) + moof (tfhd/trun) + mdat. Clean-room test helper.
+  ## moofTrack, when nonzero, overrides the tfhd reference (to test the
+  ## unknown-track error path).
+  let ftyp = buildFtyp("msf1", @["msf1", "mif1", "miaf", "1pic", "unci"])
+  let stbl = makeBox("stbl", buildStsd(@[entry]) & buildStts(0, 1) &
+    buildStsc(0) & buildStsz(@[]) & buildStco(@[]))
+  let minf = makeBox("minf", buildVmhd() & buildDinf() & stbl)
+  let mdia = makeBox("mdia", buildMdhd(1, 2) & buildHdlr() & minf)
+  let trak = makeBox("trak", buildTkhd(trackId, 2, 8, 8) & mdia)
+  let moov = makeBox("moov", buildMvhd(1, 2) & trak)
+  var sizes: seq[int] = @[]
+  for b in samples: sizes.add(b.len)
+  proc moofWith(base: uint64): seq[uint8] =
+    let refId = if moofTrack != 0: moofTrack else: trackId
+    var tfhd: seq[uint8] = @[]
+    tfhd.putFullHeader(0, 1) # base-data-offset-present
+    tfhd.putU32BE(refId)
+    tfhd.putU64BE(base)
+    var trun: seq[uint8] = @[]
+    trun.putFullHeader(0, 0x301) # data-offset + duration + size
+    trun.putU32BE(0) # data_offset (base already points at first sample)
+    trun.putU32BE(uint32(samples.len))
+    for b in samples:
+      trun.putU32BE(1) # duration
+      trun.putU32BE(uint32(b.len))
+    var mfhdInner: seq[uint8] = @[]
+    mfhdInner.putU32BE(1)
+    makeBox("moof", makeFullBox("mfhd", 0, 0, mfhdInner) &
+      makeBox("traf", makeBox("tfhd", tfhd) & makeBox("trun", trun)))
+  # Base points at the mdat payload; moof size is offset-independent.
+  let dummy = moofWith(0)
+  let base = uint64(ftyp.len + moov.len + dummy.len + 8)
+  let moof = moofWith(base)
+  doAssert moof.len == dummy.len
+  var mdatPayload: seq[uint8] = @[]
+  for b in samples: mdatPayload.putBytes(b)
+  ftyp & moov & moof & makeBox("mdat", mdatPayload)
+
+test "heif fragmented moof sequence decodes":
+  let f0 = mkSolid(8, 8, 10, 0, 0)
+  let f1 = mkSolid(8, 8, 0, 20, 0)
+  let (b0, u0, c0, p0, _, _) = encodeUncFrame(f0)
+  let (b1, u1, c1, p1, _, _) = encodeUncFrame(f1)
+  check makeBox("uncC", u0) == makeBox("uncC", u1)
+  let entry = buildVisualEntry("unci", 8, 8, @[makeBox("uncC", u0)])
+  let raw = buildFragmentedSeq(@[b0, b1], entry, 1)
+  let mv = heifMovieInfo(raw)
+  check mv.ok
+  check mv.value.hasMoof
+  check mv.value.tracks.len == 1
+  check mv.value.tracks[0].samples.len == 2
+  check mv.value.tracks[0].samples[0].duration == 1
+  let all = decodeHeifSequenceAll(raw, 0)
+  check all.ok
+  check all.value.len == 2
+  check pixelSum(all.value[0]) == 8*8*10'u64
+  check pixelSum(all.value[1]) == 8*8*20'u64
+  let one = decodeHeifSequenceSample(raw, 0, 1)
+  check one.ok
+  check pixelSum(one.value) == 8*8*20'u64
+
+test "heif fragmented moof truncated and bad track fail cleanly":
+  let f0 = mkSolid(8, 8, 10, 0, 0)
+  let (b0, u0, c0, p0, _, _) = encodeUncFrame(f0)
+  let entry = buildVisualEntry("unci", 8, 8, @[makeBox("uncC", u0)])
+  let raw = buildFragmentedSeq(@[b0], entry, 1)
+  check decodeHeifSequenceAll(raw[0 ..< raw.len - 1], 0).ok == false
+  check heifMovieInfo(raw[0 ..< raw.len div 2]).ok == false
+  let badTrack = buildFragmentedSeq(@[b0], entry, 1, 99)
+  check heifMovieInfo(badTrack).ok == false
