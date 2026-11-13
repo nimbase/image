@@ -105,6 +105,13 @@ proc parseStsdEntry(data: seq[uint8], e: Box, coding: var string,
         uncC = boxPayload(data, c)
       elif c.isTypeStr("cmpd"):
         cmpd = boxPayload(data, c)
+      elif c.isTypeStr("pixi"):
+        let pp = boxPayload(data, c)
+        if pp.len >= 5:
+          let n = int(pp[4])
+          if n > 0 and n <= 8 and pp.len >= 5 + n:
+            pixi = @[]
+            for i in 0 ..< n: pixi.add(int(pp[5 + i]))
       off += c.boxLen
 
 proc parseStsd(data: seq[uint8], b: Box, coding: var string,

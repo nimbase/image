@@ -316,6 +316,23 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
         return err[seq[uint8]](encodingError("heif: bad passthrough extents"))
     if s.ilocTo.len > 0 and s.useIdat:
       return err[seq[uint8]](encodingError("heif: virtual item cannot use idat"))
+    # Derivation reference validation (spec §6.6.2: iden exactly 1 dimg,
+    # grid count must equal rows*cols, overlay needs >= 1 input).
+    if s.kind == hikIden and s.dimgTo.len != 1:
+      return err[seq[uint8]](encodingError("heif: iden needs exactly 1 dimg"))
+    if s.kind == hikGrid:
+      if s.gridRows < 1 or s.gridCols < 1 or
+          s.gridRows * s.gridCols > 256 or s.dimgTo.len != s.gridRows * s.gridCols:
+        return err[seq[uint8]](encodingError("heif: bad grid references"))
+      if s.gridOutW < 1 or s.gridOutH < 1 or s.gridOutW > 16384 or
+          s.gridOutH > 16384:
+        return err[seq[uint8]](encodingError("heif: bad grid output"))
+    if s.kind == hikOverlay:
+      if s.dimgTo.len < 1 or s.dimgTo.len != s.overlayOffs.len:
+        return err[seq[uint8]](encodingError("heif: bad overlay references"))
+      if s.overlayOutW < 1 or s.overlayOutH < 1 or s.overlayOutW > 16384 or
+          s.overlayOutH > 16384:
+        return err[seq[uint8]](encodingError("heif: bad overlay canvas"))
   # 1. Item data blobs
   var blobs = newSeq[seq[uint8]](coll.items.len)
   var ispeWH = newSeq[tuple[w, h: uint32]](coll.items.len)
@@ -456,16 +473,23 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
   var compat = @["mif1", "miaf", "1pic"]
   var hasJpeg = false
   var hasUnc = false
-  var hasEvc = false
+  var extraBrands: seq[string] = @[]
   for s in coll.items:
     if s.kind == hikJpeg: hasJpeg = true
     if s.kind == hikUnc: hasUnc = true
-    if s.kind == hikPass and
-        (s.passType == "evc1" or s.passType == "evci"):
-      hasEvc = true
+    if s.kind == hikPass:
+      case s.passType
+      of "hvc1", "hev1", "lhv1": extraBrands.add(["heic", "hevc"])
+      of "vvc1", "vvi1": extraBrands.add(["vvic"])
+      of "avc1": extraBrands.add(["avci"])
+      of "avci", "avcs": extraBrands.add([s.passType])
+      of "evc1", "evci": extraBrands.add(["evc1"])
+      of "j2k1": extraBrands.add(["j2ki"])
+      else: extraBrands.add([s.passType])
   if hasJpeg: compat.add("jpeg")
   if hasUnc: compat.add("unci")
-  if hasEvc and ("evc1" notin compat): compat.add("evc1")
+  for b in extraBrands:
+    if b notin compat: compat.add(b)
   let ftyp = buildFtyp(brandMajor, compat)
   # iprp needs item ids remapped (assocIdx is 0-based order; buildIprp
   # expects 1-based sequential which matches our ids)
@@ -512,9 +536,9 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
         result.add(IlocEntry(id: uint32(i + 1), construction: 2,
           extents: ex))
       elif sKindIsEmpty(s) and s.ilocTo.len == 0:
-        # iden with no data: single empty extent construction 0
+        # iden has no item body per spec §6.6.2.1 (zero extents).
         result.add(IlocEntry(id: uint32(i + 1), construction: 0,
-          extents: @[(0, 0, 0)]))
+          extents: newSeq[tuple[srcIndex: int, offset, length: int]]()))
       elif s.useIdat:
         result.add(IlocEntry(id: uint32(i + 1), construction: 1,
           extents: @[(0, idatRel[i], blobs[i].len)]))
@@ -535,7 +559,7 @@ proc writeCollection*(coll: HeifCollection): ImageResult[seq[uint8]] =
       dummyEx.add(IlocEntry(id: uint32(i + 1), construction: 2, extents: ex))
     elif sKindIsEmpty(s):
       dummyEx.add(IlocEntry(id: uint32(i + 1), construction: 0,
-        extents: @[(0, 0, 0)]))
+        extents: newSeq[tuple[srcIndex: int, offset, length: int]]()))
     elif s.useIdat:
       dummyEx.add(IlocEntry(id: uint32(i + 1), construction: 1,
         extents: @[(0, 0, blobs[i].len)]))
@@ -601,7 +625,7 @@ proc writeHeifSequence*(frames: seq[DynamicImage],
   var sampleBytes = newSeq[seq[uint8]](frames.len)
   var w0: uint32 = 0
   var h0: uint32 = 0
-  var uncCBox: seq[uint8] = @[]
+  var codecBoxes: seq[uint8] = @[]
   var coding = ""
   try:
     for i, f in frames:
@@ -614,15 +638,16 @@ proc writeHeifSequence*(frames: seq[DynamicImage],
         return err[seq[uint8]](encodingError("heif: sequence size mismatch"))
       if kind == hikUnc:
         let (bytes, u, c, pixi, _, _) = encodeUncFrame(f)
-        if c.len > 0 or pixi.len > 4:
-          # v0 uncompressed sequences need cmpd in the sample entry;
-          # v1 profile path below is the supported writer profile.
-          return err[seq[uint8]](encodingError(
-            "heif: sequence unci v0 unsupported"))
+        let boxes =
+          if c.len > 0: @[makeBox("uncC", u), makeBox("cmpd", c),
+            makeBox("pixi", buildPixi(pixi))]
+          else: @[makeBox("uncC", u)]
+        var flat: seq[uint8] = @[]
+        for b in boxes: flat.putBytes(b)
         if i == 0:
-          uncCBox = makeBox("uncC", u)
+          codecBoxes = flat
           coding = "unci"
-        elif makeBox("uncC", u) != uncCBox:
+        elif flat != codecBoxes:
           return err[seq[uint8]](encodingError("heif: sequence profile mismatch"))
         sampleBytes[i] = bytes
       else:
@@ -634,8 +659,8 @@ proc writeHeifSequence*(frames: seq[DynamicImage],
     return err[seq[uint8]](encodingError("heif: " & e.msg))
   var sizes: seq[int] = @[]
   for b in sampleBytes: sizes.add(b.len)
-  let codecBoxes = if coding == "unci": @[uncCBox] else: @[]
-  let entry = buildVisualEntry(coding, int(w0), int(h0), codecBoxes)
+  let entryBoxes = if coding == "unci": @[codecBoxes] else: newSeq[seq[uint8]]()
+  let entry = buildVisualEntry(coding, int(w0), int(h0), entryBoxes)
   let stsd = buildStsd(@[entry])
   let stts = buildStts(frames.len, frameDuration)
   let stsc = buildStsc(sampleBytes.len)

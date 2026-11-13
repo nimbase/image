@@ -24,7 +24,28 @@ proc pixelSum(img: DynamicImage): uint64 =
         uint64(px.data[2]) + uint64(px.data[3])
   of dkLuma8:
     for px in img.luma8.pixels: result += uint64(px.data[0])
+  of dkRgb16:
+    for px in img.rgb16.pixels:
+      result += uint64(px.data[0]) + uint64(px.data[1]) + uint64(px.data[2])
+  of dkRgba16:
+    for px in img.rgba16.pixels:
+      result += uint64(px.data[0]) + uint64(px.data[1]) +
+        uint64(px.data[2]) + uint64(px.data[3])
+  of dkLuma16:
+    for px in img.luma16.pixels: result += uint64(px.data[0])
   else: doAssert false, "unexpected kind"
+
+proc mkMono(w, h: int, v: uint8): DynamicImage =
+  var px = newSeq[Luma[uint8]](w * h)
+  for i in 0 ..< px.len: px[i] = Luma[uint8](data: [v])
+  DynamicImage(kind: dkLuma8, luma8: GrayImage(width: uint32(w),
+    height: uint32(h), pixels: move(px)))
+
+proc mkSolid16(w, h: int, r, g, b: uint16): DynamicImage =
+  var px = newSeq[Rgb[uint16]](w * h)
+  for i in 0 ..< px.len: px[i] = Rgb[uint16](data: [r, g, b])
+  DynamicImage(kind: dkRgb16, rgb16: Rgb16Image(width: uint32(w),
+    height: uint32(h), pixels: move(px)))
 
 proc mkSolid(w, h: int, r, g, b: uint8): DynamicImage =
   var px = newSeq[Rgb[uint8]](w * h)
@@ -228,3 +249,123 @@ test "heif timed pict sequence jpeg":
   check all.ok
   check all.value.len == 2
   check all.value[0].dimensions() == (8'u32, 8'u32)
+
+test "heif timed pict sequence unci v0":
+  let frames = @[mkMono(8, 8, 10), mkMono(8, 8, 20), mkMono(8, 8, 30)]
+  let enc = writeHeifSequence(frames, hikUnc)
+  check enc.ok
+  let mv = heifMovieInfo(enc.value)
+  check mv.ok
+  check mv.value.tracks.len == 1
+  check mv.value.tracks[0].coding == "unci"
+  check mv.value.tracks[0].samples.len == 3
+  let all = decodeHeifSequenceAll(enc.value, 0)
+  check all.ok
+  check all.value.len == 3
+  check all.value[0].kind == dkLuma8
+  check pixelSum(all.value[0]) == 8*8*10'u64
+  check pixelSum(all.value[1]) == 8*8*20'u64
+  check pixelSum(all.value[2]) == 8*8*30'u64
+
+test "heif timed pict sequence unci v0 rgb16":
+  let frames = @[mkSolid16(4, 4, 1000, 2000, 3000),
+    mkSolid16(4, 4, 4000, 5000, 6000)]
+  let enc = writeHeifSequence(frames, hikUnc)
+  check enc.ok
+  let all = decodeHeifSequenceAll(enc.value, 0)
+  check all.ok
+  check all.value.len == 2
+  check all.value[0].kind == dkRgb16
+  check pixelSum(all.value[0]) == 4*4*(1000+2000+3000).uint64
+  check pixelSum(all.value[1]) == 4*4*(4000+5000+6000).uint64
+
+test "heif grid luma8 roundtrip":
+  let full = mkMono(8, 4, 77)
+  var left = GrayImage(width: 4, height: 4, pixels: newSeq[Luma[uint8]](16))
+  var right = GrayImage(width: 4, height: 4, pixels: newSeq[Luma[uint8]](16))
+  for y in 0 ..< 4:
+    for x in 0 ..< 4:
+      left.pixels[y*4+x] = full.luma8.pixels[y*8+x]
+      right.pixels[y*4+x] = full.luma8.pixels[y*8+4+x]
+  var coll = HeifCollection(primary: 2, brand: "mif1")
+  var s0 = defaultItemSpec(DynamicImage(kind: dkLuma8, luma8: left))
+  s0.hidden = true
+  var s1 = defaultItemSpec(DynamicImage(kind: dkLuma8, luma8: right))
+  s1.hidden = true
+  var g = HeifItemSpec(kind: hikGrid, gridTiles: @[0, 1], gridRows: 1,
+    gridCols: 2, gridOutW: 8, gridOutH: 4, thmbTo: -1, irotTurns: -1,
+    imirTopBottom: -1)
+  coll.items.add(s0); coll.items.add(s1); coll.items.add(g)
+  coll.items[2].dimgTo = @[0, 1]
+  let enc = writeCollection(coll)
+  check enc.ok
+  let dec = decodeHeif(enc.value)
+  check dec.ok
+  check dec.value.kind == dkLuma8
+  check pixelSum(dec.value) == pixelSum(full)
+
+test "heif grid rgb16 roundtrip":
+  let full = mkSolid16(8, 4, 1000, 2000, 3000)
+  var left = Rgb16Image(width: 4, height: 4, pixels: newSeq[Rgb[uint16]](16))
+  var right = Rgb16Image(width: 4, height: 4, pixels: newSeq[Rgb[uint16]](16))
+  for y in 0 ..< 4:
+    for x in 0 ..< 4:
+      left.pixels[y*4+x] = full.rgb16.pixels[y*8+x]
+      right.pixels[y*4+x] = full.rgb16.pixels[y*8+4+x]
+  var coll = HeifCollection(primary: 2, brand: "mif1")
+  var s0 = defaultItemSpec(DynamicImage(kind: dkRgb16, rgb16: left))
+  s0.hidden = true
+  var s1 = defaultItemSpec(DynamicImage(kind: dkRgb16, rgb16: right))
+  s1.hidden = true
+  var g = HeifItemSpec(kind: hikGrid, gridTiles: @[0, 1], gridRows: 1,
+    gridCols: 2, gridOutW: 8, gridOutH: 4, thmbTo: -1, irotTurns: -1,
+    imirTopBottom: -1)
+  coll.items.add(s0); coll.items.add(s1); coll.items.add(g)
+  coll.items[2].dimgTo = @[0, 1]
+  let enc = writeCollection(coll)
+  check enc.ok
+  let dec = decodeHeif(enc.value)
+  check dec.ok
+  check dec.value.kind == dkRgb16
+  check pixelSum(dec.value) == pixelSum(full)
+
+test "heif overlay rgba8 roundtrip":
+  var bgpx = newSeq[Rgba[uint8]](8*8)
+  for i in 0 ..< bgpx.len: bgpx[i] = Rgba[uint8](data: [255'u8, 0, 0, 255])
+  var fgpx = newSeq[Rgba[uint8]](4*4)
+  for i in 0 ..< fgpx.len: fgpx[i] = Rgba[uint8](data: [0'u8, 255, 0, 255])
+  let bg = DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: 8, height: 8,
+    pixels: move(bgpx)))
+  let fg = DynamicImage(kind: dkRgba8, rgba8: RgbaImage(width: 4, height: 4,
+    pixels: move(fgpx)))
+  var coll = HeifCollection(primary: 2, brand: "mif1")
+  var s0 = defaultItemSpec(bg); s0.hidden = true
+  var s1 = defaultItemSpec(fg); s1.hidden = true
+  var ov = HeifItemSpec(kind: hikOverlay, overlayInputs: @[0, 1],
+    overlayOffs: @[(0, 0), (2, 2)], overlayOutW: 8, overlayOutH: 8,
+    thmbTo: -1, irotTurns: -1, imirTopBottom: -1)
+  coll.items.add(s0); coll.items.add(s1); coll.items.add(ov)
+  coll.items[2].dimgTo = @[0, 1]
+  let enc = writeCollection(coll)
+  check enc.ok
+  let dec = decodeHeif(enc.value)
+  check dec.ok
+  check dec.value.kind == dkRgba8
+  check dec.value.dimensions() == (8'u32, 8'u32)
+  # corner stays red, center is green
+  check dec.value.rgba8.pixels[0].data == [255'u8, 0, 0, 255]
+  check dec.value.rgba8.pixels[3*8+3].data == [0'u8, 255, 0, 255]
+
+test "heif derivation validation rejects bad refs":
+  var badIden = HeifCollection(primary: 1, brand: "mif1")
+  badIden.items.add(defaultItemSpec(mkSolid(4, 4, 1, 2, 3)))
+  badIden.items.add(HeifItemSpec(kind: hikIden, ispeW: 4, ispeH: 4,
+    thmbTo: -1, irotTurns: -1, imirTopBottom: -1, dimgTo: @[]))
+  check (not writeCollection(badIden).ok)
+  var badGrid = HeifCollection(primary: 2, brand: "mif1")
+  badGrid.items.add(defaultItemSpec(mkSolid(4, 4, 1, 2, 3)))
+  badGrid.items.add(defaultItemSpec(mkSolid(4, 4, 1, 2, 3)))
+  badGrid.items.add(HeifItemSpec(kind: hikGrid, gridTiles: @[0], gridRows: 1,
+    gridCols: 2, gridOutW: 8, gridOutH: 4, thmbTo: -1, irotTurns: -1,
+    imirTopBottom: -1, dimgTo: @[0]))
+  check (not writeCollection(badGrid).ok)

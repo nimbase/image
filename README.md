@@ -49,7 +49,7 @@ Codec support (`o` = decode, `w` = encode):
 - TIFF: o+w — strips/tiles, chunky/planar, None/LZW/Deflate/PackBits, YCbCr/CMYK/palette
 - WebP: o+w — lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green, per-block color and meta-Huffman transforms) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100); animation / VP8X alpha unsupported
 - AVIF: color math only (BT.601/709/2020 YCbCr, YCgCo-Re); AV1 bitstream unsupported
-- HEIF/HEIC: o+w — ISOBMFF container + uncompressed (`unci` v0/v1, 8/16-bit) + JPEG-in-HEIF + `iden`/`grid`/`iovl` + `irot`/`imir`/`clap`/`iscl` + thumbnails/aux/groups/Exif/mime + tiled `iloc` construction-1/2 + timed `pict` sequences (`unci` v1 / `jpeg`) + EVC brand passthrough; HEVC/VVC/AVC/EVC/JPEG2000 pixels unsupported (extractors only)
+- HEIF/HEIC: o+w — ISOBMFF container + uncompressed (`unci` v0/v1, 8/16-bit) + JPEG-in-HEIF + `iden`/`grid`/`iovl` (8/16-bit mono/RGB/RGBA) + `irot`/`imir`/`clap`/`iscl` + thumbnails/aux/groups/Exif/mime + tiled `iloc` construction-1/2 + timed `pict` sequences (`unci` v0/v1 / `jpeg`) + EVC brand passthrough; HEVC/VVC/AVC/EVC/JPEG2000 pixels unsupported (extractors only)
 
 Not ported (out of scope): `imageops` processing functions, rayon parallelism.
 
@@ -241,8 +241,8 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] HEIF/HEIC stills: container + uncompressed + JPEG-in-HEIF + grids/overlays/iden + thumbnails/aux/groups/Exif/mime + writer (HEVC/VVC/AVC/EVC/JPEG2000 passthrough only — no pure-Nim video/wavelet decoders)
 - [ ] JPEG XL (jxl)
 - [ ] JPEG 2000 (jp2)
-- [x] HEIF sequences/timed pict tracks (`unci` v1 / `jpeg`), tiled `iloc` construction-1 (`idat`) / construction-2 (item offsets), EVC brand
-- [ ] HEIF fragmented (`moof`) sequences, `unci` v0 sequences, internal `uncC` tile geometry
+- [x] HEIF sequences/timed pict tracks (`unci` v0/v1 / `jpeg`), tiled `iloc` construction-1 (`idat`) / construction-2 (item offsets), EVC brand
+- [ ] HEIF fragmented (`moof`) sequences, internal `uncC` tile geometry
 - [ ] RAW (a family of formats, not one codec; often requires camera-specific metadata and processing)
 - [x] SIMD: PNG Up filter, JPEG IDCT/FDCT, YCbCr row batch via nimsimd (runtime auto-dispatch SSE2/AVX2/NEON, bit-identical scalar fallback; `-ffp-contract=off`)
 - [ ] SIMD: PNG Average/Paeth/Sub (scalar by design — small rows stay scalar)

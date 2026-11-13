@@ -349,16 +349,21 @@ proc buildUncCV1*(tag: string): seq[uint8] =
 
 proc buildUncCV0*(depth: int, sampling, interleave: int,
     compTypes: openArray[int]): seq[uint8] =
+  ## v0 layout matching observed real-writer bytes (see parseUncC):
+  ## FullBox + zero word + count + 5-byte entries [0, index, depth-1, 0, 0]
+  ## + sampling + interleave + zero word. No tail means untiled.
   result = @[]
   result.putFullHeader(0, 0)
+  result.putU32BE(0) # zero word before count (always 0 observed)
   result.putU32BE(uint32(compTypes.len))
-  for t in compTypes:
-    result.putU16BE(uint16(t))
+  for i in 0 ..< compTypes.len:
     result.add(0) # flags
+    result.add(uint8(i)) # component index (0-based position)
     result.add(uint8(depth - 1))
     result.add(0); result.add(0)
   result.add(uint8(sampling))
   result.add(uint8(interleave))
+  result.putU32BE(0) # zero word after interleave (always 0 observed)
 
 proc buildCmpd*(compTypes: openArray[int]): seq[uint8] =
   result = @[]

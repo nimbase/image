@@ -105,6 +105,25 @@ proc buildOverlay*(outW, outH: int, offs: seq[tuple[x, y: int]]): seq[uint8] =
 
 # --- Compositing (8-bit fast paths; 16-bit mirrors) ---
 
+proc compositeGridLuma8*(tiles: seq[GrayImage], g: GridInfo): GrayImage =
+  doAssert tiles.len == g.rows * g.cols
+  let tw = int(tiles[0].width)
+  let th = int(tiles[0].height)
+  for t in tiles:
+    doAssert int(t.width) == tw and int(t.height) == th
+  var px = newSeq[Luma[uint8]](g.outW * g.outH)
+  for r in 0 ..< g.rows:
+    for c in 0 ..< g.cols:
+      let t = tiles[r * g.cols + c]
+      for y in 0 ..< th:
+        let dy = r * th + y
+        if dy >= g.outH: break
+        for x in 0 ..< tw:
+          let dx = c * tw + x
+          if dx >= g.outW: break
+          px[dy * g.outW + dx] = t.pixels[y * tw + x]
+  GrayImage(width: uint32(g.outW), height: uint32(g.outH), pixels: move(px))
+
 proc compositeGridRgb8*(tiles: seq[RgbImage], g: GridInfo): RgbImage =
   doAssert tiles.len == g.rows * g.cols
   let tw = int(tiles[0].width)
@@ -159,3 +178,157 @@ proc compositeOverlayRgb8*(layers: seq[RgbImage], o: OverlayInfo): RgbImage =
         if dx < 0 or dx >= o.outW: continue
         px[dy * o.outW + dx] = t.pixels[y * int(t.width) + x]
   RgbImage(width: uint32(o.outW), height: uint32(o.outH), pixels: move(px))
+
+proc compositeGridRgb16*(tiles: seq[Rgb16Image], g: GridInfo): Rgb16Image =
+  doAssert tiles.len == g.rows * g.cols
+  let tw = int(tiles[0].width)
+  let th = int(tiles[0].height)
+  for t in tiles:
+    doAssert int(t.width) == tw and int(t.height) == th
+  var px = newSeq[Rgb[uint16]](g.outW * g.outH)
+  for r in 0 ..< g.rows:
+    for c in 0 ..< g.cols:
+      let t = tiles[r * g.cols + c]
+      for y in 0 ..< th:
+        let dy = r * th + y
+        if dy >= g.outH: break
+        for x in 0 ..< tw:
+          let dx = c * tw + x
+          if dx >= g.outW: break
+          px[dy * g.outW + dx] = t.pixels[y * tw + x]
+  Rgb16Image(width: uint32(g.outW), height: uint32(g.outH), pixels: move(px))
+
+proc compositeGridRgba16*(tiles: seq[Rgba16Image], g: GridInfo): Rgba16Image =
+  doAssert tiles.len == g.rows * g.cols
+  let tw = int(tiles[0].width)
+  let th = int(tiles[0].height)
+  for t in tiles:
+    doAssert int(t.width) == tw and int(t.height) == th
+  var px = newSeq[Rgba[uint16]](g.outW * g.outH)
+  for r in 0 ..< g.rows:
+    for c in 0 ..< g.cols:
+      let t = tiles[r * g.cols + c]
+      for y in 0 ..< th:
+        let dy = r * th + y
+        if dy >= g.outH: break
+        for x in 0 ..< tw:
+          let dx = c * tw + x
+          if dx >= g.outW: break
+          px[dy * g.outW + dx] = t.pixels[y * tw + x]
+  Rgba16Image(width: uint32(g.outW), height: uint32(g.outH), pixels: move(px))
+
+proc compositeGridLuma16*(tiles: seq[Gray16Image], g: GridInfo): Gray16Image =
+  doAssert tiles.len == g.rows * g.cols
+  let tw = int(tiles[0].width)
+  let th = int(tiles[0].height)
+  for t in tiles:
+    doAssert int(t.width) == tw and int(t.height) == th
+  var px = newSeq[Luma[uint16]](g.outW * g.outH)
+  for r in 0 ..< g.rows:
+    for c in 0 ..< g.cols:
+      let t = tiles[r * g.cols + c]
+      for y in 0 ..< th:
+        let dy = r * th + y
+        if dy >= g.outH: break
+        for x in 0 ..< tw:
+          let dx = c * tw + x
+          if dx >= g.outW: break
+          px[dy * g.outW + dx] = t.pixels[y * tw + x]
+  Gray16Image(width: uint32(g.outW), height: uint32(g.outH), pixels: move(px))
+
+proc compositeOverlayRgba8*(layers: seq[RgbaImage],
+    o: OverlayInfo): RgbaImage =
+  ## Opaque layering in dimg order (top-most last); per-pixel alpha from
+  ## the layer replaces the canvas pixel (no blending in pure-Nim v1).
+  ## Canvas fill uses all four fill channels (RGBA, sRGB + linear opacity).
+  var px = newSeq[Rgba[uint8]](o.outW * o.outH)
+  let fr = uint8(o.fill[0] shr 8)
+  let fg = uint8(o.fill[1] shr 8)
+  let fb = uint8(o.fill[2] shr 8)
+  let fa = uint8(o.fill[3] shr 8)
+  for i in 0 ..< px.len: px[i] = Rgba[uint8](data: [fr, fg, fb, fa])
+  for li in 0 ..< layers.len:
+    let t = layers[li]
+    let ox = o.offX[li]
+    let oy = o.offY[li]
+    for y in 0 ..< int(t.height):
+      let dy = oy + y
+      if dy < 0 or dy >= o.outH: continue
+      for x in 0 ..< int(t.width):
+        let dx = ox + x
+        if dx < 0 or dx >= o.outW: continue
+        px[dy * o.outW + dx] = t.pixels[y * int(t.width) + x]
+  RgbaImage(width: uint32(o.outW), height: uint32(o.outH), pixels: move(px))
+
+proc compositeOverlayLuma8*(layers: seq[GrayImage],
+    o: OverlayInfo): GrayImage =
+  ## Same opaque layering for monochrome layers; fill uses R channel.
+  var px = newSeq[Luma[uint8]](o.outW * o.outH)
+  let f = uint8(o.fill[0] shr 8)
+  for i in 0 ..< px.len: px[i] = Luma[uint8](data: [f])
+  for li in 0 ..< layers.len:
+    let t = layers[li]
+    let ox = o.offX[li]
+    let oy = o.offY[li]
+    for y in 0 ..< int(t.height):
+      let dy = oy + y
+      if dy < 0 or dy >= o.outH: continue
+      for x in 0 ..< int(t.width):
+        let dx = ox + x
+        if dx < 0 or dx >= o.outW: continue
+        px[dy * o.outW + dx] = t.pixels[y * int(t.width) + x]
+  GrayImage(width: uint32(o.outW), height: uint32(o.outH), pixels: move(px))
+
+proc compositeOverlayRgb16*(layers: seq[Rgb16Image],
+    o: OverlayInfo): Rgb16Image =
+  var px = newSeq[Rgb[uint16]](o.outW * o.outH)
+  let fr = o.fill[0]
+  let fg = o.fill[1]
+  let fb = o.fill[2]
+  for i in 0 ..< px.len: px[i] = Rgb[uint16](data: [fr, fg, fb])
+  for li in 0 ..< layers.len:
+    let t = layers[li]
+    let ox = o.offX[li]
+    let oy = o.offY[li]
+    for y in 0 ..< int(t.height):
+      let dy = oy + y
+      if dy < 0 or dy >= o.outH: continue
+      for x in 0 ..< int(t.width):
+        let dx = ox + x
+        if dx < 0 or dx >= o.outW: continue
+        px[dy * o.outW + dx] = t.pixels[y * int(t.width) + x]
+  Rgb16Image(width: uint32(o.outW), height: uint32(o.outH), pixels: move(px))
+
+proc compositeOverlayRgba16*(layers: seq[Rgba16Image],
+    o: OverlayInfo): Rgba16Image =
+  var px = newSeq[Rgba[uint16]](o.outW * o.outH)
+  for i in 0 ..< px.len: px[i] = Rgba[uint16](data: o.fill)
+  for li in 0 ..< layers.len:
+    let t = layers[li]
+    let ox = o.offX[li]
+    let oy = o.offY[li]
+    for y in 0 ..< int(t.height):
+      let dy = oy + y
+      if dy < 0 or dy >= o.outH: continue
+      for x in 0 ..< int(t.width):
+        let dx = ox + x
+        if dx < 0 or dx >= o.outW: continue
+        px[dy * o.outW + dx] = t.pixels[y * int(t.width) + x]
+  Rgba16Image(width: uint32(o.outW), height: uint32(o.outH), pixels: move(px))
+
+proc compositeOverlayLuma16*(layers: seq[Gray16Image],
+    o: OverlayInfo): Gray16Image =
+  var px = newSeq[Luma[uint16]](o.outW * o.outH)
+  for i in 0 ..< px.len: px[i] = Luma[uint16](data: [o.fill[0]])
+  for li in 0 ..< layers.len:
+    let t = layers[li]
+    let ox = o.offX[li]
+    let oy = o.offY[li]
+    for y in 0 ..< int(t.height):
+      let dy = oy + y
+      if dy < 0 or dy >= o.outH: continue
+      for x in 0 ..< int(t.width):
+        let dx = ox + x
+        if dx < 0 or dx >= o.outW: continue
+        px[dy * o.outW + dx] = t.pixels[y * int(t.width) + x]
+  Gray16Image(width: uint32(o.outW), height: uint32(o.outH), pixels: move(px))

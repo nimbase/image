@@ -220,8 +220,9 @@ proc decodePrimary(data: seq[uint8], meta: HeifMeta,
       let d = decodePrimary(data, meta, t, depth + 1)
       if not d.ok: return d
       tiles.add(d.value)
-    # All tiles must share kind; composite 8-bit RGB/RGBA fast paths.
-    if tiles[0].kind == dkRgb8:
+    # All tiles must share kind; composite per color type.
+    case tiles[0].kind
+    of dkRgb8:
       var rgbTiles: seq[RgbImage] = @[]
       for t in tiles:
         if t.kind != dkRgb8:
@@ -237,15 +238,80 @@ proc decodePrimary(data: seq[uint8], meta: HeifMeta,
       let comp = compositeGridRgb8(rgbTiles, g)
       return applyTransforms(DynamicImage(kind: dkRgb8, rgb8: comp),
         itemProps(meta, id))
-    elif tiles[0].kind == dkRgba8:
+    of dkRgba8:
       var raTiles: seq[RgbaImage] = @[]
       for t in tiles:
         if t.kind != dkRgba8:
           return err[DynamicImage](unsupportedError(ukGenericFeature,
             "heif: mixed grid tile kinds"))
         raTiles.add(t.rgba8)
+      let tw = raTiles[0].width
+      let th = raTiles[0].height
+      for t in raTiles:
+        if t.width != tw or t.height != th:
+          return err[DynamicImage](decodingError("heif: grid tile size mismatch"))
       let comp = compositeGridRgba8(raTiles, g)
       return applyTransforms(DynamicImage(kind: dkRgba8, rgba8: comp),
+        itemProps(meta, id))
+    of dkLuma8:
+      var mTiles: seq[GrayImage] = @[]
+      for t in tiles:
+        if t.kind != dkLuma8:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed grid tile kinds"))
+        mTiles.add(t.luma8)
+      let tw = mTiles[0].width
+      let th = mTiles[0].height
+      for t in mTiles:
+        if t.width != tw or t.height != th:
+          return err[DynamicImage](decodingError("heif: grid tile size mismatch"))
+      let comp = compositeGridLuma8(mTiles, g)
+      return applyTransforms(DynamicImage(kind: dkLuma8, luma8: comp),
+        itemProps(meta, id))
+    of dkRgb16:
+      var rgbTiles: seq[Rgb16Image] = @[]
+      for t in tiles:
+        if t.kind != dkRgb16:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed grid tile kinds"))
+        rgbTiles.add(t.rgb16)
+      let tw = rgbTiles[0].width
+      let th = rgbTiles[0].height
+      for t in rgbTiles:
+        if t.width != tw or t.height != th:
+          return err[DynamicImage](decodingError("heif: grid tile size mismatch"))
+      let comp = compositeGridRgb16(rgbTiles, g)
+      return applyTransforms(DynamicImage(kind: dkRgb16, rgb16: comp),
+        itemProps(meta, id))
+    of dkRgba16:
+      var raTiles: seq[Rgba16Image] = @[]
+      for t in tiles:
+        if t.kind != dkRgba16:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed grid tile kinds"))
+        raTiles.add(t.rgba16)
+      let tw = raTiles[0].width
+      let th = raTiles[0].height
+      for t in raTiles:
+        if t.width != tw or t.height != th:
+          return err[DynamicImage](decodingError("heif: grid tile size mismatch"))
+      let comp = compositeGridRgba16(raTiles, g)
+      return applyTransforms(DynamicImage(kind: dkRgba16, rgba16: comp),
+        itemProps(meta, id))
+    of dkLuma16:
+      var mTiles: seq[Gray16Image] = @[]
+      for t in tiles:
+        if t.kind != dkLuma16:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed grid tile kinds"))
+        mTiles.add(t.luma16)
+      let tw = mTiles[0].width
+      let th = mTiles[0].height
+      for t in mTiles:
+        if t.width != tw or t.height != th:
+          return err[DynamicImage](decodingError("heif: grid tile size mismatch"))
+      let comp = compositeGridLuma16(mTiles, g)
+      return applyTransforms(DynamicImage(kind: dkLuma16, luma16: comp),
         itemProps(meta, id))
     else:
       return err[DynamicImage](unsupportedError(ukGenericFeature,
@@ -273,7 +339,8 @@ proc decodePrimary(data: seq[uint8], meta: HeifMeta,
       let d = decodePrimary(data, meta, t, depth + 1)
       if not d.ok: return d
       layers.add(d.value)
-    if layers[0].kind == dkRgb8:
+    case layers[0].kind
+    of dkRgb8:
       var rgbLayers: seq[RgbImage] = @[]
       for l in layers:
         if l.kind != dkRgb8:
@@ -282,6 +349,56 @@ proc decodePrimary(data: seq[uint8], meta: HeifMeta,
         rgbLayers.add(l.rgb8)
       let comp = compositeOverlayRgb8(rgbLayers, ov)
       return applyTransforms(DynamicImage(kind: dkRgb8, rgb8: comp),
+        itemProps(meta, id))
+    of dkRgba8:
+      var raLayers: seq[RgbaImage] = @[]
+      for l in layers:
+        if l.kind != dkRgba8:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed overlay kinds"))
+        raLayers.add(l.rgba8)
+      let comp = compositeOverlayRgba8(raLayers, ov)
+      return applyTransforms(DynamicImage(kind: dkRgba8, rgba8: comp),
+        itemProps(meta, id))
+    of dkLuma8:
+      var mLayers: seq[GrayImage] = @[]
+      for l in layers:
+        if l.kind != dkLuma8:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed overlay kinds"))
+        mLayers.add(l.luma8)
+      let comp = compositeOverlayLuma8(mLayers, ov)
+      return applyTransforms(DynamicImage(kind: dkLuma8, luma8: comp),
+        itemProps(meta, id))
+    of dkRgb16:
+      var rgbLayers: seq[Rgb16Image] = @[]
+      for l in layers:
+        if l.kind != dkRgb16:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed overlay kinds"))
+        rgbLayers.add(l.rgb16)
+      let comp = compositeOverlayRgb16(rgbLayers, ov)
+      return applyTransforms(DynamicImage(kind: dkRgb16, rgb16: comp),
+        itemProps(meta, id))
+    of dkRgba16:
+      var raLayers: seq[Rgba16Image] = @[]
+      for l in layers:
+        if l.kind != dkRgba16:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed overlay kinds"))
+        raLayers.add(l.rgba16)
+      let comp = compositeOverlayRgba16(raLayers, ov)
+      return applyTransforms(DynamicImage(kind: dkRgba16, rgba16: comp),
+        itemProps(meta, id))
+    of dkLuma16:
+      var mLayers: seq[Gray16Image] = @[]
+      for l in layers:
+        if l.kind != dkLuma16:
+          return err[DynamicImage](unsupportedError(ukGenericFeature,
+            "heif: mixed overlay kinds"))
+        mLayers.add(l.luma16)
+      let comp = compositeOverlayLuma16(mLayers, ov)
+      return applyTransforms(DynamicImage(kind: dkLuma16, luma16: comp),
         itemProps(meta, id))
     else:
       return err[DynamicImage](unsupportedError(ukGenericFeature,
@@ -478,16 +595,47 @@ proc decodeSequenceSample(track: HeifTrack,
       prof = parseUncC(track.uncC)
     except HeifDecodeError as e:
       return err[DynamicImage](decodingError(e.msg))
-    if not prof.isV1:
-      return err[DynamicImage](unsupportedError(ukGenericFeature,
-        "heif: sequence unci v0 unsupported"))
     if track.width <= 0 or track.height <= 0 or
         track.width > 16384 or track.height > 16384:
       return err[DynamicImage](decodingError("heif: bad sequence dimensions"))
-    let dec = decodeUncompressed(sample, prof, @[],
-      PixInfo(bits: @[]), track.width, track.height, 6, true)
-    if not dec.ok: return dec
-    ok(dec.value)
+    if prof.isV1:
+      case prof.v1Tag
+      of "rgb3", "rgba": discard
+      else:
+        return err[DynamicImage](unsupportedError(ukGenericFeature,
+          "heif: sequence unci v1 profile '" & prof.v1Tag & "' unsupported"))
+      let dec = decodeUncompressed(sample, prof, @[],
+        PixInfo(bits: @[]), track.width, track.height, 6, true)
+      if not dec.ok: return dec
+      ok(dec.value)
+    else:
+      # v0: same component path as still items (cmpd order, pixi depths,
+      # nclx defaults; sequences carry no colr so matrix 6 / full range).
+      if track.cmpd.len == 0:
+        return err[DynamicImage](decodingError("heif: sequence missing cmpd"))
+      var comps: seq[CmpEntry] = @[]
+      try:
+        comps = parseCmpd(track.cmpd)
+      except HeifDecodeError as e:
+        return err[DynamicImage](decodingError(e.msg))
+      if comps.len == 0 or comps.len > 8:
+        return err[DynamicImage](decodingError("heif: bad sequence cmpd"))
+      var bits = track.pixiBits
+      if bits.len == 0:
+        bits = newSeq[int](comps.len)
+        for i in 0 ..< comps.len: bits[i] = prof.bitDepth
+      if bits.len != comps.len:
+        return err[DynamicImage](decodingError("heif: sequence pixi/cmpd mismatch"))
+      for b in bits:
+        if b != prof.bitDepth:
+          return err[DynamicImage](decodingError("heif: sequence pixi/uncC mismatch"))
+      if prof.tiled:
+        return err[DynamicImage](unsupportedError(ukGenericFeature,
+          "heif: tiled uncompressed layout unsupported"))
+      let dec = decodeUncompressed(sample, prof, comps,
+        PixInfo(bits: bits), track.width, track.height, 6, true)
+      if not dec.ok: return dec
+      ok(dec.value)
   elif track.coding == "jpeg":
     let dec = decodeJpeg(sample)
     if not dec.ok:
