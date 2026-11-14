@@ -456,16 +456,18 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
       if pw == 0 or ph == 0: continue
       let passBytes = (pw * channels * int(bitDepth) + 7) div 8
       var prev = newSeq[uint8](passBytes)
+      var cur = newSeq[uint8](passBytes)
       var passRows = newSeq[uint8](ph * passBytes)
       for y in 0..<ph:
         if p + 1 + passBytes > inflated.len:
           return err[DynamicImage](decodingError("png: truncated Adam7"))
         let f = inflated[p]; inc(p)
-        var cur = inflated[p..<p+passBytes]; p += passBytes
+        copyMem(addr cur[0], unsafeAddr inflated[p], passBytes)
+        p += passBytes
         if not simdUnfilterRow(f, cur, prev, fbpp):
           return err[DynamicImage](decodingError("png: bad filter"))
         for i in 0..<passBytes: passRows[y*passBytes+i] = cur[i]
-        prev = cur
+        copyMem(addr prev[0], addr cur[0], passBytes)
       if bitDepth >= 8:
         let bpc = channels * sampBytes
         for y in 0..<ph:
