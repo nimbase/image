@@ -1011,11 +1011,12 @@ proc hufDecompress*(comp: openArray[uint8], nRaw: int):
 proc pizWavEncodeChunk(wav: var seq[uint16], w, rows: int,
     chanBytes: seq[int], maxVal: uint16) =
   ## Forward wavelet per channel/lane (via contiguous lane buffers).
+  ## One lane buffer reused across lanes (fully regathered per lane).
+  var lane = newSeq[uint16](rows * w)
   var base = 0
   for ci in 0..<chanBytes.len:
     let wc = chanBytes[ci] div 2
     for j in 0..<wc:
-      var lane = newSeq[uint16](rows * w)
       for y in 0..<rows:
         for x in 0..<w:
           lane[y * w + x] = wav[base + y * w * wc + x * wc + j]
@@ -1028,11 +1029,11 @@ proc pizWavEncodeChunk(wav: var seq[uint16], w, rows: int,
 proc pizWavDecodeChunk(wav: var seq[uint16], w, rows: int,
     chanBytes: seq[int], maxVal: uint16) =
   ## Inverse wavelet per channel/lane.
+  var lane = newSeq[uint16](rows * w)
   var base = 0
   for ci in 0..<chanBytes.len:
     let wc = chanBytes[ci] div 2
     for j in 0..<wc:
-      var lane = newSeq[uint16](rows * w)
       for y in 0..<rows:
         for x in 0..<w:
           lane[y * w + x] = wav[base + y * w * wc + x * wc + j]
@@ -1194,9 +1195,13 @@ proc b44ShiftAndRound*(x, shift: int): int =
   let b = (a shr s) and 1
   (a + m + b) shr s
 
-proc b44Pack*(s: array[16, uint16], flatFields, exactMax: bool): seq[uint8] =
-  ## Compress one 4x4 half block (sign-magnitude preordered) to 14 or
-  ## (flat fields + B44A) 3 bytes. Mirrors pack() in internal_b44.c.
+proc b44Pack*(s: array[16, uint16], flatFields, exactMax: bool,
+    dst: var array[14, uint8]): int =
+  ## Compress one 4x4 half block (sign-magnitude preordered) to 3
+  ## (flat fields + B44A) or 14 bytes in `dst`; returns the byte count.
+  ## Stack-array form of pack() in internal_b44.c: the per-block temp seq
+  ## this replaces was the highest-frequency EXR allocation. Callers that
+  ## need a seq can slice `dst.toOpenArray(0, n - 1)`.
   var t: array[16, uint16]
   for i in 0..<16:
     if (s[i] and 0x7C00'u16) == 0x7C00'u16:
@@ -1230,24 +1235,25 @@ proc b44Pack*(s: array[16, uint16], flatFields, exactMax: bool): seq[uint8] =
       if rMax < r[i]: rMax = r[i]
     if rMin >= 0 and rMax <= 0x3F: break
   if rMin == bias and rMax == bias and flatFields:
-    return @[uint8(t[0] shr 8), uint8(t[0]), 0xFC'u8]
+    dst[0] = uint8(t[0] shr 8); dst[1] = uint8(t[0]); dst[2] = 0xFC'u8
+    return 3
   var t0 = t[0]
   if exactMax:
     t0 = tMax - uint16(d[0] shl shift)
-  result = newSeq[uint8](14)
-  result[0] = uint8(t0 shr 8); result[1] = uint8(t0)
-  result[2] = uint8((shift shl 2) or (r[0] shr 4))
-  result[3] = uint8((r[0] shl 4) or (r[1] shr 2))
-  result[4] = uint8((r[1] shl 6) or r[2])
-  result[5] = uint8((r[3] shl 2) or (r[4] shr 4))
-  result[6] = uint8((r[4] shl 4) or (r[5] shr 2))
-  result[7] = uint8((r[5] shl 6) or r[6])
-  result[8] = uint8((r[7] shl 2) or (r[8] shr 4))
-  result[9] = uint8((r[8] shl 4) or (r[9] shr 2))
-  result[10] = uint8((r[9] shl 6) or r[10])
-  result[11] = uint8((r[11] shl 2) or (r[12] shr 4))
-  result[12] = uint8((r[12] shl 4) or (r[13] shr 2))
-  result[13] = uint8((r[13] shl 6) or r[14])
+  dst[0] = uint8(t0 shr 8); dst[1] = uint8(t0)
+  dst[2] = uint8((shift shl 2) or (r[0] shr 4))
+  dst[3] = uint8((r[0] shl 4) or (r[1] shr 2))
+  dst[4] = uint8((r[1] shl 6) or r[2])
+  dst[5] = uint8((r[3] shl 2) or (r[4] shr 4))
+  dst[6] = uint8((r[4] shl 4) or (r[5] shr 2))
+  dst[7] = uint8((r[5] shl 6) or r[6])
+  dst[8] = uint8((r[7] shl 2) or (r[8] shr 4))
+  dst[9] = uint8((r[8] shl 4) or (r[9] shr 2))
+  dst[10] = uint8((r[9] shl 6) or r[10])
+  dst[11] = uint8((r[11] shl 2) or (r[12] shr 4))
+  dst[12] = uint8((r[12] shl 4) or (r[13] shr 2))
+  dst[13] = uint8((r[13] shl 6) or r[14])
+  14
 
 proc b44Unpack*(b: openArray[uint8], flat: bool): array[16, uint16] =
   ## Inverse of b44Pack (mirrors unpack14/unpack3 in internal_b44.c).
@@ -1315,8 +1321,9 @@ proc b44ApplyChunk*(planar: openArray[uint8], w, rows: int,
             s[iy * 4 + ix] = uint16(planar[o]) or (uint16(planar[o + 1]) shl 8)
         if pLinears[ci]:
           for i in 0..<16: s[i] = b44ExpTable[s[i]]
-        let enc = b44Pack(s, flatFields, not pLinears[ci])
-        for b in enc: result.add(b)
+        var enc: array[14, uint8]
+        let n = b44Pack(s, flatFields, not pLinears[ci], enc)
+        for i in 0..<n: result.add(enc[i])
         bx += 4
       by += 4
 

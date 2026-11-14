@@ -201,19 +201,22 @@ test "exr b44 pack/unpack round-trips":
   # Flat block (B44A short form + B44 long form agree after decode).
   var flat: array[16, uint16]
   for i in 0..<16: flat[i] = 0x3800'u16 # 0.5
-  let p3 = b44Pack(flat, true, true)
-  check p3.len == 3 and p3[2] == 0xFC'u8
-  let p14 = b44Pack(flat, false, true)
-  check p14.len == 14
-  check b44Unpack(p3, true) == flat
-  check b44Unpack(p14, false) == flat
+  var p3b: array[14, uint8]
+  let p3n = b44Pack(flat, true, true, p3b)
+  check p3n == 3 and p3b[2] == 0xFC'u8
+  var p14b: array[14, uint8]
+  let p14n = b44Pack(flat, false, true, p14b)
+  check p14n == 14
+  check b44Unpack(p3b.toOpenArray(0, p3n - 1), true) == flat
+  check b44Unpack(p14b.toOpenArray(0, p14n - 1), false) == flat
   # NaN/Inf inputs are replaced with zeroes before packing.
   var special: array[16, uint16]
   for i in 0..<16: special[i] = 0x3C00'u16
   special[0] = 0x7C00'u16 # +inf
   special[1] = 0xFFFF'u16 # NaN
-  let ps = b44Pack(special, false, true)
-  let back = b44Unpack(ps, false)
+  var psb: array[14, uint8]
+  let psn = b44Pack(special, false, true, psb)
+  let back = b44Unpack(psb.toOpenArray(0, psn - 1), false)
   check back[0] == 0x0000'u16
   check back[1] == 0x0000'u16
   check back[2] == 0x3C00'u16
