@@ -7,6 +7,7 @@ import ../buffer
 import ../dynamic
 import ../zlibwrap
 import ../simd
+import buffalo
 
 const PngSig* = [137'u8, 80, 78, 71, 13, 10, 26, 10]
 
@@ -455,19 +456,23 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
       let ph = (h - Adam7Y[pass] + Adam7DY[pass] - 1) div Adam7DY[pass]
       if pw == 0 or ph == 0: continue
       let passBytes = (pw * channels * int(bitDepth) + 7) div 8
-      var prev = newSeq[uint8](passBytes)
-      var cur = newSeq[uint8](passBytes)
+      var prevPool = initPool(uint8, passBytes)
+      var curPool = initPool(uint8, passBytes)
       var passRows = newSeq[uint8](ph * passBytes)
-      for y in 0..<ph:
-        if p + 1 + passBytes > inflated.len:
-          return err[DynamicImage](decodingError("png: truncated Adam7"))
-        let f = inflated[p]; inc(p)
-        copyMem(addr cur[0], unsafeAddr inflated[p], passBytes)
-        p += passBytes
-        if not simdUnfilterRow(f, cur, prev, fbpp):
-          return err[DynamicImage](decodingError("png: bad filter"))
-        for i in 0..<passBytes: passRows[y*passBytes+i] = cur[i]
-        copyMem(addr prev[0], addr cur[0], passBytes)
+      withBorrows(prevPool, prev, curPool, cur):
+        prev.setLen(passBytes)
+        cur.setLen(passBytes)
+        for y in 0..<ph:
+          if p + 1 + passBytes > inflated.len:
+            return err[DynamicImage](decodingError("png: truncated Adam7"))
+          let f = inflated[p]; inc(p)
+          blit(cur.toOpenArray(), inflated.toOpenArray(p, p + passBytes - 1))
+          p += passBytes
+          if not simdUnfilterRow(f, cur.data, prev.data, fbpp):
+            return err[DynamicImage](decodingError("png: bad filter"))
+          blit(passRows.toOpenArray(y * passBytes, (y + 1) * passBytes - 1),
+            cur.toOpenArray())
+          blit(prev.toOpenArray(), cur.toOpenArray())
       if bitDepth >= 8:
         let bpc = channels * sampBytes
         for y in 0..<ph:
