@@ -400,7 +400,7 @@ proc setPxU8(buf: var seq[uint8], pos: int, y, u, v: uint8) =
   buf[pos + 1] = yuvToG(y, u, v)
   buf[pos + 2] = yuvToB(y, u)
 
-proc fillRowFancy2(row: var seq[uint8], yRow, u1, u2, v1, v2: seq[uint8]) =
+proc fillRowFancy2(row: var seq[uint8], yRow, u1, u2, v1, v2: openArray[uint8]) =
   ## Two-UV-row fancy interpolation over one output row (row.len = yRow.len*3).
   setPxU8(row, 0, yRow[0], fancyChroma(u1[0], u1[0], u2[0], u2[0]),
     fancyChroma(v1[0], v1[0], v2[0], v2[0]))
@@ -420,7 +420,7 @@ proc fillRowFancy2(row: var seq[uint8], yRow, u1, u2, v1, v2: seq[uint8]) =
       fancyChroma(u1[^1], u1[^1], u2[^1], u2[^1]),
       fancyChroma(v1[^1], v1[^1], v2[^1], v2[^1]))
 
-proc fillRowFancy1(row: var seq[uint8], yRow, uRow, vRow: seq[uint8]) =
+proc fillRowFancy1(row: var seq[uint8], yRow, uRow, vRow: openArray[uint8]) =
   ## Single-UV-row fancy interpolation (top/bottom edge rows).
   setPxU8(row, 0, yRow[0], uRow[0], vRow[0])
   var pi = 1
@@ -443,23 +443,27 @@ proc fillRgbFancy(buf: var seq[uint8], yBuf, uBuf, vBuf: seq[uint8],
   let chromaBufW = bufWidth div 2
   let chromaW = (width + 1) div 2
   var topRow = newSeq[uint8](width * 3)
-  fillRowFancy1(topRow, yBuf[0..<width], uBuf[0..<chromaW], vBuf[0..<chromaW])
+  fillRowFancy1(topRow, toOpenArray(yBuf, 0, width - 1),
+    toOpenArray(uBuf, 0, chromaW - 1), toOpenArray(vBuf, 0, chromaW - 1))
   for i in 0..<topRow.len: buf[i] = topRow[i]
   var outPos = width * 3
   var yPos = bufWidth
   var cPos = 0
+  var row1 = newSeq[uint8](width * 3)
+  var row2 = newSeq[uint8](width * 3)
   while outPos + 2 * width * 3 <= buf.len and
       yPos + 2 * bufWidth <= height * bufWidth:
-    let u1 = uBuf[cPos..<cPos + chromaBufW]
-    let u2 = uBuf[cPos + chromaBufW..<cPos + 2 * chromaBufW]
-    let v1 = vBuf[cPos..<cPos + chromaBufW]
-    let v2 = vBuf[cPos + chromaBufW..<cPos + 2 * chromaBufW]
-    var row1 = newSeq[uint8](width * 3)
-    var row2 = newSeq[uint8](width * 3)
-    fillRowFancy2(row1, yBuf[yPos..<yPos + width], u1[0..<chromaW],
-      u2[0..<chromaW], v1[0..<chromaW], v2[0..<chromaW])
-    fillRowFancy2(row2, yBuf[yPos + bufWidth..<yPos + bufWidth + width],
-      u2[0..<chromaW], u1[0..<chromaW], v2[0..<chromaW], v1[0..<chromaW])
+    fillRowFancy2(row1, toOpenArray(yBuf, yPos, yPos + width - 1),
+      toOpenArray(uBuf, cPos, cPos + chromaW - 1),
+      toOpenArray(uBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
+      toOpenArray(vBuf, cPos, cPos + chromaW - 1),
+      toOpenArray(vBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1))
+    fillRowFancy2(row2, toOpenArray(yBuf, yPos + bufWidth,
+        yPos + bufWidth + width - 1),
+      toOpenArray(uBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
+      toOpenArray(uBuf, cPos, cPos + chromaW - 1),
+      toOpenArray(vBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
+      toOpenArray(vBuf, cPos, cPos + chromaW - 1))
     for i in 0..<row1.len:
       buf[outPos + i] = row1[i]
       buf[outPos + width * 3 + i] = row2[i]
@@ -470,8 +474,9 @@ proc fillRgbFancy(buf: var seq[uint8], yBuf, uBuf, vBuf: seq[uint8],
     let chromaH = (height + 1) div 2
     let startC = (chromaH - 1) * chromaBufW
     var rowL = newSeq[uint8](width * 3)
-    fillRowFancy1(rowL, yBuf[yPos..<yPos + width],
-      uBuf[startC..<startC + chromaW], vBuf[startC..<startC + chromaW])
+    fillRowFancy1(rowL, toOpenArray(yBuf, yPos, yPos + width - 1),
+      toOpenArray(uBuf, startC, startC + chromaW - 1),
+      toOpenArray(vBuf, startC, startC + chromaW - 1))
     for i in 0..<rowL.len: buf[outPos + i] = rowL[i]
 
 # ---------- intra prediction (Section 12, RFC 6386) ----------
@@ -1292,11 +1297,10 @@ proc decodeFrame(dec: var Vp8Decoder): Vp8Frame =
       dec.intraPredictLuma(mbx, mby, mb, blocks)
       dec.intraPredictChroma(mbx, mby, mb, blocks)
       dec.macroblocks.add(mb)
-    dec.leftBorderY = newSeq[uint8](17)
+    # Row-boundary reset: refill the existing seqs in place instead of
+    # allocating fresh ones per macroblock row (steady-state zero-alloc).
     for i in 0..<17: dec.leftBorderY[i] = 129
-    dec.leftBorderU = newSeq[uint8](9)
     for i in 0..<9: dec.leftBorderU[i] = 129
-    dec.leftBorderV = newSeq[uint8](9)
     for i in 0..<9: dec.leftBorderV[i] = 129
   for mby in 0..<dec.mbh:
     for mbx in 0..<dec.mbw:
