@@ -6,6 +6,7 @@
 ## loop-filter awareness.
 import std/math
 import std/algorithm
+import buffalo
 import ./vp8
 import ./vp8tables
 import ../error
@@ -538,6 +539,65 @@ proc writeCoeffs(e: var BoolEnc, qblk: array[16, int32], plane, cx,
       skip = false
       cxv = if av == 0: 0 elif av == 1: 1 else: 2
 
+# ---------- reusable border scratch (buffalo-backed, encoder-local) ----------
+#
+# The RDO search and the final pipeline build one 21x17 luma border (357 B)
+# and 9x9 chroma borders (81 B) per candidate/block. The shared
+# `createBorderLuma/Chroma` (vp8.nim) allocate a fresh seq per call, which is
+# hundreds of thousands of small allocations per photo encode. These fill
+# variants compute byte-identical borders into caller-owned backing (a
+# buffalo pool's seq, cleared and reused per MB in runVp8Pass), so the hot
+# loop stays allocation-free in steady state. The decoder keeps using the
+# allocating originals untouched.
+
+proc fillBorderLuma*(dst: var seq[uint8], mbx, mby, mbw: int,
+    top, left: seq[uint8]) =
+  if dst.len < 357: dst.setLen(357)
+  # Zero the backing first: createBorderLuma starts from a zeroed seq and
+  # only writes the border regions, so predictors must observe zeros (not
+  # previous-MB garbage) in the untouched interior. One 357 B memset per
+  # call is noise next to the float64 DCT work that follows.
+  zeroMem(addr dst[0], 357)
+  let stride = 21
+  if mby == 0:
+    for i in 1..<stride: dst[i] = 127
+  else:
+    for i in 0..<16: dst[1 + i] = top[mbx * 16 + i]
+    if mbx == mbw - 1:
+      for i in 16..<20: dst[1 + i] = top[mbx * 16 + 15]
+    else:
+      for i in 16..<20: dst[1 + i] = top[mbx * 16 + i]
+  for i in 17..<stride:
+    dst[4 * stride + i] = dst[i]
+    dst[8 * stride + i] = dst[i]
+    dst[12 * stride + i] = dst[i]
+  if mbx == 0:
+    for i in 0..<16: dst[(i + 1) * stride] = 129
+  else:
+    for i in 0..<16: dst[(i + 1) * stride] = left[1 + i]
+  dst[0] =
+    if mby == 0: 127'u8
+    elif mbx == 0: 129'u8
+    else: left[0]
+
+proc fillBorderChroma*(dst: var seq[uint8], mbx, mby: int,
+    top, left: seq[uint8]) =
+  if dst.len < 81: dst.setLen(81)
+  zeroMem(addr dst[0], 81)
+  let stride = 9
+  if mby == 0:
+    for i in 1..<stride: dst[i] = 127
+  else:
+    for i in 0..<8: dst[1 + i] = top[mbx * 8 + i]
+  if mbx == 0:
+    for y in 0..<8: dst[(y + 1) * stride] = 129
+  else:
+    for y in 0..<8: dst[(y + 1) * stride] = left[1 + y]
+  dst[0] =
+    if mby == 0: 127'u8
+    elif mbx == 0: 129'u8
+    else: left[0]
+
 # ---------- encoder state (mirrors decoder prediction state) ----------
 
 type Vp8Enc = object
@@ -599,8 +659,8 @@ proc initVp8Enc(w, h: int, qi: int): Vp8Enc =
 # existing pipeline, keeping a single source of truth for emission.
 
 proc rdoPredictLuma16(m: LumaMode, mbx, mby, mbw: int, topB,
-    leftB: seq[uint8]): array[256, uint8] =
-  var ws = createBorderLuma(mbx, mby, mbw, topB, leftB)
+    leftB: seq[uint8], ws: var seq[uint8]): array[256, uint8] =
+  fillBorderLuma(ws, mbx, mby, mbw, topB, leftB)
   case m
   of lmV: predictVpred(ws, 16, 1, 1, 21)
   of lmH: predictHpred(ws, 16, 1, 1, 21)
@@ -683,32 +743,32 @@ proc rdoReconLuma16(pred: array[256, uint8],
 
 proc rdoQuantSplit(src: array[256, uint8], mbx, mby, mbw: int, topB,
     leftB: seq[uint8], bmodes: array[16, IntraMode], ydc,
-    yac: int16): tuple[qY: array[16, array[16, int32]], allZero: bool] =
+    yac: int16, ws: var seq[uint8]): tuple[qY: array[16, array[16, int32]], allZero: bool] =
   ## Split residual vs the source proxy (mirrors the final quant path,
   ## which fills interior workspaces from prox for each block).
   result.allZero = true
   for i in 0..<16:
     let bx = (i mod 4) * 4; let by = (i div 4) * 4
-    var ws2 = createBorderLuma(mbx, mby, mbw, topB, leftB)
+    fillBorderLuma(ws, mbx, mby, mbw, topB, leftB)
     for y in 0..<by + 4:
       for x in 0..<bx + 4:
-        ws2[(1 + y) * 21 + 1 + x] = src[y * 16 + x]
+        ws[(1 + y) * 21 + 1 + x] = src[y * 16 + x]
     case bmodes[i]
-    of imTm: predictTmpred(ws2, 4, 1 + bx, 1 + by, 21)
-    of imVe: predictBvepred(ws2, 1 + bx, 1 + by, 21)
-    of imHe: predictBhepred(ws2, 1 + bx, 1 + by, 21)
-    of imDc: predictBdcpred(ws2, 1 + bx, 1 + by, 21)
-    of imLd: predictBldpred(ws2, 1 + bx, 1 + by, 21)
-    of imRd: predictBrdpred(ws2, 1 + bx, 1 + by, 21)
-    of imVr: predictBvrpred(ws2, 1 + bx, 1 + by, 21)
-    of imVl: predictBvlpred(ws2, 1 + bx, 1 + by, 21)
-    of imHd: predictBhdpred(ws2, 1 + bx, 1 + by, 21)
-    of imHu: predictBhupred(ws2, 1 + bx, 1 + by, 21)
+    of imTm: predictTmpred(ws, 4, 1 + bx, 1 + by, 21)
+    of imVe: predictBvepred(ws, 1 + bx, 1 + by, 21)
+    of imHe: predictBhepred(ws, 1 + bx, 1 + by, 21)
+    of imDc: predictBdcpred(ws, 1 + bx, 1 + by, 21)
+    of imLd: predictBldpred(ws, 1 + bx, 1 + by, 21)
+    of imRd: predictBrdpred(ws, 1 + bx, 1 + by, 21)
+    of imVr: predictBvrpred(ws, 1 + bx, 1 + by, 21)
+    of imVl: predictBvlpred(ws, 1 + bx, 1 + by, 21)
+    of imHd: predictBhdpred(ws, 1 + bx, 1 + by, 21)
+    of imHu: predictBhupred(ws, 1 + bx, 1 + by, 21)
     var blk: array[16, float64]
     for y in 0..<4:
       for x in 0..<4:
         blk[y * 4 + x] = float64(int(src[(by + y) * 16 + bx + x])) -
-          float64(int(ws2[(1 + by + y) * 21 + 1 + bx + x]))
+          float64(int(ws[(1 + by + y) * 21 + 1 + bx + x]))
     let f = fdct4x4(blk)
     for k in 0..<16:
       let q = if k == 0: ydc else: yac
@@ -718,9 +778,10 @@ proc rdoQuantSplit(src: array[256, uint8], mbx, mby, mbw: int, topB,
 
 proc rdoReconSplit(bmodes: array[16, IntraMode],
     qY: array[16, array[16, int32]], mbx, mby, mbw: int, topB,
-    leftB: seq[uint8], ydc, yac: int16): array[256, uint8] =
+    leftB: seq[uint8], ydc, yac: int16,
+    ws: var seq[uint8]): array[256, uint8] =
   ## Sequential causal reconstruction (mirrors the final recon path).
-  var ws = createBorderLuma(mbx, mby, mbw, topB, leftB)
+  fillBorderLuma(ws, mbx, mby, mbw, topB, leftB)
   var resdata: array[384, int32]
   for i in 0..<16:
     var blk: array[16, int32]
@@ -754,10 +815,10 @@ proc rdoSplitJ(srcY: array[256, uint8], mbx, mby, mbw: int, topB,
     leftB: seq[uint8], bmodes: array[16, IntraMode],
     topBp: array[16, IntraMode], leftBp: array[16, IntraMode], topCx,
     leftCx: array[9, uint8], ydc, yac: int16,
-    lambda: float64): tuple[j, ssd, rate: float64] =
+    lambda: float64, ws: var seq[uint8]): tuple[j, ssd, rate: float64] =
   ## Full RD cost of the split candidate (mode + bpred + coeff bits).
   let (qY, allZero) = rdoQuantSplit(srcY, mbx, mby, mbw, topB, leftB,
-    bmodes, ydc, yac)
+    bmodes, ydc, yac, ws)
   var rate = treeCost(YmodeNodes, 4)
   var ab: array[4, int]
   for x in 0..<4: ab[x] = ord(topBp[12 + x])
@@ -778,14 +839,14 @@ proc rdoSplitJ(srcY: array[256, uint8], mbx, mby, mbw: int, topB,
     lCx[y + 1] = lc
   rate += bitCost(64'u8, allZero)
   let recon = rdoReconSplit(bmodes, qY, mbx, mby, mbw, topB, leftB,
-    ydc, yac)
+    ydc, yac, ws)
   let ssd = ssd16(srcY, recon)
   (ssd + lambda * rate, ssd, rate)
 
 proc rdoPredictChroma(cm: ChromaMode, mbx, mby: int, topU, leftU,
-    topV, leftV: seq[uint8]): tuple[pu, pv: array[64, uint8]] =
-  var uws = createBorderChroma(mbx, mby, topU, leftU)
-  var vws = createBorderChroma(mbx, mby, topV, leftV)
+    topV, leftV: seq[uint8], uws, vws: var seq[uint8]): tuple[pu, pv: array[64, uint8]] =
+  fillBorderChroma(uws, mbx, mby, topU, leftU)
+  fillBorderChroma(vws, mbx, mby, topV, leftV)
   case cm
   of cmDc:
     predictDcpred(uws, 8, 9, mby != 0, mbx != 0)
@@ -847,9 +908,9 @@ proc rdoRateChroma(qU, qV: array[4, array[16, int32]], topCx,
 proc rdoReconChroma(pu, pv: array[64, uint8],
     qU, qV: array[4, array[16, int32]], mbx, mby: int, topU, leftU,
     topV, leftV: seq[uint8], uvdc,
-    uvac: int16): tuple[ru, rv: array[64, uint8]] =
-  var uws = createBorderChroma(mbx, mby, topU, leftU)
-  var vws = createBorderChroma(mbx, mby, topV, leftV)
+    uvac: int16, uws, vws: var seq[uint8]): tuple[ru, rv: array[64, uint8]] =
+  fillBorderChroma(uws, mbx, mby, topU, leftU)
+  fillBorderChroma(vws, mbx, mby, topV, leftV)
   for y in 0..<8:
     for x in 0..<8:
       uws[(1 + y) * 9 + 1 + x] = pu[y * 8 + x]
@@ -993,6 +1054,20 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
   var enc = initVp8Enc(w, h, qi)
   let mbw = enc.mbw; let mbh = enc.mbh
 
+  # Reusable border scratch for the MB loop below. Each pool's `.data` seq
+  # is cleared per MB (one `len` store) and threaded through the RDO helpers
+  # and final pipeline as the `ws` argument, replacing the per-candidate
+  # `createBorderLuma/Chroma` allocations. The backing grows once, then
+  # stays flat; nothing here escapes the MB iteration (workspaces are only
+  # passed as `var seq` args, results are copied out), so manual clear is
+  # sufficient — no borrow scope needed. Luma (357 B) and the two chroma
+  # workspaces (81 B) must be simultaneously live; the SATD scratch is
+  # refilled per sub-block.
+  var lumaWsPool = initPool(uint8, 357)
+  var chromaAPool = initPool(uint8, 81)
+  var chromaBPool = initPool(uint8, 81)
+  var satdPool = initPool(uint8, 81)
+
   # --- bool header (mirrors readFrameHeader) ---
   hdr.putLiteral(0, 1) # colorspace
   hdr.putLiteral(0, 1) # pixel type
@@ -1026,6 +1101,10 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
       imDc, imDc, imDc, imDc, imDc, imDc, imDc, imDc]
     for i in 0..<9: enc.leftCx[i] = 0
     for mbx in 0..<mbw:
+      lumaWsPool.clear()
+      chromaAPool.clear()
+      chromaBPool.clear()
+      satdPool.clear()
       # source blocks
       var srcY: array[256, uint8]
       for y in 0..<16:
@@ -1050,7 +1129,7 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
       var bestJ = Inf
       for m in [lmDc, lmV, lmH, lmTm]:
         let pred = rdoPredictLuma16(m, mbx, mby, mbw, enc.topBorderY,
-          enc.leftBorderY)
+          enc.leftBorderY, lumaWsPool.data)
         let (qY16, qY216, z16) = rdoQuantLuma16(pred, srcY, enc.ydc,
           enc.yac, enc.y2dc, enc.y2ac)
         let lmVal = case m
@@ -1081,8 +1160,9 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
       for sby in 0..<4:
         for sbx in 0..<4:
           let i = sbx + sby * 4
-          var scr = newSeq[uint8](81)
-          # 9x9 scratch: corner + top row + left col from proxy/borders
+          var scr = satdPool.data
+          # 9x9 scratch: corner + top row + left col from proxy/borders.
+          # Fully refilled every sub-block, so the shared backing is safe.
           let gx = mbx * 16 + sbx * 4
           let gy = mby * 16 + sby * 4
           for k in 0..<9:
@@ -1131,7 +1211,7 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
       # split candidate RDO with the SATD-chosen sub-modes
       let (spJ, _, _) = rdoSplitJ(srcY, mbx, mby, mbw, enc.topBorderY,
         enc.leftBorderY, bmodes, enc.topBpred[mbx], enc.leftBpred, tCxY,
-        lCxY, enc.ydc, enc.yac, lambdaY)
+        lCxY, enc.ydc, enc.yac, lambdaY, lumaWsPool.data)
       let lumaMode = if spJ < bestJ: lmB else: bestMode
       when defined(vp8encTrace):
         if mbx == 0 and mby == 0:
@@ -1143,7 +1223,8 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
       var bestJc = Inf
       for cm in [cmDc, cmV, cmH, cmTm]:
         let (pu, pv) = rdoPredictChroma(cm, mbx, mby, enc.topBorderU,
-          enc.leftBorderU, enc.topBorderV, enc.leftBorderV)
+          enc.leftBorderU, enc.topBorderV, enc.leftBorderV, chromaAPool.data,
+          chromaBPool.data)
         let (qUc, qVc, zC) = rdoQuantChroma(pu, pv, srcU, srcV, enc.uvdc,
           enc.uvac)
         let cmVal = case cm
@@ -1159,7 +1240,8 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
           crate += rdoRateChroma(qUc, qVc, tCxY, lCxY)
           let (ru, rv) = rdoReconChroma(pu, pv, qUc, qVc, mbx, mby,
             enc.topBorderU, enc.leftBorderU, enc.topBorderV,
-            enc.leftBorderV, enc.uvdc, enc.uvac)
+            enc.leftBorderV, enc.uvdc, enc.uvac, chromaAPool.data,
+            chromaBPool.data)
           cssd = ssd8(srcU, ru) + ssd8(srcV, rv)
         let cj = cssd + lambdaC * crate
         if cj < bestJc:
@@ -1177,29 +1259,29 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
       if lumaMode == lmB:
         for i in 0..<16:
           let bx = (i mod 4) * 4; let by = (i div 4) * 4
-          var ws2 = createBorderLuma(mbx, mby, mbw, enc.topBorderY,
+          fillBorderLuma(lumaWsPool.data, mbx, mby, mbw, enc.topBorderY,
             enc.leftBorderY)
           # predict the single block with chosen mode (interior blocks
           # see source-proxy neighbors, matching the search)
           for y in 0..<by + 4:
             for x in 0..<bx + 4:
-              ws2[(1 + y) * 21 + 1 + x] = prox[y * 16 + x]
+              lumaWsPool.data[(1 + y) * 21 + 1 + x] = prox[y * 16 + x]
           case bmodes[i]
-          of imTm: predictTmpred(ws2, 4, 1 + bx, 1 + by, 21)
-          of imVe: predictBvepred(ws2, 1 + bx, 1 + by, 21)
-          of imHe: predictBhepred(ws2, 1 + bx, 1 + by, 21)
-          of imDc: predictBdcpred(ws2, 1 + bx, 1 + by, 21)
-          of imLd: predictBldpred(ws2, 1 + bx, 1 + by, 21)
-          of imRd: predictBrdpred(ws2, 1 + bx, 1 + by, 21)
-          of imVr: predictBvrpred(ws2, 1 + bx, 1 + by, 21)
-          of imVl: predictBvlpred(ws2, 1 + bx, 1 + by, 21)
-          of imHd: predictBhdpred(ws2, 1 + bx, 1 + by, 21)
-          of imHu: predictBhupred(ws2, 1 + bx, 1 + by, 21)
+          of imTm: predictTmpred(lumaWsPool.data, 4, 1 + bx, 1 + by, 21)
+          of imVe: predictBvepred(lumaWsPool.data, 1 + bx, 1 + by, 21)
+          of imHe: predictBhepred(lumaWsPool.data, 1 + bx, 1 + by, 21)
+          of imDc: predictBdcpred(lumaWsPool.data, 1 + bx, 1 + by, 21)
+          of imLd: predictBldpred(lumaWsPool.data, 1 + bx, 1 + by, 21)
+          of imRd: predictBrdpred(lumaWsPool.data, 1 + bx, 1 + by, 21)
+          of imVr: predictBvrpred(lumaWsPool.data, 1 + bx, 1 + by, 21)
+          of imVl: predictBvlpred(lumaWsPool.data, 1 + bx, 1 + by, 21)
+          of imHd: predictBhdpred(lumaWsPool.data, 1 + bx, 1 + by, 21)
+          of imHu: predictBhupred(lumaWsPool.data, 1 + bx, 1 + by, 21)
           var blk: array[16, float64]
           for y in 0..<4:
             for x in 0..<4:
               blk[y * 4 + x] = float64(int(prox[(by + y) * 16 + bx + x])) -
-                float64(int(ws2[(1 + by + y) * 21 + 1 + bx + x]))
+                float64(int(lumaWsPool.data[(1 + by + y) * 21 + 1 + bx + x]))
           let f = fdct4x4(blk)
           let sx = bx div 4; let sy = by div 4
           let cx = int(tCxS[sx + 1]) + int(lCxS[sy + 1])
@@ -1210,13 +1292,13 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
           lCxS[sy + 1] = (if tnz: 1 else: 0)
           tCxS[sx + 1] = (if tnz: 1 else: 0)
       else:
-        var ws3 = createBorderLuma(mbx, mby, mbw, enc.topBorderY,
+        fillBorderLuma(lumaWsPool.data, mbx, mby, mbw, enc.topBorderY,
           enc.leftBorderY)
         case lumaMode
-        of lmV: predictVpred(ws3, 16, 1, 1, 21)
-        of lmH: predictHpred(ws3, 16, 1, 1, 21)
-        of lmTm: predictTmpred(ws3, 16, 1, 1, 21)
-        of lmDc: predictDcpred(ws3, 16, 21, mby != 0, mbx != 0)
+        of lmV: predictVpred(lumaWsPool.data, 16, 1, 1, 21)
+        of lmH: predictHpred(lumaWsPool.data, 16, 1, 1, 21)
+        of lmTm: predictTmpred(lumaWsPool.data, 16, 1, 1, 21)
+        of lmDc: predictDcpred(lumaWsPool.data, 16, 21, mby != 0, mbx != 0)
         else: discard
         var dcBlks: array[16, float64]
         for i in 0..<16:
@@ -1225,7 +1307,7 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
           for y in 0..<4:
             for x in 0..<4:
               blk[y * 4 + x] = float64(int(srcY[(by + y) * 16 + bx + x])) -
-                float64(int(ws3[(1 + by + y) * 21 + 1 + bx + x]))
+                float64(int(lumaWsPool.data[(1 + by + y) * 21 + 1 + bx + x]))
           let f = fdct4x4(blk)
           dcBlks[i] = f[0]
           let sx = bx div 4; let sy = by div 4
@@ -1243,8 +1325,12 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
           if qY2[k] != 0: allZero = false
       # write the winning chroma prediction into the workspaces so the
       # residual below is src minus prediction (not src minus zeros)
-      var uws = createBorderChroma(mbx, mby, enc.topBorderU, enc.leftBorderU)
-      var vws = createBorderChroma(mbx, mby, enc.topBorderV, enc.leftBorderV)
+      fillBorderChroma(chromaAPool.data, mbx, mby, enc.topBorderU,
+        enc.leftBorderU)
+      fillBorderChroma(chromaBPool.data, mbx, mby, enc.topBorderV,
+        enc.leftBorderV)
+      var uws = chromaAPool.data
+      var vws = chromaBPool.data
       case bestCm
       of cmDc:
         predictDcpred(uws, 8, 9, mby != 0, mbx != 0)
@@ -1388,8 +1474,9 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
 
       # reconstruction (mirrors intraPredictLuma/Chroma, unfiltered)
       if lumaMode == lmB:
-        var ws = createBorderLuma(mbx, mby, mbw, enc.topBorderY,
+        fillBorderLuma(lumaWsPool.data, mbx, mby, mbw, enc.topBorderY,
           enc.leftBorderY)
+        var ws = lumaWsPool.data
         var resdata: array[384, int32]
         for i in 0..<16:
           var blk: array[16, int32]
@@ -1427,8 +1514,9 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
             enc.ybuf[(mby * 16 + y) * mbw * 16 + mbx * 16 + x] =
               ws[(1 + y) * 21 + 1 + x]
       else:
-        var ws = createBorderLuma(mbx, mby, mbw, enc.topBorderY,
+        fillBorderLuma(lumaWsPool.data, mbx, mby, mbw, enc.topBorderY,
           enc.leftBorderY)
+        var ws = lumaWsPool.data
         case lumaMode
         of lmV: predictVpred(ws, 16, 1, 1, 21)
         of lmH: predictHpred(ws, 16, 1, 1, 21)
@@ -1457,8 +1545,12 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
           for x in 0..<16:
             enc.ybuf[(mby * 16 + y) * mbw * 16 + mbx * 16 + x] =
               ws[(1 + y) * 21 + 1 + x]
-      var uwsF = createBorderChroma(mbx, mby, enc.topBorderU, enc.leftBorderU)
-      var vwsF = createBorderChroma(mbx, mby, enc.topBorderV, enc.leftBorderV)
+      fillBorderChroma(chromaAPool.data, mbx, mby, enc.topBorderU,
+        enc.leftBorderU)
+      fillBorderChroma(chromaBPool.data, mbx, mby, enc.topBorderV,
+        enc.leftBorderV)
+      var uwsF = chromaAPool.data
+      var vwsF = chromaBPool.data
       case bestCm
       of cmDc:
         predictDcpred(uwsF, 8, 9, mby != 0, mbx != 0)
@@ -1491,11 +1583,10 @@ proc runVp8Pass(ypl, upl, vpl: seq[uint8], w, h, qi, quality: int,
             uwsF[(1 + y) * 9 + 1 + x]
           enc.vbuf[(mby * 8 + y) * mbw * 8 + mbx * 8 + x] =
             vwsF[(1 + y) * 9 + 1 + x]
-    enc.leftBorderY = newSeq[uint8](17)
+    # Row-boundary reset: reuse the existing seqs in place instead of
+    # allocating fresh ones per row (steady-state zero-alloc).
     for i in 0..<17: enc.leftBorderY[i] = 129
-    enc.leftBorderU = newSeq[uint8](9)
     for i in 0..<9: enc.leftBorderU[i] = 129
-    enc.leftBorderV = newSeq[uint8](9)
     for i in 0..<9: enc.leftBorderV[i] = 129
 proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
   ## Intra-only VP8 keyframe. Returns the raw VP8 frame bitstream
@@ -1511,26 +1602,26 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
   let mbw = (w + 15) div 16; let mbh = (h + 15) div 16
 
   # --- RGB -> YUV420, edge-padded to the MB grid ---
+  # Single pass over the source: each padded position evaluates rgbToYuv601
+  # once (previous code evaluated every pixel twice — once for Y, once for
+  # the chroma box average). Y is stored with edge replication as before;
+  # U/V accumulate the same available-sample sums and rounding.
   var ypl = newSeq[uint8](mbw * 16 * mbh * 16)
   var upl = newSeq[uint8](mbw * 8 * mbh * 8)
   var vpl = newSeq[uint8](mbw * 8 * mbh * 8)
-  for y in 0..<mbh * 16:
-    let sy = min(y, h - 1)
-    for x in 0..<mbw * 16:
-      let sx = min(x, w - 1)
-      let p = img.pixels[sy * w + sx]
-      let (yy, _, _) = rgbToYuv601(p.data[0], p.data[1], p.data[2])
-      ypl[y * mbw * 16 + x] = yy
-  # 4:2:0 box average over available samples (edges replicate)
   for y in 0..<(mbh * 8):
     for x in 0..<(mbw * 8):
       var su, sv, n = 0
       for dy in 0..1:
+        let sy = y * 2 + dy
+        let csy = min(sy, h - 1)
         for dx in 0..1:
-          let sx = x * 2 + dx; let sy = y * 2 + dy
+          let sx = x * 2 + dx
+          let csx = min(sx, w - 1)
+          let p = img.pixels[csy * w + csx]
+          let (yy, uu, vv) = rgbToYuv601(p.data[0], p.data[1], p.data[2])
+          ypl[sy * mbw * 16 + sx] = yy
           if sx < w and sy < h:
-            let p = img.pixels[sy * w + sx]
-            let (_, uu, vv) = rgbToYuv601(p.data[0], p.data[1], p.data[2])
             su += int(uu); sv += int(vv); inc n
       if n == 0:
         upl[y * mbw * 8 + x] = 128
