@@ -118,9 +118,11 @@ proc getArray(ifd: TiffIfd, tag: uint16, e: TiffEndian, n: int,
     for i in 0..<result.len: result[i] = valU32(v, i, e)
 
 proc unpackBits(row: openArray[uint8], n: int, bits: int,
-    fillLsb: bool): seq[uint16] =
-  ## Unpack n samples of `bits` width (1/2/4) to uint16 values.
-  result = newSeq[uint16](n)
+    fillLsb: bool, dst: var seq[uint16]) =
+  ## Unpack n samples of `bits` width (1/2/4) to uint16 values into
+  ## caller-owned `dst` (grown once, refilled per row) instead of a fresh
+  ## seq per call.
+  if dst.len < n: dst.setLen(n)
   var bi = 0
   for i in 0..<n:
     var v = 0
@@ -132,7 +134,7 @@ proc unpackBits(row: openArray[uint8], n: int, bits: int,
           int((row[bi div 8] shr uint8(bi mod 8)) and 1)
       v = (v shl 1) or bit
       inc bi
-    result[i] = uint16(v)
+    dst[i] = uint16(v)
 
 proc undoPredictor(data: var seq[uint8], w, channels, bits: int) =
   ## Horizontal differencing (predictor 2) for 8/16-bit integer samples.
@@ -626,12 +628,14 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
                 full[((ty*rowsPerChunk+r)*w + tx*tw+x)*spp*bytesPerSample + c*bytesPerSample+b] =
                   blk[r*rb + x*spp*bytesPerSample + c*bytesPerSample+b]
       else:
-        # sub-byte tiles: unpack then place
+        # sub-byte tiles: unpack then place (one row buffer reused
+        # across the tile's rows instead of per-row alloc)
+        var rowSamp = newSeq[uint16](cw * spp)
         for r in 0..<chh:
           let srcRb = (cw * spp * bitDepth + 7) div 8
           let dstRb = (w * spp * bitDepth + 7) div 8
-          var rowSamp = unpackBits(blk[r*srcRb..<r*srcRb+srcRb],
-            cw * spp, bitDepth, fillLsb)
+          unpackBits(blk.toOpenArray(r*srcRb, r*srcRb+srcRb-1),
+            cw * spp, bitDepth, fillLsb, rowSamp)
           for x in 0..<cw*spp:
             let dstBit = (ty*rowsPerChunk+r)*w*spp + tx*tw*spp + x
             # need full[] as packed bits: write bit
