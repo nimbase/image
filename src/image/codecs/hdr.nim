@@ -81,14 +81,15 @@ proc decodeHdr*(data: seq[uint8]): ImageResult[Rgb32FImage] =
     return ok(Rgb32FImage(width: w, height: h, pixels: @[]))
   let n = int(w) * int(h)
   var px = newSeq[Rgb[float32]](n)
-  # scanlines top-down, each of width w
+  # scanlines top-down, each of width w. One scanline buffer reused
+  # across rows (each row fully overwrites it) instead of per-row alloc.
+  var scan = newSeq[Rgbe](int(w))
   var idx = 0
   for _ in 0..<int(h):
     if pos + 4 > data.len:
       return err[Rgb32FImage](decodingError("hdr: truncated scanline"))
     let fb: Rgbe = (data[pos], data[pos+1], data[pos+2], data[pos+3])
     pos += 4
-    var scan = newSeq[Rgbe](int(w))
     if fb.r == 2 and fb.g == 2 and fb.e < 128:
       # new RLE per component; fb.b holds high byte of width? Reference ignores, uses w.
       # Actually marker is (2,2,hi,lo); validate loosely.
