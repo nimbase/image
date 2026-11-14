@@ -37,5 +37,11 @@ check the return type before calling `.value`.
 - WebP lossy encode is VP8 intra-only keyframes, single partition, RDO
   mode search over fully-quantized candidates + trellis-refined levels
   + two-pass adaptive token probabilities.
+- WebP lossless encoder memory is tunable at compile time without touching
+  defaults: `-d:Vp8lHashBits=N` (10..22, default 18; LZ77 hash table holds
+  1 shl N ints) and `-d:Vp8lCacheBits=N` (1..11, default 7; color cache
+  holds 1 shl N entries). Defaults are the reference operating point and
+  produce the reference bytes; overrides stay spec-valid but may change
+  output bytes and compression.
 - GIF decode gives `GifImage`; use `gifFrameToRgba(gif, 0)` for frame 0.
   The converter composites frame 0 onto a full-canvas buffer.

@@ -775,11 +775,25 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
 
 # ---------- LZ77 + color-cache VP8L encoder (Phase A) ----------
 
-const Vp8lCacheBits = 7
-  ## Fixed color-cache exponent. The unused-cache overhead (flag bits +
-  ## zero RLE in the green tree) is a few bytes, not worth adapting.
+const Vp8lCacheBits {.intdefine.} = 7
+  ## Color-cache exponent (the cache holds 1 shl bits entries). Override at
+  ## compile time with `-d:Vp8lCacheBits=N` (1..11); the size is signaled in
+  ## the bitstream and any compliant decoder reads it back, so non-default
+  ## values stay valid but change output bytes and compression. The default
+  ## keeps the reference operating point.
+static:
+  assert Vp8lCacheBits >= 1 and Vp8lCacheBits <= 11,
+    "Vp8lCacheBits must be in 1..11"
 const Vp8lCacheSize = 1 shl Vp8lCacheBits
-const Vp8lHashBits = 18
+const Vp8lHashBits {.intdefine.} = 18
+  ## LZ77 hash-table exponent (table holds 1 shl bits int entries, ~8 bytes
+  ## each). Override with `-d:Vp8lHashBits=N` (10..22) to trade encoder
+  ## memory against match-finding reach: smaller tables evict sooner and
+  ## may change output bytes (still valid), larger ones cost ~8 bytes per
+  ## entry per parse pass. Default is the reference operating point.
+static:
+  assert Vp8lHashBits >= 10 and Vp8lHashBits <= 22,
+    "Vp8lHashBits must be in 10..22"
 const Vp8lHashSize = 1 shl Vp8lHashBits
 const Vp8lMaxMatch = 4096 ## longest copyDist length (prefix 23)
 const Vp8lMinMatch = 3
