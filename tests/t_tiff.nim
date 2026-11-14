@@ -79,3 +79,61 @@ test "tiff packbits":
   check dec.ok
   check dec.value.luma8.pixels[0].data == [10'u8]
   check dec.value.luma8.pixels[1].data == [10'u8]
+
+test "tiff tiled 1-bit decodes bit-exact":
+  # Hand-built LE classic TIFF: BlackIsZero 1-bit with 8x8 tiles over a
+  # 10x10 image (exercises full + partial edge tiles). Guards the packed
+  # row-bit placement (byteIdx must not double-count the row offset) and
+  # the pooled sub-byte row scratch.
+  proc buildTiled1(w, h, tw, th: int,
+      bitAt: proc(x, y: int): bool): seq[uint8] =
+    var d = @[uint8('I'), uint8('I'), 42, 0, 8, 0, 0, 0]
+    template e16(v: uint16) =
+      d.add([uint8(v and 0xFF), uint8((v shr 8) and 0xFF)])
+    template e32(v: uint32) =
+      d.add([uint8(v and 0xFF), uint8((v shr 8) and 0xFF),
+        uint8((v shr 16) and 0xFF), uint8((v shr 24) and 0xFF)])
+    template ent(tag, typ: uint16, cnt, val: uint32) =
+      e16(tag); e16(typ); e32(cnt); e32(val)
+    let across = (w + tw - 1) div tw
+    let down = (h + th - 1) div th
+    let n = across * down
+    var tiles = newSeq[uint8]()
+    var offs = newSeq[uint32](n)
+    var cnts = newSeq[uint32](n)
+    for ty in 0..<down:
+      for tx in 0..<across:
+        let cw = min(tw, w - tx * tw); let chh = min(th, h - ty * th)
+        let rb = (cw + 7) div 8
+        offs[ty * across + tx] = uint32(tiles.len)
+        for r in 0..<chh:
+          var row = newSeq[uint8](rb)
+          for x in 0..<cw:
+            if bitAt(tx * tw + x, ty * th + r):
+              row[x div 8] = row[x div 8] or uint8(1 shl (7 - (x mod 8)))
+          tiles.add(row)
+        cnts[ty * across + tx] = uint32(rb * chh)
+    # header(8) + count(2) + 10 entries(120) + next(4); then offset arrays.
+    let arrOff = 8 + 2 + 10 * 12 + 4
+    let tileOff = arrOff + n * 4 * 2
+    for i in 0..<n: offs[i] += uint32(tileOff)
+    e16(uint16(10))
+    ent(256, 3, 1, uint32(w)); ent(257, 3, 1, uint32(h))
+    ent(258, 3, 1, 1); ent(259, 3, 1, 1); ent(262, 3, 1, 1)
+    ent(322, 3, 1, uint32(tw)); ent(323, 3, 1, uint32(th))
+    ent(324, 4, uint32(n), uint32(arrOff))
+    ent(325, 4, uint32(n), uint32(arrOff + n * 4))
+    ent(277, 3, 1, 1)
+    e32(0)
+    for o in offs: e32(o)
+    for c in cnts: e32(c)
+    d.add(tiles)
+    d
+  let img = buildTiled1(10, 10, 8, 8, proc(x, y: int): bool = (x + y) mod 2 == 0)
+  let tdec = decodeTiff(img)
+  check tdec.ok
+  check tdec.value.dimensions() == (10'u32, 10'u32)
+  for y in 0..<10:
+    for x in 0..<10:
+      let want = if (x + y) mod 2 == 0: 255'u8 else: 0'u8
+      check tdec.value.luma8.pixels[y * 10 + x].data == [want]
