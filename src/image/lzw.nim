@@ -98,10 +98,13 @@ proc decodeLzwTiff*(data: seq[uint8], expectedLen = 0): ImageResult[seq[uint8]] 
 
 proc encodeLzwGif*(indices: openArray[uint8], minCodeSize: int): seq[uint8] =
   ## Simple GIF LZW encoder: clear + codes + eoi, LSB packing.
+  ## Dictionary keys are ints (`prefixCode shl 8 or byte`), so encoding
+  ## allocates nothing per pixel (the old string-keyed table built one
+  ## short string per input byte).
   let clear = 1 shl minCodeSize
   let eoi = clear + 1
   var width = minCodeSize + 1
-  var outBytes: seq[uint8] = @[]
+  var outBytes = newSeqOfCap[uint8](indices.len)
   var bitbuf = 0'u32; var bits = 0
   template emit(code: int) =
     bitbuf = bitbuf or (uint32(code) shl bits)
@@ -109,23 +112,20 @@ proc encodeLzwGif*(indices: openArray[uint8], minCodeSize: int): seq[uint8] =
     while bits >= 8:
       outBytes.add(uint8(bitbuf and 0xFF))
       bitbuf = bitbuf shr 8; bits -= 8
-  var table = initTable[string, int]()
+  var table = initTable[int, int]()
   var nextCode = eoi + 1
   emit(clear)
   if indices.len == 0:
     emit(eoi)
   else:
-    var prefix = newString(1); prefix[0] = char(indices[0])
+    var prefix = int(indices[0])
     for i in 1..<indices.len:
-      let c = char(indices[i])
-      let key = prefix & c
-      if table.hasKey(key) or (key.len == 1 and int(uint8(key[0])) < clear):
-        prefix = key
+      let c = int(indices[i])
+      let key = (prefix shl 8) or c
+      if table.hasKey(key):
+        prefix = table[key]
       else:
-        let prefixCode =
-          if prefix.len == 1: int(uint8(prefix[0]))
-          else: table[prefix]
-        emit(prefixCode)
+        emit(prefix)
         if nextCode < 4096:
           table[key] = nextCode
           inc nextCode
@@ -136,11 +136,8 @@ proc encodeLzwGif*(indices: openArray[uint8], minCodeSize: int): seq[uint8] =
           emit(clear)
           table.clear()
           nextCode = eoi + 1; width = minCodeSize + 1
-        prefix = newString(1); prefix[0] = c
-    let prefixCode =
-      if prefix.len == 1: int(uint8(prefix[0]))
-      else: table[prefix]
-    emit(prefixCode)
+        prefix = c
+    emit(prefix)
     emit(eoi)
   if bits > 0: outBytes.add(uint8(bitbuf and 0xFF))
   outBytes
