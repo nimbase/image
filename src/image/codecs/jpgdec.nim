@@ -809,29 +809,41 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
   let mcuW = 8 * maxH; let mcuH = 8 * maxV
   let mcuCountX = (width + mcuW - 1) div mcuW
   let mcuCountY = (height + mcuH - 1) div mcuH
-  for i in 0..<comps.len:
-    comps[i].blocks = newPixBlocks(
-      mcuCountX * comps[i].h * mcuCountY * comps[i].v)
   var coef: array[64, float64]
   let totalMcus = mcuCountX * mcuCountY
   var mcuIdx = 0
   if progFinish:
-    # progressive: dequant accumulated coefficients, IDCT every block
+    # progressive: dequant accumulated coefficients, IDCT every block.
+    # The coefficient grid is the peak driver (131 MB luma at 32 MP),
+    # so each component's grid is allocated lazily and its pages are
+    # returned (munmap via =sink) the moment its IDCT completes —
+    # holding all components till assembly would pin ~200 MB extra.
+    # (A buffalo pool would be worse here: retaining 100 MB+ pages
+    # across decodes is exactly the hidden retention rawPages avoids;
+    # early-free beats pooling for image-lifetime transients.)
     when defined(decodeProfile):
       let tProfIdct0 = cpuTime()
     # Unchecked: `bi` ranges over the grid, `k` is a fixed 0..63 span.
     {.push checks: off.}
-    for ci in 0..<comps.len:
-      for bi in 0..<comps[ci].blocks.len:
-        for k in 0..63: coef[k] = float64(pcoef[ci][bi][k])
-        comps[ci].blocks[bi] = idctScaledBlock(coef, qts[comps[ci].tq], blk)
-    {.pop.}
-    when defined(decodeProfile):
-      tProfIdct += cpuTime() - tProfIdct0
     when defined(progDebug):
       for k in 0..63:
         echo "coef[", k, "]=", pcoef[0][0][k]
+    for ci in 0..<comps.len:
+      comps[ci].blocks = newPixBlocks(
+        mcuCountX * comps[ci].h * mcuCountY * comps[ci].v)
+      for bi in 0..<comps[ci].blocks.len:
+        for k in 0..63: coef[k] = float64(pcoef[ci][bi][k])
+        comps[ci].blocks[bi] = idctScaledBlock(coef, qts[comps[ci].tq], blk)
+      # This component's coefficients are fully consumed: return the
+      # grid's pages now (=sink munmaps the old mapping).
+      pcoef[ci] = newCoefGrid(0)
+    {.pop.}
+    when defined(decodeProfile):
+      tProfIdct += cpuTime() - tProfIdct0
   else:
+    for i in 0..<comps.len:
+      comps[i].blocks = newPixBlocks(
+        mcuCountX * comps[i].h * mcuCountY * comps[i].v)
     when defined(decodeProfile):
       let tProfBase0 = cpuTime()
     # Unchecked: `bx`/`by` derive from MCU-grid math below the grid
@@ -882,6 +894,11 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
     {.pop.}
     when defined(decodeProfile):
       tProfIdct += cpuTime() - tProfBase0
+  # Entropy input is fully consumed: release the cleaned stream before
+  # assembly (BitReader shares cleanScratch's buffer, so reset both
+  # ends; otherwise ~2 MB rides along under the pixel output).
+  reader = BitReader(data: @[], pos: 0, buf: 0, nbits: 0)
+  cleanScratch = @[]
   # assemble pixels with upsampling (replication)
   when defined(decodeProfile):
     let tProfAsm0 = cpuTime()
