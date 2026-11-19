@@ -53,6 +53,10 @@ proc idctScaledBlock(coef: array[64, float64], qt: array[64, int],
   ## full path. Matches libjpeg `-scale` output within its own integer
   ## rounding noise, and is bit-exact vs full decode + identical box
   ## downsample (the committed test oracle).
+  ##
+  ## Unchecked below: all indices are fixed small ranges (`0..63`,
+  ## `0..<m*m` with `m <= 8`, box loops bounded by `d = 8 div m`).
+  {.push checks: off.}
   if m == 8:
     return idctBlock(coef, qt)
   let full = idctBlock(coef, qt)
@@ -66,6 +70,7 @@ proc idctScaledBlock(coef: array[64, float64], qt: array[64, int],
         for dx in 0..<d:
           s += int(full[(oy*d+dy)*8 + (ox*d+dx)])
       result[oy*m+ox] = uint8((s + half) div n)
+  {.pop.}
 
 # ---------- bit reader with stuffed bytes ----------
 
@@ -75,7 +80,8 @@ type BitReader = object
   buf: uint32
   nbits: int
 
-proc fillByte(r: var BitReader): bool =
+proc fillByte(r: var BitReader): bool {.inline.} =
+  {.push checks: off.}
   if r.pos >= r.data.len: return false
   let b = r.data[r.pos]; inc(r.pos)
   if b == 0xFF:
@@ -86,34 +92,48 @@ proc fillByte(r: var BitReader): bool =
   else:
     r.buf = r.buf or (uint32(b) shl (24 - r.nbits))
   r.nbits += 8
+  {.pop.}
   true
 
-proc readBits(r: var BitReader, n: int): tuple[ok: bool, v: int] =
+proc readBits(r: var BitReader, n: int): tuple[ok: bool, v: int] {.inline.} =
+  {.push checks: off.}
   if n == 0: return (true, 0)
   while r.nbits < n:
     if not r.fillByte(): return (false, 0)
   let v = int(r.buf shr (32 - n))
   r.buf = r.buf shl n
   r.nbits -= n
+  {.pop.}
   (true, v)
 
-proc receiveExtend(r: var BitReader, s: int): tuple[ok: bool, v: int] =
+proc receiveExtend(r: var BitReader, s: int): tuple[ok: bool, v: int] {.inline.} =
+  {.push checks: off.}
   if s == 0: return (true, 0)
   let (ok, v) = r.readBits(s)
   if not ok: return (false, 0)
+  {.pop.}
   if v < (1 shl (s - 1)): (true, v - (1 shl s) + 1)
   else: (true, v)
 
 # ---------- Huffman tables ----------
+
+const huffFastBits = 8
 
 type HuffTable = object
   minCode: array[17, int]
   maxCode: array[17, int]
   valPtr: array[17, int]
   symbols: seq[int]
+  fast: array[256, int16]
+    ## 8-bit prefix lookup for codes of length <= 8: `(len shl 8) or
+    ## sym`, -1 when no short code has the prefix (prefix codes make
+    ## the mapping single-owner). Falls back to the bit-by-bit walk
+    ## for longer codes. Same symbol stream as the slow walk, so the
+    ## decoded output is unchanged.
 
 proc buildHuff(counts: array[16, int], symbols: seq[int]): tuple[ok: bool, t: HuffTable] =
   var t = HuffTable()
+  for i in 0..255: t.fast[i] = -1
   var code = 0
   var k = 0
   for l in 1..16:
@@ -123,6 +143,12 @@ proc buildHuff(counts: array[16, int], symbols: seq[int]): tuple[ok: bool, t: Hu
       t.minCode[l] = code
       t.maxCode[l] = code + counts[l-1] - 1
       t.valPtr[l] = k
+      if l <= huffFastBits:
+        for j in 0..<counts[l-1]:
+          let prefix = (code + j) shl (huffFastBits - l)
+          let entry = int16((l shl 8) or symbols[k+j])
+          for s in 0..<(1 shl (huffFastBits - l)):
+            t.fast[prefix + s] = entry
       k += counts[l-1]
       code += counts[l-1]
     code = code shl 1
@@ -130,14 +156,37 @@ proc buildHuff(counts: array[16, int], symbols: seq[int]): tuple[ok: bool, t: Hu
   t.symbols = symbols
   (true, t)
 
-proc decodeHuff(r: var BitReader, t: HuffTable): tuple[ok: bool, sym: int] =
+proc decodeHuff(r: var BitReader, t: var HuffTable): tuple[ok: bool, sym: int] {.inline.} =
+  ## `t` travels by `var` (the 512-byte fast table must not copy per
+  ## symbol). Bulk-fills to 16 bits when available, then a single
+  ## 8-bit lookup for short codes; long codes and short tails take the
+  ## bit-by-bit walk with identical match semantics.
+  ##
+  ## Unchecked: symbol tables come from validated DHT segments
+  ## (`buildHuff` rejects count/symbol mismatch) and the SOS selectors
+  ## are range-checked at parse time, so every `symbols` index below is
+  ## in range on any input that reaches the scans; short tails fail
+  ## cleanly via `maxL`.
+  {.push checks: off.}
+  while r.nbits < 16:
+    if not r.fillByte(): break
+  if r.nbits >= huffFastBits:
+    let f = int(t.fast[(r.buf shr 24) and 0xFF'u32])
+    if f >= 0:
+      let l = f shr 8
+      if l <= r.nbits:
+        r.buf = r.buf shl l
+        r.nbits -= l
+        return (true, f and 0xFF)
   var code = 0
-  for l in 1..16:
-    let (ok, b) = r.readBits(1)
-    if not ok: return (false, 0)
-    code = (code shl 1) or b
+  let maxL = min(16, r.nbits)
+  for l in 1..maxL:
+    code = (code shl 1) or int((r.buf shr (32 - l)) and 1'u32)
     if t.minCode[l] >= 0 and code >= t.minCode[l] and code <= t.maxCode[l]:
+      r.buf = r.buf shl l
+      r.nbits -= l
       return (true, t.symbols[t.valPtr[l] + code - t.minCode[l]])
+  {.pop.}
   (false, 0)
 
 # ---------- color conversion (scalar single-pixel; see image/simd) ----------
@@ -235,19 +284,24 @@ proc len(g: var CoefGrid): int = g.n
 proc len(b: var PixBlocks): int = b.n
 
 proc `[]`(g: var CoefGrid, i: int): var array[64, int32] =
-  assert i >= 0 and i < g.n
+  ## Hot-path accessor: no bounds check by design (unchecked-pointer
+  ## indexing has none anyway). Callers must guarantee `0 <= i < n`
+  ## via MCU-grid math; all call sites in `decodeJpeg` are audited
+  ## (see the unchecked-loop comments). Do not use elsewhere without
+  ## an explicit range proof.
   g.p[i]
 
 proc `[]=`(g: var CoefGrid, i: int, v: array[64, int32]) =
-  assert i >= 0 and i < g.n
+  ## Same no-checks contract as `[]` above.
   g.p[i] = v
 
 proc `[]`(b: var PixBlocks, i: int): var array[64, uint8] =
-  assert i >= 0 and i < b.n
+  ## Hot-path accessor: no bounds check by design, same contract as
+  ## `CoefGrid.[]` (MCU-grid math at every call site).
   b.p[i]
 
 proc `[]=`(b: var PixBlocks, i: int, v: array[64, uint8]) =
-  assert i >= 0 and i < b.n
+  ## Same no-checks contract as `[]` above.
   b.p[i] = v
 
 type JpegComponent = object
@@ -338,24 +392,30 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
     var tProfGather = 0.0
     var tProfConvert = 0.0
 
-  proc buildCleanScan(startPos: int): tuple[clean: seq[uint8], nextPos: int] =
+  proc buildCleanScan(startPos: int, buf: var seq[uint8]): int =
     ## Entropy segment from startPos to the next marker; strips RSTn and
-    ## stuffed 0x00 bytes, like the baseline path below.
-    var clean: seq[uint8] = @[]
+    ## stuffed 0x00 bytes, like the baseline path below. Reuses the
+    ## caller-owned `buf` across scans (`setLen(0)` keeps capacity, so
+    ## only the largest scan ever grows it); the BitReader consumes it
+    ## before the next scan rebuilds it.
+    buf.setLen(0)
     var qq = startPos
     while qq + 1 < data.len:
       if data[qq] == 0xFF:
         let c2 = data[qq+1]
         if c2 == 0x00:
-          clean.add([0xFF'u8, 0x00]); qq += 2
+          buf.add([0xFF'u8, 0x00]); qq += 2
         elif c2 >= 0xD0 and c2 <= 0xD7:
           qq += 2
         else:
           break
       else:
-        clean.add(data[qq]); inc(qq)
-    (clean, qq)
+        buf.add(data[qq]); inc(qq)
+    qq
   var progFinish = false
+  var cleanScratch: seq[uint8] = @[]
+    ## Reused clean-scan buffer (see `buildCleanScan`); sized once to
+    ## the largest scan, shared by every scan of this decode.
   while true:
     if pos + 1 >= data.len:
       return err[DynamicImage](decodingError("jpeg: truncated"))
@@ -419,6 +479,11 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
         if h < 1 or h > 4 or v < 1 or v > 4:
           return err[DynamicImage](unsupportedError(ukGenericFeature,
             "jpeg: sampling factors"))
+        # Quant table selector is bounds-checked here (not just at use):
+        # `qts[tq]` below runs with checks off in the hot loops, so a
+        # corrupt selector must fail cleanly now, not OOB later.
+        if int(body[6+3*i+2]) > 3:
+          return err[DynamicImage](decodingError("jpeg: bad quant table"))
         comps.add(JpegComponent(id: body[6+3*i], h: h, v: v,
           tq: int(body[6+3*i+2]), dcPred: 0, blocks: PixBlocks()))
       sofFound = true
@@ -475,6 +540,10 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
           if comps[k].id == cs: ci = k; break
         if ci < 0:
           return err[DynamicImage](decodingError("jpeg: SOS unknown component"))
+        # Huffman selectors are bounds-checked here: `dcTables[sc.dc]` /
+        # `acTables[sc.ac]` in the hot scans run with checks off.
+        if int(body[1+2*i+1] shr 4) > 3 or int(body[1+2*i+1] and 15) > 3:
+          return err[DynamicImage](decodingError("jpeg: bad Huffman table"))
         scanComps.add((ci, int(body[1+2*i+1] shr 4), int(body[1+2*i+1] and 15)))
       let ss = int(body[1+ns*2]); let se = int(body[1+ns*2+1])
       let ah = int(body[1+ns*2+2] shr 4); let al = int(body[1+ns*2+2] and 15)
@@ -529,8 +598,8 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
       pos += segLen - 2
       when defined(decodeProfile):
         let tProfScan0 = cpuTime()
-      let (cleanS, nextPos) = buildCleanScan(pos)
-      var reader = BitReader(data: cleanS, pos: 0, buf: 0, nbits: 0)
+      let nextPos = buildCleanScan(pos, cleanScratch)
+      var reader = BitReader(data: cleanScratch, pos: 0, buf: 0, nbits: 0)
       for i in 0..<comps.len: comps[i].dcPred = 0
       var eobrun = 0
       let isDc = ss == 0 and se == 0
@@ -546,6 +615,13 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
         totalMcus = pcoef[scanComps[0].comp].len
       var mcuIdx = 0
       var scanErr = ""
+      # Unchecked scan body: every index is bounded by validated
+      # structure — `ci` from range-checked SOS selectors, `blk` from
+      # MCU-grid math below the grid size, `Unzigzag[k]` with `k`
+      # capped at the band end (`se <= 63`), Huffman symbols by
+      # canonical-table construction. Truncated streams still fail
+      # cleanly (explicit `ok` checks, untouched by this pragma).
+      {.push checks: off.}
       while mcuIdx < totalMcus and scanErr == "":
         for sc in scanComps:
           let ci = sc.comp
@@ -698,6 +774,7 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
         if restartInterval > 0 and mcuIdx mod restartInterval == 0:
           for i in 0..<comps.len: comps[i].dcPred = 0
           eobrun = 0
+      {.pop.}
       if scanErr != "":
         when defined(progDebug):
           echo "scan ", scanCount, " ss=", ss, " se=", se, " err=", scanErr
@@ -719,8 +796,8 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
   # (progressive finish needs no BitReader; blocks come from pcoef.)
   var reader = BitReader(data: @[], pos: 0, buf: 0, nbits: 0)
   if not progFinish:
-    let (clean, _) = buildCleanScan(scanStart)
-    reader = BitReader(data: clean, pos: 0, buf: 0, nbits: 0)
+    discard buildCleanScan(scanStart, cleanScratch)
+    reader = BitReader(data: cleanScratch, pos: 0, buf: 0, nbits: 0)
   var maxH = 1; var maxV = 1
   for i in 0..<comps.len:
     maxH = max(maxH, comps[i].h); maxV = max(maxV, comps[i].v)
@@ -742,10 +819,13 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
     # progressive: dequant accumulated coefficients, IDCT every block
     when defined(decodeProfile):
       let tProfIdct0 = cpuTime()
+    # Unchecked: `bi` ranges over the grid, `k` is a fixed 0..63 span.
+    {.push checks: off.}
     for ci in 0..<comps.len:
       for bi in 0..<comps[ci].blocks.len:
         for k in 0..63: coef[k] = float64(pcoef[ci][bi][k])
         comps[ci].blocks[bi] = idctScaledBlock(coef, qts[comps[ci].tq], blk)
+    {.pop.}
     when defined(decodeProfile):
       tProfIdct += cpuTime() - tProfIdct0
     when defined(progDebug):
@@ -754,6 +834,10 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
   else:
     when defined(decodeProfile):
       let tProfBase0 = cpuTime()
+    # Unchecked: `bx`/`by` derive from MCU-grid math below the grid
+    # size, `k` is guarded (`>= 64` errors out), Huffman symbols as
+    # above. Truncation still fails cleanly via explicit `ok` checks.
+    {.push checks: off.}
     while mcuIdx < totalMcus:
       for sc in scanComps:
         let ci = sc.comp
@@ -795,6 +879,7 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
       inc(mcuIdx)
       if restartInterval > 0 and mcuIdx mod restartInterval == 0:
         for i in 0..<comps.len: comps[i].dcPred = 0
+    {.pop.}
     when defined(decodeProfile):
       tProfIdct += cpuTime() - tProfBase0
   # assemble pixels with upsampling (replication)
@@ -804,10 +889,13 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
   if comps.len == 1:
     var px = newSeq[Luma[uint8]](outW * outH)
     let cols = mcuCountX * comps[0].h
+    # Unchecked: `bx`/`by` are quotient math inside the block grid.
+    {.push checks: off.}
     for y in 0..<outH:
       for x in 0..<outW:
         let bx = x div blk; let by = y div blk
         px[y*outW+x] = Luma[uint8](data: [comps[0].blocks[by*cols+bx][(y mod blk)*blk + (x mod blk)]])
+    {.pop.}
     when defined(decodeProfile):
       tProfAsm += cpuTime() - tProfAsm0
       echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,
@@ -820,16 +908,37 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
     when defined(decodeProfile):
       echo "decodeProfile afterPxAlloc peak=", peakMb(), "MB"
     if comps.len == 3:
-      # 3-component fast path: hoist the runtime upsample divisions into
-      # per-column maps, gather planar rows, convert whole rows via SIMD.
-      var xmaps: array[3, seq[int]]
+      # 3-component fast path: gather planar rows, convert whole rows
+      # via SIMD. Two gather shapes share the replication semantics
+      # (nearest source texel, `(x*h) div maxH`):
+      # - strip walk (standard samplings: 4:4:4/4:2:2/4:2:0/4:4:0 and
+      #   scaled variants): each block covers `step = blk*maxH div h`
+      #   output pixels with `rep = step div blk` replication, walked
+      #   left to right with one checked block access per block.
+      # - xmap fallback (exotic factors): the original per-pixel loop.
+      var step, rep: array[3, int]
+      var stripOk = true
       for ci in 0..2:
-        xmaps[ci] = newSeq[int](outW)
-        for x in 0..<outW: xmaps[ci][x] = (x * comps[ci].h) div maxH
+        step[ci] = blk * maxH div comps[ci].h
+        if (blk * maxH) mod comps[ci].h != 0 or step[ci] <= 0 or
+            step[ci] mod blk != 0:
+          stripOk = false
+        rep[ci] = step[ci] div blk
+        if rep[ci] != 1 and rep[ci] != 2:
+          stripOk = false
+      var xmaps: array[3, seq[int]]
+      if not stripOk:
+        for ci in 0..2:
+          xmaps[ci] = newSeq[int](outW)
+          for x in 0..<outW: xmaps[ci][x] = (x * comps[ci].h) div maxH
       var yRow = newSeq[uint8](outW)
       var cbRow = newSeq[uint8](outW)
       var crRow = newSeq[uint8](outW)
       let xm0 = xmaps[0]; let xm1 = xmaps[1]; let xm2 = xmaps[2]
+      # Unchecked gather: `by`/`my` derive from row math inside the
+      # block grid, `b` visits at most ceil(outW/step) blocks (same
+      # coverage as the xmap loop), row buffers are `outW` long.
+      {.push checks: off.}
       for y in 0..<outH:
         when defined(decodeProfile):
           let tProfG0 = cpuTime()
@@ -843,6 +952,29 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
           if ci == 0: dst = cast[ptr UncheckedArray[uint8]](addr yRow[0])
           elif ci == 1: dst = cast[ptr UncheckedArray[uint8]](addr cbRow[0])
           else: dst = cast[ptr UncheckedArray[uint8]](addr crRow[0])
+          if stripOk:
+            var x = 0
+            var b = 0
+            if rep[ci] == 1:
+              while x < outW:
+                let src = addr comps[ci].blocks[by * cols + b]
+                let n = min(blk, outW - x)
+                for i in 0..<n: dst[x + i] = src[my + i]
+                x += n
+                inc b
+            else:
+              while x < outW:
+                let src = addr comps[ci].blocks[by * cols + b]
+                let n = min(step[ci], outW - x)
+                var i = 0
+                while i < n:
+                  let v = src[my + i div 2]
+                  dst[x + i] = v
+                  if i + 1 < n: dst[x + i + 1] = v
+                  i += 2
+                x += n
+                inc b
+            continue
           let xm = if ci == 0: xm0 elif ci == 1: xm1 else: xm2
           for x in 0..<outW:
             let sx = xm[x]
@@ -854,6 +986,7 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
           cast[ptr uint8](addr px[y*outW]), outW)
         when defined(decodeProfile):
           tProfConvert += cpuTime() - tProfC0
+      {.pop.}
       when defined(decodeProfile):
         tProfAsm += cpuTime() - tProfAsm0
         echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,

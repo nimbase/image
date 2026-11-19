@@ -74,37 +74,6 @@ when defined(arm64):
       vst1q_u8(cast[pointer](cast[int](curP) + i), vaddq_u8(a, b))
       i += 16
 
-  proc idctPass1Neon*(tmpP, midP, cosP, cfacP: ptr float64) =
-    ## First IDCT pass: `mid[y][x] += (Cfac[u] * tmp[y][u]) * CosT[u][x]`.
-    for y in 0..7:
-      for u in 0..7:
-        var kk = [f64p(cfacP, u)[] * f64p(tmpP, y*8+u)[], 0.0]
-        kk[1] = kk[0]
-        let kv = vld1q_f64(addr kk[0])
-        var i = 0
-        while i < 8:
-          let d = vld1q_f64(f64p(midP, y*8+i))
-          let t = vld1q_f64(f64p(cosP, u*8+i))
-          vst1q_f64(f64p(midP, y*8+i), vaddq_f64(d, vmulq_f64(t, kv)))
-          i += 2
-
-  proc idctPass2Neon*(midP, outP, cosP, cfacP: ptr float64) =
-    ## Second IDCT pass: `out[y][x] += (Cfac[v] * mid[v][x]) * CosT[v][y]`.
-    for y in 0..7:
-      for v in 0..7:
-        var cc = [f64p(cfacP, v)[], 0.0]
-        var tt = [f64p(cosP, v*8+y)[], 0.0]
-        cc[1] = cc[0]; tt[1] = tt[0]
-        let cv = vld1q_f64(addr cc[0])
-        let tv = vld1q_f64(addr tt[0])
-        var i = 0
-        while i < 8:
-          let d = vld1q_f64(f64p(outP, y*8+i))
-          let m = vld1q_f64(f64p(midP, v*8+i))
-          vst1q_f64(f64p(outP, y*8+i),
-            vaddq_f64(d, vmulq_f64(vmulq_f64(m, cv), tv)))
-          i += 2
-
   proc fdctPass1Neon*(pxP, midP, cosP, cfacP: ptr float64) =
     ## First FDCT pass: `mid[v][x] += px[y][x] * CosT[v][y]`, then scale rows.
     for v in 0..7:

@@ -10,3 +10,4 @@ testresults/
 !/tests/fixtures/
 clue.lock
 
+plans/

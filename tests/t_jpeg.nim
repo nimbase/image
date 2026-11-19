@@ -63,10 +63,10 @@ test "jpeg reference baseline":
 test "jpeg progressive":
   # 4:2:0 single-component scans visit blocks in raster order (one block
   # per MCU); pixel sums below were validated against djpeg -nosmooth
-  # (maxdiff <= 3, float-IDCT rounding).
-  for (name, w, h, sum) in [("test.jpg", 32'u32, 23'u32, 325368'u64),
-      ("cat.jpg", 320'u32, 240'u32, 31389462'u64),
-      ("3.jpg", 650'u32, 470'u32, 116984462'u64)]:
+  # (maxdiff <= 2, integer-IDCT rounding).
+  for (name, w, h, sum) in [("test.jpg", 32'u32, 23'u32, 325358'u64),
+      ("cat.jpg", 320'u32, 240'u32, 31389477'u64),
+      ("3.jpg", 650'u32, 470'u32, 116985225'u64)]:
     let p = fixturesDir / "jpg" / "progressive" / name
     var f = open(p, fmRead)
     var raw = newSeq[uint8](getFileSize(f))

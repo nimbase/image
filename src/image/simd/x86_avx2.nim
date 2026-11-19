@@ -56,32 +56,6 @@ when defined(amd64):
       for k in 0..3: Rgb[3*i+2+3*k] = uint8(clamp(int(o[k]), 0, 255))
       i += 4
 
-  proc idctPass1Avx*(tmpP, midP, cosP, cfacP: ptr float64) =
-    ## First IDCT pass: `mid[y][x] += (Cfac[u] * tmp[y][u]) * CosT[u][x]`.
-    for y in 0..7:
-      for u in 0..7:
-        let kk = mm256_set1_pd(g(cfacP, u)[] * g(tmpP, y*8+u)[])
-        var i = 0
-        while i < 8:
-          let d = mm256_loadu_pd(g(midP, y*8+i))
-          let t = mm256_loadu_pd(g(cosP, u*8+i))
-          mm256_storeu_pd(g(midP, y*8+i), mm256_add_pd(d, mm256_mul_pd(t, kk)))
-          i += 4
-
-  proc idctPass2Avx*(midP, outP, cosP, cfacP: ptr float64) =
-    ## Second IDCT pass: `out[y][x] += (Cfac[v] * mid[v][x]) * CosT[v][y]`.
-    for y in 0..7:
-      for v in 0..7:
-        let cc = mm256_set1_pd(g(cfacP, v)[])
-        let tt = mm256_set1_pd(g(cosP, v*8+y)[])
-        var i = 0
-        while i < 8:
-          let d = mm256_loadu_pd(g(outP, y*8+i))
-          let m = mm256_loadu_pd(g(midP, v*8+i))
-          mm256_storeu_pd(g(outP, y*8+i),
-            mm256_add_pd(d, mm256_mul_pd(mm256_mul_pd(cc, m), tt)))
-          i += 4
-
   proc fdctPass1Avx*(pxP, midP, cosP, cfacP: ptr float64) =
     ## First FDCT pass: `mid[v][x] += px[y][x] * CosT[v][y]`, then scale rows.
     for v in 0..7:

@@ -272,7 +272,9 @@ test "webp vp8l color transform wins on photo":
   let rgba = c.value.toRgba8()
   let e = encodeWebp(DynamicImage(kind: dkRgba8, rgba8: rgba))
   require e.ok
-  check e.value.len < 106500 # pre-color baseline 106796; color 105854
+  # Integer-IDCT pixels (was 105854 under the float IDCT; no-color
+  # baseline 107820 on the same pixels, so the transform still wins).
+  check e.value.len < 107000 # pre-color baseline 107820; color 106782
   let back = decodeWebp(e.value)
   check back.ok
   require back.value.kind == dkRgb8

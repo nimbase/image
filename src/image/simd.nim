@@ -173,36 +173,6 @@ initJpegTables()
 proc fptr(p: ptr float64, i: int): ptr float64 {.inline, used.} =
   cast[ptr float64](cast[int](p) + i * sizeof(float64))
 
-proc idctPass1*(tmpP, midP, cosP, cfacP: ptr float64) {.inline.} =
-  ## First IDCT pass, dispatched to the best backend.
-  when defined(amd64):
-    if useAvx2: idctPass1Avx(tmpP, midP, cosP, cfacP)
-    else: idctPass1Sse2(tmpP, midP, cosP, cfacP)
-  elif defined(arm64):
-    idctPass1Neon(tmpP, midP, cosP, cfacP)
-  else:
-    for y in 0..7:
-      for u in 0..7:
-        let k = fptr(cfacP, u)[] * fptr(tmpP, y*8+u)[]
-        for i in 0..7:
-          fptr(midP, y*8+i)[] = fptr(midP, y*8+i)[] + k * fptr(cosP, u*8+i)[]
-
-proc idctPass2*(midP, outP, cosP, cfacP: ptr float64) {.inline.} =
-  ## Second IDCT pass, dispatched to the best backend.
-  when defined(amd64):
-    if useAvx2: idctPass2Avx(midP, outP, cosP, cfacP)
-    else: idctPass2Sse2(midP, outP, cosP, cfacP)
-  elif defined(arm64):
-    idctPass2Neon(midP, outP, cosP, cfacP)
-  else:
-    for y in 0..7:
-      for v in 0..7:
-        let c = fptr(cfacP, v)[]
-        let t = fptr(cosP, v*8+y)[]
-        for i in 0..7:
-          fptr(outP, y*8+i)[] = fptr(outP, y*8+i)[] +
-            (c * fptr(midP, v*8+i)[]) * t
-
 proc fdctPass1*(pxP, midP, cosP, cfacP: ptr float64) {.inline.} =
   ## First FDCT pass (plus row scaling), dispatched to the best backend.
   when defined(amd64):
@@ -239,40 +209,111 @@ proc fdctPass2*(midP, resP, cosP, cfacP: ptr float64) {.inline.} =
         for x in 0..7: s += acc[x]
         fptr(resP, v*8+u)[] = s * fptr(cfacP, u)[]
 
+template idct1D64(s0, s1, s2, s3, s4, s5, s6, s7: int64) =
+  ## One row/column of the AAN integer IDCT (stb_image structure,
+  ## 12-bit fixed-point constants). Operates on the `t0..x3`/`p1..p5`
+  ## locals of the enclosing block proc. int64 accumulators: exact for
+  ## any int32 input coefficients, so evaluation order is free and
+  ## scalar/SIMD spellings agree bit-for-bit.
+  template f2f(x: float64): int64 = int64(x * 4096.0 + 0.5)
+  p2 = s2
+  p3 = s6
+  p1 = (p2 + p3) * f2f(0.5411961)
+  t2 = p1 + p3 * f2f(-1.847759065)
+  t3 = p1 + p2 * f2f(0.765366865)
+  p2 = s0
+  p3 = s4
+  t0 = (p2 + p3) * 4096
+  t1 = (p2 - p3) * 4096
+  x0 = t0 + t3
+  x3 = t0 - t3
+  x1 = t1 + t2
+  x2 = t1 - t2
+  t0 = s7
+  t1 = s5
+  t2 = s3
+  t3 = s1
+  p3 = t0 + t2
+  p4 = t1 + t3
+  p1 = t0 + t3
+  p2 = t1 + t2
+  p5 = (p3 + p4) * f2f(1.175875602)
+  t0 = t0 * f2f(0.298631336)
+  t1 = t1 * f2f(2.053119869)
+  t2 = t2 * f2f(3.072711026)
+  t3 = t3 * f2f(1.501321110)
+  p1 = p5 + p1 * f2f(-0.899976223)
+  p2 = p5 + p2 * f2f(-2.562915447)
+  p3 = p3 * f2f(-1.961570560)
+  p4 = p4 * f2f(-0.390180644)
+  t3 += p1 + p4
+  t2 += p2 + p3
+  t1 += p2 + p4
+  t0 += p1 + p3
+
+proc idctBlockInt*(coef: array[64, float64],
+    qt: array[64, int]): array[64, uint8] =
+  ## Integer AAN IDCT shared core (stb-style). Coefficients arrive as
+  ## int-valued floats; dequant `int(coef)*qt` is exact, then column
+  ## and row 1D passes run in int64 (no overflow for any int32
+  ## input). Columns with all-zero AC take the DC shortcut, as in the
+  ## reference. Output differs ±1-2 from the old float IDCT (same
+  ## tolerance class as djpeg's default integer IDCT); exact-sum
+  ## oracles were re-validated against djpeg (see t_jpeg).
+  ## Unchecked: fixed small loop ranges over fixed-size arrays.
+  {.push checks: off.}
+  var data: array[64, int64]
+  for i in 0..63: data[i] = int64(coef[i]) * int64(qt[i])
+  var tmp: array[64, int64]
+  var t0, t1, t2, t3, p1, p2, p3, p4, p5, x0, x1, x2, x3: int64
+  for i in 0..7:
+    if data[i+8] == 0 and data[i+16] == 0 and data[i+24] == 0 and
+        data[i+32] == 0 and data[i+40] == 0 and data[i+48] == 0 and
+        data[i+56] == 0:
+      let d = data[i] * 4
+      tmp[i] = d; tmp[i+8] = d; tmp[i+16] = d; tmp[i+24] = d
+      tmp[i+32] = d; tmp[i+40] = d; tmp[i+48] = d; tmp[i+56] = d
+    else:
+      idct1D64(data[i], data[i+8], data[i+16], data[i+24],
+        data[i+32], data[i+40], data[i+48], data[i+56])
+      x0 += 512; x1 += 512; x2 += 512; x3 += 512
+      tmp[i] = (x0 + t3) shr 10; tmp[i+56] = (x0 - t3) shr 10
+      tmp[i+8] = (x1 + t2) shr 10; tmp[i+48] = (x1 - t2) shr 10
+      tmp[i+16] = (x2 + t1) shr 10; tmp[i+40] = (x2 - t1) shr 10
+      tmp[i+24] = (x3 + t0) shr 10; tmp[i+32] = (x3 - t0) shr 10
+  for i in 0..7:
+    let o = i * 8
+    idct1D64(tmp[o], tmp[o+1], tmp[o+2], tmp[o+3],
+      tmp[o+4], tmp[o+5], tmp[o+6], tmp[o+7])
+    x0 += 65536 + (128 shl 17); x1 += 65536 + (128 shl 17)
+    x2 += 65536 + (128 shl 17); x3 += 65536 + (128 shl 17)
+    let r0 = (x0 + t3) shr 17; let r7 = (x0 - t3) shr 17
+    let r1 = (x1 + t2) shr 17; let r6 = (x1 - t2) shr 17
+    let r2 = (x2 + t1) shr 17; let r5 = (x2 - t1) shr 17
+    let r3 = (x3 + t0) shr 17; let r4 = (x3 - t0) shr 17
+    result[o] = uint8(min(max(r0, 0), 255))
+    result[o+7] = uint8(min(max(r7, 0), 255))
+    result[o+1] = uint8(min(max(r1, 0), 255))
+    result[o+6] = uint8(min(max(r6, 0), 255))
+    result[o+2] = uint8(min(max(r2, 0), 255))
+    result[o+5] = uint8(min(max(r5, 0), 255))
+    result[o+3] = uint8(min(max(r3, 0), 255))
+    result[o+4] = uint8(min(max(r4, 0), 255))
+  {.pop.}
+
 proc idctBlockScalar*(coef: array[64, float64],
     qt: array[64, int]): array[64, uint8] =
-  ## Scalar oracle: separable float IDCT with dequant. Vectorized paths must
-  ## match this exactly (same op order per element).
-  var tmp: array[64, float64]
-  for i in 0..63: tmp[i] = coef[i] * float64(qt[i])
-  var mid: array[64, float64]
-  for y in 0..7:
-    for x in 0..7:
-      var s = 0.0
-      for u in 0..7: s += JpegCfac[u] * tmp[y*8+u] * JpegCosT[u][x]
-      mid[y*8+x] = s
-  for y in 0..7:
-    for x in 0..7:
-      var s = 0.0
-      for v in 0..7: s += JpegCfac[v] * mid[v*8+x] * JpegCosT[v][y]
-      result[y*8+x] = uint8(clamp(int(s + 128.5), 0, 255))
+  ## Scalar oracle: integer AAN IDCT with exact dequant (see
+  ## `idctBlockInt`). `idctBlockSimd` shares the core, so the two agree
+  ## bit-for-bit by construction.
+  idctBlockInt(coef, qt)
 
 proc idctBlockSimd*(coef: array[64, float64],
     qt: array[64, int]): array[64, uint8] =
-  ## Vectorized IDCT. Pass 1 scales rows by one scalar per (y, u); pass 2
-  ## uses the `(c * m) * t` form to preserve the scalar multiply grouping.
-  var tmp: array[64, float64]
-  for i in 0..63: tmp[i] = coef[i] * float64(qt[i])
-  var mid: array[64, float64]
-  var outp: array[64, float64]
-  let cosP = cast[ptr float64](addr JpegCosT[0][0])
-  let cfacP = cast[ptr float64](addr JpegCfac[0])
-  idctPass1(cast[ptr float64](addr tmp[0]), cast[ptr float64](addr mid[0]),
-    cosP, cfacP)
-  idctPass2(cast[ptr float64](addr mid[0]), cast[ptr float64](addr outp[0]),
-    cosP, cfacP)
-  for i in 0..63:
-    result[i] = uint8(clamp(int(outp[i] + 128.5), 0, 255))
+  ## Decode IDCT entry point: currently the shared integer core (see
+  ## `idctBlockInt`; arch-specific integer kernels are future work —
+  ## the old float passes were removed when the algorithm changed).
+  idctBlockInt(coef, qt)
 
 proc fdctBlockScalar*(px: array[64, float64]): array[64, float64] =
   ## Scalar oracle for the forward DCT.
