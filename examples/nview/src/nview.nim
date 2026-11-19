@@ -1,40 +1,37 @@
-## nview — minimal photo viewer backed by the pure-Nim image library.
+## nview — photo gallery backed by the pure-Nim image library (macOS only).
 ##
-## Usage: nview photo.png
+## Usage: nview <image-or-directory>
 ##
-## Decode covers every LDR format the library guesses (PNG, JPEG, GIF,
-## WebP, BMP, TIFF, TGA, PNM, ICO, QOI, HEIF); display is a windy window
-## with an OpenGL 4.1 textured quad, aspect-fit letterboxed.
-## Drop a file onto the window to switch images. Esc/Q quits.
+## Native Cocoa window + toolbar ([prev] <name> [next]) and a Metal
+## textured quad (aspect-fit letterbox). This file owns the gallery model
+## and decoding; `nview_mac.m` owns the UI + Metal renderer. The two meet
+## at the small C ABI below (galleryInit/Go/Current...).
+##
+## Decode covers every LDR format the library guesses (PNG, JPEG, GIF
+## first frame, WebP, BMP, TIFF, TGA, PNM, ICO, QOI, HEIF); 16-bit/float
+## sources (HDR, EXR, farbfeld) report a clear error, AVIF its stub.
 
-import std/[os, strutils]
-import opengl, vmath, windy
+when not defined(macosx):
+  {.error: "nview gallery requires macOS (Cocoa + Metal)".}
+
+{.compile: "nview_mac.m".}
+{.passL: "-framework Cocoa -framework Metal -framework QuartzCore".}
+
+import std/[os, strutils, algorithm]
 import image
 
-const
-  MaxWinW = 1280.0
-  MaxWinH = 800.0
+proc nview_run() {.importc.}
 
-  vertexSrc = """
-#version 410
-in vec3 vertexPos;
-in vec2 vertexUv;
-out vec2 uv;
-void main() {
-  uv = vertexUv;
-  gl_Position = vec4(vertexPos, 1.0);
-}
-"""
+const SupportedExts = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+  ".tif", ".tiff", ".tga", ".pnm", ".pbm", ".pgm", ".ppm", ".ico", ".qoi",
+  ".heif", ".heic"]
 
-  fragmentSrc = """
-#version 410
-in vec2 uv;
-uniform sampler2D tex;
-out vec4 fragColor;
-void main() {
-  fragColor = texture(tex, uv);
-}
-"""
+var
+  gallery: seq[string] = @[]
+  galleryIdx = 0
+  cached: RgbaImage
+  cachedName = ""
+  hasCache = false
 
 proc decodeDyn(fmt: ImageFormat, bytes: seq[uint8]): ImageResult[DynamicImage] =
   ## Dispatch for formats that decode straight to DynamicImage.
@@ -98,144 +95,72 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
     if result.width == 0 or result.height == 0:
       raise newException(IOError, name & ": unsupported pixel type in v1")
 
-proc compileShader(kind: GLenum, src: string): GLuint =
-  result = glCreateShader(kind)
-  let arr = allocCStringArray([src])
-  glShaderSource(result, 1, arr, nil)
-  deallocCStringArray(arr)
-  glCompileShader(result)
-  var code: GLint
-  glGetShaderiv(result, GL_COMPILE_STATUS, addr code)
-  if code == 0:
-    var len: GLint
-    glGetShaderiv(result, GL_INFO_LOG_LENGTH, addr len)
-    var log = newString(len)
-    glGetShaderInfoLog(result, len, nil, log.cstring)
-    raise newException(IOError, "shader compile failed: " & log)
+proc loadAt(idx: int): bool =
+  ## Decode gallery[idx] into the cache. Stays on the old image on error.
+  let path = gallery[idx]
+  try:
+    cached = decodeBytes(readFile(path), path)
+    cachedName = extractFilename(path)
+    hasCache = true
+    galleryIdx = idx
+    true
+  except IOError as e:
+    stderr.writeLine("nview: " & e.msg)
+    false
 
-proc linkProgram(vs, fs: GLuint): GLuint =
-  result = glCreateProgram()
-  glAttachShader(result, vs)
-  glAttachShader(result, fs)
-  glLinkProgram(result)
-  var code: GLint
-  glGetProgramiv(result, GL_LINK_STATUS, addr code)
-  if code == 0:
-    var len: GLint
-    glGetProgramiv(result, GL_INFO_LOG_LENGTH, addr len)
-    var log = newString(len)
-    glGetProgramInfoLog(result, len, nil, log.cstring)
-    raise newException(IOError, "shader link failed: " & log)
+# --- C ABI used by nview_mac.m (all values valid until the next nav call) ---
 
-proc upload(tex: GLuint, img: RgbaImage) =
-  ## Push RGBA8 top-down pixels into the GL texture (reallocates on resize).
-  ## UVs are flipped (see quad data) so the first row lands at the top.
-  glBindTexture(GL_TEXTURE_2D, tex)
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8.GLint,
-    img.width.GLsizei, img.height.GLsizei, 0,
-    GL_RGBA, GL_UNSIGNED_BYTE, unsafeAddr img.pixels[0])
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+proc galleryInit(path: cstring): cint {.exportc.} =
+  let p = $path
+  var dir, start = ""
+  if dirExists(p):
+    dir = p
+  elif fileExists(p):
+    dir = parentDir(p)
+    start = p
+  else:
+    stderr.writeLine("nview: no such file or directory: " & p)
+    return 1
+  for f in walkDir(dir):
+    if f.kind != pcFile: continue
+    if splitFile(f.path).ext.toLowerAscii() in SupportedExts:
+      gallery.add(f.path)
+  gallery.sort(system.cmp)
+  if gallery.len == 0:
+    stderr.writeLine("nview: no supported images in " & dir)
+    return 1
+  var idx = 0
+  if start.len > 0:
+    idx = gallery.find(start)
+    if idx < 0: idx = 0
+  if not loadAt(idx):
+    return 1
+  0
 
-proc draw(window: Window, img: RgbaImage, program, vao, tex: GLuint) =
-  ## Aspect-fit letterbox: fullscreen quad + centered viewport.
-  let ws = window.size
-  let s = min(ws.x.float32 / img.width.float32,
-    ws.y.float32 / img.height.float32)
-  let vw = int32(img.width.float32 * s)
-  let vh = int32(img.height.float32 * s)
-  glViewport((ws.x - vw) div 2, (ws.y - vh) div 2, vw, vh)
-  glClearColor(0.07f, 0.07f, 0.08f, 1.0f)
-  glClear(GL_COLOR_BUFFER_BIT)
-  glUseProgram(program)
-  glBindVertexArray(vao)
-  glActiveTexture(GL_TEXTURE0)
-  glBindTexture(GL_TEXTURE_2D, tex)
-  glDrawArrays(GL_TRIANGLES, 0, 6)
-  swapBuffers(window)
+proc galleryCount(): cint {.exportc.} = cint(gallery.len)
+proc galleryIndex(): cint {.exportc.} = cint(galleryIdx)
+
+proc galleryGo(delta: cint): cint {.exportc.} =
+  ## Move (wraps around); returns the new index, or -1 keeping the old
+  ## image when the target fails to decode.
+  if gallery.len == 0 or not hasCache: return -1
+  let n = ((galleryIdx + int(delta)) mod gallery.len + gallery.len) mod gallery.len
+  if loadAt(n): cint(n) else: -1
+
+proc galleryCurrentName(): cstring {.exportc.} = cstring(cachedName)
+
+proc galleryCurrentPixels(w, h: ptr cint): pointer {.exportc.} =
+  w[] = cint(cached.width)
+  h[] = cint(cached.height)
+  if cached.pixels.len == 0: return nil
+  addr cached.pixels[0]
 
 proc main() =
   if paramCount() < 1:
-    stderr.writeLine("usage: nview <image>")
+    stderr.writeLine("usage: nview <image-or-directory>")
     quit(1)
-  let path = paramStr(1)
-  if not fileExists(path):
-    stderr.writeLine("nview: no such file: " & path)
+  if galleryInit(cstring(paramStr(1))) != 0:
     quit(1)
-  var current: RgbaImage
-  try:
-    stdout.writeLine("nview: decoding " & path & " ...")
-    stdout.flushFile()
-    current = decodeBytes(readFile(path), path)
-  except IOError as e:
-    stderr.writeLine("nview: " & e.msg)
-    quit(1)
-
-  let iw = current.width.float
-  let ih = current.height.float
-  let f = min(1.0, min(MaxWinW / iw, MaxWinH / ih))
-  let window = newWindow("nview — " & extractFilename(path),
-    ivec2(int32(iw * f), int32(ih * f)))
-  window.makeContextCurrent()
-  loadExtensions()
-
-  let program = linkProgram(
-    compileShader(GL_VERTEX_SHADER, vertexSrc),
-    compileShader(GL_FRAGMENT_SHADER, fragmentSrc))
-
-  # Fullscreen quad; bottom vertices sample v=1 (last uploaded row =
-  # image bottom) so top-down pixels land upright.
-  var posData = [vec3(-1f, -1f, 0f), vec3(1f, -1f, 0f), vec3(1f, 1f, 0f),
-    vec3(1f, 1f, 0f), vec3(-1f, 1f, 0f), vec3(-1f, -1f, 0f)]
-  var uvData = [vec2(0f, 1f), vec2(1f, 1f), vec2(1f, 0f),
-    vec2(1f, 0f), vec2(0f, 0f), vec2(0f, 1f)]
-
-  var vao: GLuint
-  glGenVertexArrays(1, addr vao)
-  glBindVertexArray(vao)
-  var posBuf: GLuint
-  glGenBuffers(1, addr posBuf)
-  glBindBuffer(GL_ARRAY_BUFFER, posBuf)
-  glBufferData(GL_ARRAY_BUFFER, sizeof(posData), addr posData[0], GL_STATIC_DRAW)
-  glVertexAttribPointer(0, 3, cGL_FLOAT, GL_FALSE, 0, nil)
-  glEnableVertexAttribArray(0)
-  var uvBuf: GLuint
-  glGenBuffers(1, addr uvBuf)
-  glBindBuffer(GL_ARRAY_BUFFER, uvBuf)
-  glBufferData(GL_ARRAY_BUFFER, sizeof(uvData), addr uvData[0], GL_STATIC_DRAW)
-  glVertexAttribPointer(1, 2, cGL_FLOAT, GL_FALSE, 0, nil)
-  glEnableVertexAttribArray(1)
-
-  var tex: GLuint
-  glGenTextures(1, addr tex)
-  upload(tex, current)
-
-  let texLoc = glGetUniformLocation(program, "tex")
-  glUseProgram(program)
-  glUniform1i(texLoc, 0)
-
-  window.onButtonPress = proc(b: Button) =
-    if b == KeyEscape or b == KeyQ:
-      window.closeRequested = true
-  window.onFileDrop = proc(fileName, fileData: string) =
-    var raw = fileData
-    if raw.len == 0 and fileExists(fileName):
-      raw = readFile(fileName)
-    if raw.len == 0:
-      return
-    try:
-      stdout.writeLine("nview: decoding " & fileName & " ...")
-      stdout.flushFile()
-      current = decodeBytes(raw, fileName)
-      upload(tex, current)
-      window.title = "nview — " & extractFilename(fileName)
-    except IOError as e:
-      stderr.writeLine("nview: " & e.msg)
-
-  while not window.closeRequested:
-    pollEvents()
-    draw(window, current, program, vao, tex)
+  nview_run()
 
 main()
