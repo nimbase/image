@@ -77,6 +77,57 @@ test "png adam7 1x1":
   check dec.value.kind == dkLuma8
   check dec.value.luma8.pixels[0].data == [200'u8]
 
+test "png adam7 multi-pass decodes bit-exact":
+  # Hand-built Up-filtered Adam7 RGB8 10x10: all 7 passes active with
+  # varying row sizes (exercises the hoisted prev/cur/passRows pools:
+  # per-pass setLen shrink + regrow, and per-pass prev re-zeroing — Up
+  # reconstruction of each pass's row 0 reads prev, so stale bytes from
+  # the previous pass would corrupt output).
+  const W = 10; const H = 10
+  proc pxAt(x, y: int): array[3, uint8] =
+    [uint8((x * 7 + y * 13) and 0xFF), uint8((x * 3 + y * 11) and 0xFF),
+      uint8((x + y * 5) and 0xFF)]
+  var raw: seq[uint8] = @[]
+  for pass in 0..6:
+    let pw = (W - Adam7X[pass] + Adam7DX[pass] - 1) div Adam7DX[pass]
+    let ph = (H - Adam7Y[pass] + Adam7DY[pass] - 1) div Adam7DY[pass]
+    if pw == 0 or ph == 0: continue
+    var prevRow = newSeq[uint8](pw * 3)
+    for y in 0..<ph:
+      raw.add(2) # Up
+      var cur = newSeq[uint8](pw * 3)
+      for x in 0..<pw:
+        let p = pxAt(Adam7X[pass] + x * Adam7DX[pass],
+          Adam7Y[pass] + y * Adam7DY[pass])
+        cur[3 * x] = p[0]; cur[3 * x + 1] = p[1]; cur[3 * x + 2] = p[2]
+      for i in 0..<cur.len: raw.add(cur[i] - prevRow[i])
+      prevRow = move(cur)
+  let comp = deflateZlib(raw).value
+  proc chunk7(t: array[4, uint8], body: seq[uint8]): seq[uint8] =
+    var r = newSeq[uint8](8 + body.len + 4)
+    let n = uint32(body.len)
+    r[0]=uint8((n shr 24) and 0xFF); r[1]=uint8((n shr 16) and 0xFF)
+    r[2]=uint8((n shr 8) and 0xFF); r[3]=uint8(n and 0xFF)
+    for i in 0..3: r[4+i] = t[i]
+    for i, b in body: r[8+i] = b
+    let c = chunkCrc(t, body)
+    r[8+body.len]=uint8((c shr 24) and 0xFF); r[8+body.len+1]=uint8((c shr 16) and 0xFF)
+    r[8+body.len+2]=uint8((c shr 8) and 0xFF); r[8+body.len+3]=uint8(c and 0xFF)
+    r
+  let ihdr = @[0'u8, 0, 0, uint8(W), 0, 0, 0, uint8(H), 8, 2, 0, 0, 1]
+  var data = @[137'u8, 80, 78, 71, 13, 10, 26, 10]
+  data.add(chunk7([uint8('I'),uint8('H'),uint8('D'),uint8('R')], ihdr))
+  data.add(chunk7([uint8('I'),uint8('D'),uint8('A'),uint8('T')], comp))
+  data.add(chunk7([uint8('I'),uint8('E'),uint8('N'),uint8('D')], @[]))
+  let dec = decodePng(data)
+  check dec.ok
+  check dec.value.kind == dkRgb8
+  check dec.value.rgb8.width == uint32(W)
+  check dec.value.rgb8.height == uint32(H)
+  for y in 0..<H:
+    for x in 0..<W:
+      check dec.value.rgb8.pixels[y * W + x].data == pxAt(x, y)
+
 test "png larger odd-dim round trips exact":
   # odd dims exercise row streaming + edge clamping (non-multiple-of-8)
   var px = newSeq[Rgb[uint8]](129 * 65)
