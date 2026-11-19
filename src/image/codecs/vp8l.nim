@@ -5,6 +5,7 @@
 ## Bitstream: LSB-first. Pixels in buffer order [R,G,B,A].
 import std/math
 import std/algorithm
+import buffalo
 import ../color
 import ../error
 import ../buffer
@@ -873,20 +874,24 @@ proc distChoice*(d, xsize: int, dcost: openArray[int]): tuple[sym, extra: int,
   if bestSym < 0: return (0, 0, false)
   (bestSym, bestExtra, true)
 
-proc parseLz77*(px: seq[Rgba[uint8]], w: int, eR, eG, eB, eA: openArray[uint16]):
-    tuple[ops: seq[uint8], fG, fR, fB, fA, fD: seq[int]] =
+proc parseLz77Impl(px: seq[Rgba[uint8]], w: int, eR, eG, eB, eA: openArray[uint16],
+    head: var seq[int]): tuple[ops: seq[uint8], fG, fR, fB, fA, fD: seq[int]] =
   ## Greedy cost-based LZ77 parse with a color cache shadowing the decoder.
   ## Ops byte buffer: 0 = literal, 1 = cache hit, 2 = copy followed by
   ## u16LE length, u8 dist sym, u32LE dist extra (8 bytes total).
   ## Cache rules mirror decodeStream exactly: literals insert, hits and
   ## d==1 copies do not, d>1 copies insert each pixel in order.
+  ## `head` is caller-owned hash scratch (`Vp8lHashSize` ints, fully
+  ## refilled with -1 per call); pooled across attempts by encodeVp8l so
+  ## one photo encode pays one backing instead of one per parse. Freq
+  ## tables stay per-call (returned to the caller, ~5 KB total).
   let n = px.len
   var fG = newSeq[int](280 + Vp8lCacheSize)
   var fR = newSeq[int](256); var fB = newSeq[int](256)
   var fA = newSeq[int](256); var fD = newSeq[int](40)
   var estD: array[40, int]
   for k in 0..39: estD[k] = Vp8lSymEst
-  var head = newSeq[int](Vp8lHashSize)
+  doAssert head.len >= Vp8lHashSize, "vp8l: head scratch too small"
   for k in 0..<Vp8lHashSize: head[k] = -1
   var cache: array[Vp8lCacheSize, array[4, uint8]]
   var cacheFull: array[Vp8lCacheSize, bool]
@@ -967,6 +972,12 @@ proc parseLz77*(px: seq[Rgba[uint8]], w: int, eR, eG, eB, eA: openArray[uint16])
       head[h] = i
       i += 1
   (ops, fG, fR, fB, fA, fD)
+
+proc parseLz77*(px: seq[Rgba[uint8]], w: int, eR, eG, eB, eA: openArray[uint16]):
+    tuple[ops: seq[uint8], fG, fR, fB, fA, fD: seq[int]] =
+  ## Single-attempt entry point: same parse with a fresh hash table.
+  var head = newSeq[int](Vp8lHashSize)
+  parseLz77Impl(px, w, eR, eG, eB, eA, head)
 
 proc buildLens*(freqs: openArray[int], maxLen = 15): seq[uint16] =
   ## Classic Huffman lengths with a libjpeg-style length-limit adjustment
@@ -1665,7 +1676,7 @@ proc emitOps(w2: var Vp8lBitWriter, ops: seq[uint8], px: seq[Rgba[uint8]],
       w2.emitBits(de, distExtraBits(ds))
       idx += L; k += 8
 
-proc vp8lParse(px: seq[Rgba[uint8]], w: int): tuple[ops: seq[uint8],
+proc vp8lParse(px: seq[Rgba[uint8]], w: int, head: var seq[int]): tuple[ops: seq[uint8],
     fG, fR, fB, fA, fD: seq[int]] =
   ## Order-0 estimates + greedy LZ77 parse (shared by all paths).
   var gR = newSeq[int](256); var gG = newSeq[int](256)
@@ -1675,7 +1686,7 @@ proc vp8lParse(px: seq[Rgba[uint8]], w: int): tuple[ops: seq[uint8],
     gB[p.data[2]] += 1; gA[p.data[3]] += 1
   let eR = buildLens(gR); let eG = buildLens(gG)
   let eB = buildLens(gB); let eA = buildLens(gA)
-  let (ops, fG, fR, fB, fA, fD) = parseLz77(px, w, eR, eG, eB, eA)
+  let (ops, fG, fR, fB, fA, fD) = parseLz77Impl(px, w, eR, eG, eB, eA, head)
   (ops, fG, fR, fB, fA, fD)
 
 # ---------- meta-Huffman (multi-group) ----------
@@ -1843,11 +1854,11 @@ type MetaBucket = object
   ops: seq[uint8]
   tileFreqs: seq[seq[int]]
 
-proc bucketMeta(px: seq[Rgba[uint8]], w, h: int): MetaBucket =
+proc bucketMeta(px: seq[Rgba[uint8]], w, h: int, head: var seq[int]): MetaBucket =
   ## Parse once + bucket per-tile freqs (shared across overhead tries).
   let bits = chooseHistoBits(w, h)
   let hx = subSize(w, bits); let hy = subSize(h, bits)
-  let (ops, _, _, _, _, _) = vp8lParse(px, w)
+  let (ops, _, _, _, _, _) = vp8lParse(px, w, head)
   MetaBucket(bits: bits, hx: hx, hy: hy, ops: ops,
     tileFreqs: bucketTileFreqs(ops, px, w, bits, hx, hy))
 
@@ -1892,13 +1903,13 @@ proc planFromBucket(b: MetaBucket, treeOverhead: float): MetaPlan =
     ops: b.ops)
 
 proc encodeStreamInto(w2: var Vp8lBitWriter, img: RgbaImage,
-    writeMeta: bool) =
+    writeMeta: bool, head: var seq[int]) =
   ## LZ77 + Huffman stream (decodeStream format): cache flag, optional
   ## meta-huffman flag, trees, ops. No signature/header/flush: callers
   ## concatenate sub-streams (transform data) and flush once at the end.
   ## Transform-data sub-streams never use meta-Huffman (like the reference).
   let w = int(img.width)
-  let (ops, fG, fR, fB, fA, fD) = vp8lParse(img.pixels, w)
+  let (ops, fG, fR, fB, fA, fD) = vp8lParse(img.pixels, w, head)
   # NB: decodeStream reads the cache flag BEFORE the meta-huffman flag
   # (all-zero order was invisible when every flag was 0).
   w2.emitBits(1, 1) # color cache follows
@@ -1909,7 +1920,7 @@ proc encodeStreamInto(w2: var Vp8lBitWriter, img: RgbaImage,
   emitOps(w2, ops, img.pixels, w, @[t], @[], 0, 0)
 
 proc encodePlannedInto(w2: var Vp8lBitWriter, img: RgbaImage,
-    plan: MetaPlan) =
+    plan: MetaPlan, head: var seq[int]) =
   ## Main-image stream with meta-Huffman: meta flag + bits, meta image
   ## sub-stream (group id per tile, high byte in R, low byte in G),
   ## per-group trees, ops with per-group codes. Reuses plan.ops.
@@ -1925,7 +1936,7 @@ proc encodePlannedInto(w2: var Vp8lBitWriter, img: RgbaImage,
   encodeStreamInto(w2,
     RgbaImage(width: uint32(plan.hx), height: uint32(plan.hy),
       pixels: move(mpx)),
-    false)
+    false, head)
   var groups: seq[HuffTables] = @[]
   for gf in plan.groupFreqs:
     groups.add(buildTables(gf.toOpenArray(0, MetaOffR - 1),
@@ -1940,7 +1951,8 @@ proc encodePlannedInto(w2: var Vp8lBitWriter, img: RgbaImage,
 proc encodeStream*(img: RgbaImage, writeMeta: bool): seq[uint8] =
   ## Standalone stream (main image body use writeMeta=true).
   var w2: Vp8lBitWriter
-  encodeStreamInto(w2, img, writeMeta)
+  var head = newSeq[int](Vp8lHashSize)
+  encodeStreamInto(w2, img, writeMeta, head)
   w2.emitFlush()
   w2.data
 
@@ -1948,11 +1960,12 @@ const Vp8lUseTransforms = true
   ## Master switch for predictor + subtract-green. Always on (measured
   ## wins across content; tiny overhead on incompressible data).
 
-proc encodeVp8lPayload*(img: RgbaImage, pxMain: seq[Rgba[uint8]],
+proc encodeVp8lPayloadImpl(img: RgbaImage, pxMain: seq[Rgba[uint8]],
     modes: seq[uint8], colParams: seq[array[3, uint8]],
-    plan = MetaPlan(bits: 0)): seq[uint8] =
+    plan: MetaPlan, head: var seq[int]): seq[uint8] =
   ## Full VP8L payload: header, transforms, main stream. Variants are built
   ## standalone so the caller can keep the smallest actual payload.
+  ## `head` is LZ77 hash scratch pooled by the caller across attempts.
   let w = int(img.width); let h = int(img.height)
   var hasAlpha = false
   for p in img.pixels:
@@ -1970,7 +1983,7 @@ proc encodeVp8lPayload*(img: RgbaImage, pxMain: seq[Rgba[uint8]],
     for i, m in modes: mpx[i] = Rgba[uint8](data: [0'u8, m, 0, 0])
     encodeStreamInto(w2,
       RgbaImage(width: uint32(bxs), height: uint32(bys), pixels: move(mpx)),
-      false)
+      false, head)
     # transform 2: subtract-green (no data)
     w2.emitBits(1, 1); w2.emitBits(2, 2)
     # transform 1: cross-color (per-block multipliers)
@@ -1983,18 +1996,25 @@ proc encodeVp8lPayload*(img: RgbaImage, pxMain: seq[Rgba[uint8]],
         cpx[i] = Rgba[uint8](data: [cp[2], cp[1], cp[0], 0'u8])
       encodeStreamInto(w2,
         RgbaImage(width: uint32(cxs), height: uint32(cys), pixels: move(cpx)),
-        false)
+        false, head)
   w2.emitBits(0, 1) # end of transforms (none if transforms off)
   # NB: decodeStream reads the cache flag BEFORE the meta-huffman flag
   # (all-zero order was invisible when every flag was 0).
   var timg = RgbaImage(width: img.width, height: img.height,
     pixels: pxMain)
   if plan.bits == 0:
-    encodeStreamInto(w2, timg, true)
+    encodeStreamInto(w2, timg, true, head)
   else:
-    encodePlannedInto(w2, timg, plan)
+    encodePlannedInto(w2, timg, plan, head)
   w2.emitFlush()
   w2.data
+
+proc encodeVp8lPayload*(img: RgbaImage, pxMain: seq[Rgba[uint8]],
+    modes: seq[uint8], colParams: seq[array[3, uint8]],
+    plan = MetaPlan(bits: 0)): seq[uint8] =
+  ## Single-attempt entry point: same payload with a fresh hash table.
+  var head = newSeq[int](Vp8lHashSize)
+  encodeVp8lPayloadImpl(img, pxMain, modes, colParams, plan, head)
 
 proc encodeVp8l*(img: RgbaImage): seq[uint8] =
   ## VP8L encoder: predictor + subtract-green + (when they win) per-block
@@ -2011,30 +2031,39 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
   var px = applyPredictorFwd(img.pixels, w, h, PredSizeBits, modes)
   # subtract-green (always on for v1; decorrelates R/B from G)
   applySubGreenFwd(px)
-  var best = encodeVp8lPayload(img, px, modes, @[])
-  var bestPx = move(px)
-  var bestCol: seq[array[3, uint8]] = @[]
-  if Vp8lUseColor:
-    let colParams = chooseColorParams(bestPx, w, h, ColSizeBits)
-    var anyNz = false
-    for cp in colParams:
-      if cp != [0'u8, 0, 0]: anyNz = true; break
-    if anyNz:
-      var pxC = bestPx
-      applyColorFwd(pxC, w, h, ColSizeBits, colParams)
-      let color = encodeVp8lPayload(img, pxC, modes, colParams)
-      if color.len < best.len:
-        best = color
-        bestPx = move(pxC)
-        bestCol = colParams
-  if Vp8lUseMeta:
-    let bucket = bucketMeta(bestPx, w, h)
-    for oh in MetaOverheads:
-      let plan = planFromBucket(bucket, oh)
-      if plan.bits == 0: continue
-      let meta = encodeVp8lPayload(img, bestPx, modes, bestCol, plan)
-      if meta.len < best.len: best = meta
-  best
+  # One LZ77 hash backing shared by every parse below (base + color +
+  # bucket + meta tries): each parse fully refills it, so a single
+  # buffalo pool replaces one ~Vp8lHashSize-int alloc per attempt.
+  var headPool = initPool(int, Vp8lHashSize)
+  withBorrow(headPool, headBuf):
+    headBuf.setLen(Vp8lHashSize)
+    var best = encodeVp8lPayloadImpl(img, px, modes, @[],
+      MetaPlan(bits: 0), headBuf.data)
+    var bestPx = move(px)
+    var bestCol: seq[array[3, uint8]] = @[]
+    if Vp8lUseColor:
+      let colParams = chooseColorParams(bestPx, w, h, ColSizeBits)
+      var anyNz = false
+      for cp in colParams:
+        if cp != [0'u8, 0, 0]: anyNz = true; break
+      if anyNz:
+        var pxC = bestPx
+        applyColorFwd(pxC, w, h, ColSizeBits, colParams)
+        let color = encodeVp8lPayloadImpl(img, pxC, modes, colParams,
+          MetaPlan(bits: 0), headBuf.data)
+        if color.len < best.len:
+          best = color
+          bestPx = move(pxC)
+          bestCol = colParams
+    if Vp8lUseMeta:
+      let bucket = bucketMeta(bestPx, w, h, headBuf.data)
+      for oh in MetaOverheads:
+        let plan = planFromBucket(bucket, oh)
+        if plan.bits == 0: continue
+        let meta = encodeVp8lPayloadImpl(img, bestPx, modes, bestCol, plan,
+          headBuf.data)
+        if meta.len < best.len: best = meta
+    best
 
 proc encodeWebp*(img: DynamicImage): ImageResult[seq[uint8]] =
   let rgba = img.toRgba8()
