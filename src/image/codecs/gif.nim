@@ -2,6 +2,7 @@
 ## Header, LSD, GCT/LCT, GCE (disposal/delay/transparent), Netscape loop,
 ## image descriptors, interlace, LZW sub-blocks, trailer. Pure Nim.
 import std/strutils
+import buffalo
 import ../color
 import ../error
 import ../buffer
@@ -56,6 +57,11 @@ proc decodeGif*(data: seq[uint8]): ImageResult[GifImage] =
     gpal = pal
   var loopCount = infiniteLoop()
   var frames: seq[GifFrame] = @[]
+  # Per-frame LZW payload scratch, pooled across frames: each descriptor
+  # concatenates its sub-blocks here instead of a fresh seq per frame.
+  # Decoded indices stay caller-owned (stored in frames); out2 for
+  # interlaced frames stays a plain per-frame alloc (rare path).
+  var compPool = initPool(uint8, 0)
   # pending GCE state
   var gceDelay = delayMs(0)
   var gceDisposal = gdNone
@@ -73,6 +79,8 @@ proc decodeGif*(data: seq[uint8]): ImageResult[GifImage] =
       if label == 0xF9: # GCE
         if pos >= data.len or data[pos] != 4: fail("bad GCE")
         inc pos
+        # fixed GCE body: packed(1) delay(2) transpIdx(1) terminator(1)
+        if pos + 5 > data.len: fail("truncated GCE")
         let p = data[pos]; inc pos
         let delayCs = uint16(data[pos]) or (uint16(data[pos+1]) shl 8); pos += 2
         let transpIdx = data[pos]; inc pos
@@ -126,17 +134,19 @@ proc decodeGif*(data: seq[uint8]): ImageResult[GifImage] =
       if pos >= data.len: fail("truncated LZW min code")
       let minCode = int(data[pos]); inc pos
       if minCode < 2 or minCode > 8: fail("bad LZW min code")
-      var comp: seq[uint8] = @[]
-      while true:
-        if pos >= data.len: fail("truncated LZW blocks")
-        let n = int(data[pos]); inc pos
-        if n == 0: break
-        if pos + n > data.len: fail("truncated LZW block")
-        for i in 0..<n: comp.add(data[pos+i])
-        pos += n
-      let dr = decodeLzwGif(comp, minCode, int(iw) * int(ih))
-      if not dr.ok: return err[GifImage](dr.err)
-      var indices = dr.value
+      var indices: seq[uint8]
+      withBorrow(compPool, comp):
+        comp.setLen(0)
+        while true:
+          if pos >= data.len: fail("truncated LZW blocks")
+          let n = int(data[pos]); inc pos
+          if n == 0: break
+          if pos + n > data.len: fail("truncated LZW block")
+          for i in 0..<n: comp.add(data[pos+i])
+          pos += n
+        let dr = decodeLzwGif(comp.data, minCode, int(iw) * int(ih))
+        if not dr.ok: return err[GifImage](dr.err)
+        indices = dr.value
       if indices.len < int(iw) * int(ih):
         fail("short LZW output")
       indices.setLen(int(iw) * int(ih))
