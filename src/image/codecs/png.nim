@@ -452,10 +452,15 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
     # Adam7
     var full = newSeq[uint8](h * w * channels * sampBytes)
     # Pass scratch hoisted before the loop and sized once to the largest
-    # pass: prev/cur hold one filter row, passRows the largest pass's
-    # de-filtered rows. Each pass borrows them via withBorrows (entry
-    # clear + setLen re-zeroes, matching the old per-pass fresh seqs);
-    # backing grows once, then stays flat across all 7 passes.
+    # pass: prev/cur hold one filter row, rowsPool the largest pass's
+    # de-filtered rows. Backing grows once, then stays flat across all 7
+    # passes. Pools are used via `.data` directly (no `withBorrows`): the
+    # row loop is pixel-hot and a nested borrow scope measurably perturbs
+    # its codegen (same-binary A/B: ~24 vs ~20.6 ms on 512x512); the
+    # direct pattern is escape-safe by construction — every range is
+    # fully overwritten per use (blit/copyMem), except `prev`, which is
+    # explicitly zeroed per pass so row 0 filters against zeros exactly
+    # like the old per-pass fresh seqs. Same shape as the vp8enc MB loop.
     var maxPassBytes = 0
     var maxRowsBytes = 0
     for pass in 0..6:
@@ -473,42 +478,43 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
       let ph = (h - Adam7Y[pass] + Adam7DY[pass] - 1) div Adam7DY[pass]
       if pw == 0 or ph == 0: continue
       let passBytes = (pw * channels * int(bitDepth) + 7) div 8
-      withBorrows(prevPool, prev, curPool, cur, rowsPool, passRows):
-        prev.setLen(passBytes)
-        cur.setLen(passBytes)
-        passRows.setLen(ph * passBytes)
+      prevPool.data.setLen(passBytes)
+      curPool.data.setLen(passBytes)
+      rowsPool.data.setLen(ph * passBytes)
+      if passBytes > 0:
+        zeroMem(addr prevPool.data[0], passBytes)
+      for y in 0..<ph:
+        if p + 1 + passBytes > inflated.len:
+          return err[DynamicImage](decodingError("png: truncated Adam7"))
+        let f = inflated[p]; inc(p)
+        copyMem(addr curPool.data[0], unsafeAddr inflated[p], passBytes)
+        p += passBytes
+        if not simdUnfilterRow(f, curPool.data, prevPool.data, fbpp):
+          return err[DynamicImage](decodingError("png: bad filter"))
+        copyMem(addr rowsPool.data[y * passBytes], unsafeAddr curPool.data[0],
+          passBytes)
+        copyMem(addr prevPool.data[0], unsafeAddr curPool.data[0], passBytes)
+      if bitDepth >= 8:
+        let bpc = channels * sampBytes
         for y in 0..<ph:
-          if p + 1 + passBytes > inflated.len:
-            return err[DynamicImage](decodingError("png: truncated Adam7"))
-          let f = inflated[p]; inc(p)
-          blit(cur.toOpenArray(), inflated.toOpenArray(p, p + passBytes - 1))
-          p += passBytes
-          if not simdUnfilterRow(f, cur.data, prev.data, fbpp):
-            return err[DynamicImage](decodingError("png: bad filter"))
-          blit(passRows.data.toOpenArray(y * passBytes, (y + 1) * passBytes - 1),
-            cur.toOpenArray())
-          blit(prev.toOpenArray(), cur.toOpenArray())
-        if bitDepth >= 8:
-          let bpc = channels * sampBytes
-          for y in 0..<ph:
-            for x in 0..<pw:
-              let dx = Adam7X[pass] + x * Adam7DX[pass]
-              let dy = Adam7Y[pass] + y * Adam7DY[pass]
-              for k in 0..<bpc:
-                full[(dy*w+dx)*bpc+k] = passRows[y*passBytes + x*bpc + k]
-        else:
-          let maxv = (1 shl int(bitDepth)) - 1
-          for y in 0..<ph:
-            for x in 0..<pw:
-              let dx = Adam7X[pass] + x * Adam7DX[pass]
-              let dy = Adam7Y[pass] + y * Adam7DY[pass]
-              for c in 0..<channels:
-                var v = 0
-                for k in 0..<int(bitDepth):
-                  v = (v shl 1) or bitVal(passRows.data.toOpenArray(
-                    y*passBytes, y*passBytes+passBytes-1),
-                    (x*channels+c)*int(bitDepth)+k)
-                full[(dy*w+dx)*channels+c] = uint8((v * 255 + maxv div 2) div maxv)
+          for x in 0..<pw:
+            let dx = Adam7X[pass] + x * Adam7DX[pass]
+            let dy = Adam7Y[pass] + y * Adam7DY[pass]
+            for k in 0..<bpc:
+              full[(dy*w+dx)*bpc+k] = rowsPool.data[y*passBytes + x*bpc + k]
+      else:
+        let maxv = (1 shl int(bitDepth)) - 1
+        for y in 0..<ph:
+          for x in 0..<pw:
+            let dx = Adam7X[pass] + x * Adam7DX[pass]
+            let dy = Adam7Y[pass] + y * Adam7DY[pass]
+            for c in 0..<channels:
+              var v = 0
+              for k in 0..<int(bitDepth):
+                v = (v shl 1) or bitVal(rowsPool.data.toOpenArray(
+                  y*passBytes, y*passBytes+passBytes-1),
+                  (x*channels+c)*int(bitDepth)+k)
+              full[(dy*w+dx)*channels+c] = uint8((v * 255 + maxv div 2) div maxv)
     if bitDepth >= 8:
       let bpc = channels * sampBytes
       proc get(x, y, c: int): uint16 =
