@@ -39,11 +39,16 @@ the old viewer did for pixels the screen would downscale anyway.
 
 ## Memory
 
-After each GPU upload the decoded RGBA pixels are dropped, and the Metal
-texture is grow-only: slides of different sizes reuse one allocation, so
-a gallery settles at its largest picture instead of allocating and
-releasing a texture per navigation. The renderer also uploads its 64-byte
-quad through `setVertexBytes`, so no per-frame buffer is created.
+File bytes never enter the Nim heap: each slide mmaps the file
+read-only (`memfiles`) and decodes straight from the view, which is
+unmapped before the next slide (only HEIF copies once — that decoder's
+seq API belongs to another agent). The decoded RGBA lives in one
+grow-only display pool (`cached.pixels`): each slide blits into it via
+`setLen` (capacity retained), and after GPU upload the length drops to
+zero while the backing is kept — so a walk allocates the largest slide
+once instead of once per photo, with no per-slide Rgba alloc. The Metal
+texture is likewise grow-only, and the 64-byte quad goes through
+`setVertexBytes`, so no per-frame buffer is created.
 
 To check steady state without a debugger (which perturbs the target), two
 environment hooks drive the real UI path and log the process footprint:

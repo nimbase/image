@@ -30,6 +30,10 @@ var
   gallery: seq[string] = @[]
   galleryIdx = 0
   cached: RgbaImage
+    ## Grow-only display pool shared across slides: `decodePathInto`
+    ## blits into `cached.pixels` via `setLen` (capacity retained), and
+    ## `galleryDropPixels` drops the length but keeps the backing, so a
+    ## walk allocates the largest slide once instead of once per photo.
   cachedName = ""
   hasCache = false
   jpegScratch = initJpegScratch()
@@ -58,11 +62,56 @@ proc decodeDyn(fmt: ImageFormat, bytes: openArray[uint8]): ImageResult[DynamicIm
   of fmtGif, fmtQoi, fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(AssertionDefect, "decodeDyn: unexpected " & $fmt)
 
-proc decodePath(path: string): RgbaImage =
-  ## Decode any supported file to RGBA8 via a read-only mmap view.
-  ## Zero file-byte copies: the MemFile window is passed as openArray
-  ## views straight into guess + decoders (heif copies once internally).
-  ## Raises IOError on failure. The mapping lives only for this call.
+proc blitRgbaInto(dst: var RgbaImage, src: RgbaImage) =
+  ## Copy `src` into `dst`, reusing `dst.pixels` capacity (grow-only
+  ## pool). `setLen` keeps the backing when shrinking or regrowing
+  ## within capacity, so a gallery walk allocates the largest slide
+  ## once instead of once per photo. Fully overwritten, so no zeroing
+  ## discipline needed beyond `setLen` itself.
+  dst.width = src.width
+  dst.height = src.height
+  dst.pixels.setLen(src.pixels.len)
+  if src.pixels.len > 0:
+    copyMem(addr dst.pixels[0], unsafeAddr src.pixels[0],
+      src.pixels.len * sizeof(Rgba[uint8]))
+
+proc blitDynamicInto(dyn: DynamicImage, dst: var RgbaImage): bool =
+  ## Convert `dyn` into `dst`, reusing `dst.pixels` capacity (same
+  ## pool terms as `blitRgbaInto`). Returns false without touching
+  ## `dst` for variants nview cannot display (16-bit/float stay an
+  ## error at the call site). Only the 8-bit LDR kinds the gallery
+  ## supports are handled, matching the old `toRgba8` coverage.
+  case dyn.kind
+  of dkRgba8:
+    blitRgbaInto(dst, dyn.rgba8)
+    true
+  of dkRgb8:
+    let s = dyn.rgb8
+    dst.width = s.width
+    dst.height = s.height
+    dst.pixels.setLen(s.pixels.len)
+    for i, p in s.pixels:
+      dst.pixels[i] = Rgba[uint8](data: [p.data[0], p.data[1], p.data[2], 255'u8])
+    true
+  of dkLuma8:
+    let s = dyn.luma8
+    dst.width = s.width
+    dst.height = s.height
+    dst.pixels.setLen(s.pixels.len)
+    for i, p in s.pixels:
+      dst.pixels[i] = Rgba[uint8](data: [p.data[0], p.data[0], p.data[0], 255'u8])
+    true
+  else:
+    false
+
+proc decodePathInto(path: string, dst: var RgbaImage) =
+  ## Decode `path` into `dst`, reusing `dst.pixels` capacity (grow-only
+  ## display pool shared across slides). File bytes come from a
+  ## read-only mmap view: zero heap copies (`heif` copies once
+  ## internally — other agent owns that seq API). The mapping lives
+  ## only for this call. Raises IOError on failure, leaving `dst`
+  ## untouched (decode lands in temporaries; the pool is blitted only
+  ## on success, so a failed slide keeps the old picture).
   var mf =
     try: memfiles.open(path)
     except OSError as e: raise newException(IOError, path & ": " & e.msg)
@@ -79,12 +128,12 @@ proc decodePath(path: string): RgbaImage =
     let r = gifFirstToRgba(view()) # v1: first frame only, no animation
     if not r.ok:
       raise newException(IOError, path & ": " & r.err.msg)
-    return r.value
+    blitRgbaInto(dst, r.value)
   of fmtQoi:
     let r = decodeQoi(view())
     if not r.ok:
       raise newException(IOError, path & ": " & r.err.msg)
-    return r.value
+    blitRgbaInto(dst, r.value)
   of fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(IOError, path & ": 16-bit/float input not supported in v1")
   of fmtJpeg:
@@ -100,16 +149,13 @@ proc decodePath(path: string): RgbaImage =
     let r = decodeJpeg(view(), jpegScratch, denom)
     if not r.ok:
       raise newException(IOError, path & ": " & r.err.msg)
-    result = r.value.toRgba8()
-    if result.width == 0 or result.height == 0:
+    if not blitDynamicInto(r.value, dst):
       raise newException(IOError, path & ": unsupported pixel type in v1")
-    return result
   else:
     let r = decodeDyn(fmt, view())
     if not r.ok:
       raise newException(IOError, path & ": " & r.err.msg)
-    result = r.value.toRgba8()
-    if result.width == 0 or result.height == 0:
+    if not blitDynamicInto(r.value, dst):
       raise newException(IOError, path & ": unsupported pixel type in v1")
 
 proc decodeBytes(raw: string, name: string): RgbaImage =
@@ -153,10 +199,11 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
       raise newException(IOError, name & ": unsupported pixel type in v1")
 
 proc loadAt(idx: int): bool =
-  ## Decode gallery[idx] into the cache. Stays on the old image on error.
+  ## Decode gallery[idx] into the shared display pool. Stays on the old
+  ## image on error (`decodePathInto` only blits on success).
   let path = gallery[idx]
   try:
-    cached = decodePath(path)
+    decodePathInto(path, cached)
     cachedName = extractFilename(path)
     hasCache = true
     galleryIdx = idx
@@ -213,15 +260,16 @@ proc galleryCurrentPixels(w, h: ptr cint): pointer {.exportc.} =
   addr cached.pixels[0]
 
 proc galleryDropPixels*() {.exportc.} =
-  ## Release the CPU backing after the GPU has its copy. The on-screen
-  ## image lives in the Metal texture until the next upload; nothing
-  ## reads `cached.pixels` in between (resize re-renders from the
-  ## texture), so steady state drops to scratch capacities instead of
-  ## pinning one full image. The next `loadAt` replaces `cached`
-  ## wholesale. Width/height are kept (shape queries still answer;
-  ## `galleryCurrentPixels` returns nil with no backing, and both
-  ## upload call sites run only on a freshly decoded image).
-  cached.pixels = @[]
+  ## Drop the CPU length after the GPU has its copy, keeping the pool
+  ## capacity for the next slide. The on-screen image lives in the Metal
+  ## texture until the next upload; nothing reads `cached.pixels` in
+  ## between (resize re-renders from the texture). `setLen(0)` retains
+  ## the backing (unlike `= @[]`, which frees it), so a gallery walk
+  ## allocates the largest slide once and reuses it. Width/height are
+  ## kept (shape queries still answer; `galleryCurrentPixels` returns
+  ## nil with no backing, and both upload call sites run only on a
+  ## freshly decoded image).
+  cached.pixels.setLen(0)
 
 proc main() =
   if paramCount() < 1:
