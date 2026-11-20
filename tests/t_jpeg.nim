@@ -138,6 +138,19 @@ test "jpeg scratch reuse is bit-identical":
   # pool grew to hold its largest scan.
   let bigSum = rgbSum(decodeJpeg(big).value)
   check rgbSum(decodeJpeg(big, scratch).value) == bigSum
+  # Assembly rows are scratch-owned too: allocated on the color path,
+  # stable across same-size repeats, exact-sized per width (denom 2
+  # halves the width, exercising ensureCap growth + setLen shrink).
+  let w1 = scratch.yRow.data.len
+  check w1 > 0
+  check scratch.cbRow.data.len == w1
+  check scratch.crRow.data.len == w1
+  check rgbSum(decodeJpeg(big, scratch).value) == bigSum
+  check scratch.yRow.data.len == w1
+  discard decodeJpeg(big, scratch, 2)
+  check scratch.yRow.data.len == (w1 + 1) div 2
+  check scratch.cbRow.data.len == (w1 + 1) div 2
+  check scratch.crRow.data.len == (w1 + 1) div 2
   let cap1 = scratch.clean.data.len
   check cap1 > 1_000_000 # largest entropy scan of a 32 MP photo
   check rgbSum(decodeJpeg(big, scratch).value) == bigSum

@@ -359,21 +359,39 @@ type JpegScratch* = object
   ## thread. Call `shrinkAfterSpike` after a large photo if the process
   ## keeps decoding much smaller ones, so peak capacity is not pinned.
   clean*: PooledBuffer[uint8]
+  ## Assembly row buffers (Y/Cb/Cr gather rows, `outW` bytes each) for
+  ## the 3-component fast path. Same terms as `clean`: largest width
+  ## wins, capacity retained across decodes. Fully overwritten per row,
+  ## so no zeroing is needed (unlike PNG `prev`, which filters row 0
+  ## against zeros). Width-sized KBs: `shrinkAfterSpike` leaves them
+  ## alone. The exotic-sampling `xmaps` (3x `outW` ints, almost never
+  ## taken) stay fresh allocs — pooling them would pin capacity for a
+  ## path that barely runs.
+  yRow*: PooledBuffer[uint8]
+  cbRow*: PooledBuffer[uint8]
+  crRow*: PooledBuffer[uint8]
 
 proc initJpegScratch*(cap = 0): JpegScratch =
-  ## Empty scratch, optionally reserving `cap` bytes up front.
+  ## Empty scratch, optionally reserving `cap` bytes up front (entropy
+  ## buffer only; row buffers size themselves per decode).
   result.clean = initPool(uint8, cap)
+  result.yRow = initPool(uint8, 0)
+  result.cbRow = initPool(uint8, 0)
+  result.crRow = initPool(uint8, 0)
 
 proc shrinkAfterSpike*(s: var JpegScratch, steady: int) {.inline.} =
   ## Drop the entropy buffer to `steady` bytes after a large spike.
   s.clean.shrinkAfterSpike(steady)
 
 proc decodeJpegImpl(data: openArray[uint8], denom: int,
-    clean: var PooledBuffer[uint8]): ImageResult[DynamicImage] =
-  ## Shared decode body. `clean` is the caller-owned cleaned-entropy
-  ## buffer (largest scan wins, capacity retained across scans and, when
-  ## it lives in a `JpegScratch`, across decodes). Output is identical
-  ## to a fresh buffer: every scan rebuilds the content from `clear()`.
+    scratch: var JpegScratch): ImageResult[DynamicImage] =
+  ## Shared decode body. `scratch` is the caller-owned transient store:
+  ## `clean` (largest scan wins, capacity retained across scans and,
+  ## when it lives in a `JpegScratch`, across decodes) plus the three
+  ## assembly rows (largest `outW` wins). Output is identical to fresh
+  ## buffers: every scan rebuilds `clean` from `clear()`, and every
+  ## gather row fully overwrites its target before the SIMD convert
+  ## reads it.
   if denom notin [1, 2, 4, 8]:
     return err[DynamicImage](paramError(pkGeneric, "jpeg: denom 1/2/4/8"))
   if data.len < 2 or data[0] != 0xFF or data[1] != 0xD8:
@@ -435,9 +453,9 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
     buf.shrinkToFit()
     qq
   var progFinish = false
-  # NOTE: no `cleanScratch` local here — the caller-owned `clean` pool
+  # NOTE: no `cleanScratch` local here — the scratch-owned `clean` pool
   # fills that role (see `buildCleanScan`); a fresh decode passes an
-  # empty pool, a `JpegScratch` decode reuses capacity across calls.
+  # empty scratch, a `JpegScratch` decode reuses capacity across calls.
   while true:
     if pos + 1 >= data.len:
       return err[DynamicImage](decodingError("jpeg: truncated"))
@@ -620,8 +638,8 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
       pos += segLen - 2
       when defined(decodeProfile):
         let tProfScan0 = cpuTime()
-      let nextPos = buildCleanScan(data, pos, clean)
-      var reader = BitReader(data: clean.data, pos: 0, buf: 0, nbits: 0)
+      let nextPos = buildCleanScan(data, pos, scratch.clean)
+      var reader = BitReader(data: scratch.clean.data, pos: 0, buf: 0, nbits: 0)
       for i in 0..<comps.len: comps[i].dcPred = 0
       var eobrun = 0
       let isDc = ss == 0 and se == 0
@@ -830,8 +848,8 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
   # (progressive finish needs no BitReader; blocks come from pcoef.)
   var reader = BitReader(data: @[], pos: 0, buf: 0, nbits: 0)
   if not progFinish:
-    discard buildCleanScan(data, scanStart, clean)
-    reader = BitReader(data: clean.data, pos: 0, buf: 0, nbits: 0)
+    discard buildCleanScan(data, scanStart, scratch.clean)
+    reader = BitReader(data: scratch.clean.data, pos: 0, buf: 0, nbits: 0)
   var maxH = 1; var maxV = 1
   for i in 0..<comps.len:
     maxH = max(maxH, comps[i].h); maxV = max(maxV, comps[i].v)
@@ -933,7 +951,7 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
   # ends; otherwise ~2 MB rides along under the pixel output). The
   # pool keeps its capacity for the next decode; only `len` resets.
   reader = BitReader(data: @[], pos: 0, buf: 0, nbits: 0)
-  clean.clear()
+  scratch.clean.clear()
   # assemble pixels with upsampling (replication)
   when defined(decodeProfile):
     let tProfAsm0 = cpuTime()
@@ -983,9 +1001,22 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
         for ci in 0..2:
           xmaps[ci] = newSeq[int](outW)
           for x in 0..<outW: xmaps[ci][x] = (x * comps[ci].h) div maxH
-      var yRow = newSeq[uint8](outW)
-      var cbRow = newSeq[uint8](outW)
-      var crRow = newSeq[uint8](outW)
+      # Scratch-owned gather rows, exact-sized per decode (capacity
+      # retained across decodes). Used `.data`-direct, not `withBorrow`:
+      # same codegen discipline as the PNG Adam7 pools — the row loop is
+      # pixel-hot and a nested borrow scope perturbates it. The pattern
+      # is escape-safe by construction: each gather fully overwrites
+      # its row before `ycbcrRowSimd` reads it, and the raw pointers
+      # below never outlive this block (`px` alone escapes, moved).
+      scratch.yRow.ensureCap(outW)
+      scratch.yRow.data.setLen(outW)
+      scratch.cbRow.ensureCap(outW)
+      scratch.cbRow.data.setLen(outW)
+      scratch.crRow.ensureCap(outW)
+      scratch.crRow.data.setLen(outW)
+      var yRow = scratch.yRow.data
+      var cbRow = scratch.cbRow.data
+      var crRow = scratch.crRow.data
       let xm0 = xmaps[0]; let xm1 = xmaps[1]; let xm2 = xmaps[2]
       # Unchecked gather: `by`/`my` derive from row math inside the
       # block grid, `b` visits at most ceil(outW/step) blocks (same
@@ -1079,14 +1110,15 @@ proc decodeJpeg*(data: openArray[uint8], denom = 1): ImageResult[DynamicImage] =
   ## 1/denom-scaled image (full IDCT + in-block box average,
   ## libjpeg `-scale` style); 1 is full resolution. Output dims are
   ## ceil(w/denom).
-  var tmp = initPool(uint8, 0)
+  var tmp = initJpegScratch()
   decodeJpegImpl(data, denom, tmp)
 
 proc decodeJpeg*(data: openArray[uint8], scratch: var JpegScratch,
     denom = 1): ImageResult[DynamicImage] =
   ## Baseline / progressive JPEG decode reusing `scratch` across calls.
   ## Bit-identical to `decodeJpeg(data, denom)`; only the cleaned
-  ## entropy buffer is retained between decodes (not pixels, not
-  ## coefficients). Pass a long-lived scratch when decoding many
-  ## photos in a row; call `shrinkAfterSpike` to release a past peak.
-  decodeJpegImpl(data, denom, scratch.clean)
+  ## entropy buffer and the assembly rows are retained between decodes
+  ## (not pixels, not coefficients). Pass a long-lived scratch when
+  ## decoding many photos in a row; call `shrinkAfterSpike` to release
+  ## a past entropy peak.
+  decodeJpegImpl(data, denom, scratch)
