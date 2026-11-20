@@ -243,8 +243,7 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [ ] JPEG 2000 (jp2)
 - [x] HEIF sequences/timed pict tracks (`unci` v0/v1 / `jpeg`, incl. fragmented `moof`), tiled `iloc` construction-1/2 + tiled `uncC` (clean-room TL profile), EVC brand
 - [ ] RAW (a family of formats, not one codec; often requires camera-specific metadata and processing)
-- [x] SIMD: PNG Up filter, JPEG IDCT/FDCT, YCbCr row batch via nimsimd (runtime auto-dispatch SSE2/AVX2/NEON, bit-identical scalar fallback; `-ffp-contract=off`)
-- [ ] SIMD: PNG Average/Paeth/Sub (scalar by design — small rows stay scalar)
+- [x] SIMD: PNG unfilter rows (all 5 filters — Up parallel, Sub doubling-prefix, Average/Paeth frontier rounds; bpp 1/2 Average/Paeth + bpp-3 Paeth stay scalar where measured slower), JPEG IDCT/FDCT, YCbCr row batch via nimsimd (runtime auto-dispatch SSE2/AVX2/NEON, bit-identical scalar fallback; `-ffp-contract=off`)
 - [ ] `imageops` processing functions (blur, resize, rotate — excluded from v1)
 
 ### ❤ Contributions & Support

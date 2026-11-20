@@ -48,9 +48,12 @@ seq[uint8] --decodeImage--> DynamicImage --convertToWebp--> seq[uint8] (WebP)
   variants (`decodeTiffAll`, `decodeIcoAll`, `decodeExrAll`) return all.
 - `ok()` uses `sink` ownership: storing a pixel buffer into a result does
   not copy it (matters for multi-megapixel peak memory).
-- SIMD (`simd.nim` + `simd/`) accelerates PNG unfilter rows, JPEG IDCT/FDCT,
-  and YCbCr rows via `nimsimd` runtime dispatch (SSE2/AVX2/NEON); the scalar
-  fallback is bit-identical. PNG Average/Paeth/Sub stay scalar by design.
+- SIMD (`simd.nim` + `simd/`) accelerates PNG unfilter rows (all 5
+  filters: Up is parallel; Sub doubles prefix shifts, Average/Paeth
+  advance one frontier per round with a blend mask — bpp 1/2 Average/
+  Paeth and bpp-3 Paeth stay scalar where rounds lose to scalar),
+  JPEG IDCT/FDCT, and YCbCr rows via `nimsimd` runtime dispatch
+  (SSE2/AVX2/NEON); the scalar fallback is bit-identical.
 
 ## Dependencies
 

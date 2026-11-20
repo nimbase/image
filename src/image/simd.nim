@@ -182,39 +182,78 @@ proc unfilterRowScalar*(filter: uint8, cur, prev: var seq[uint8],
 proc simdUnfilterRow*(filter: uint8, cur, prev: var seq[uint8],
     bpp: int): bool =
   ## Drop-in replacement for the scalar row filter with runtime dispatch.
-  ## Only the Up filter currently has SIMD kernels (fully parallel);
-  ## Sub/Average/Paeth have intra-row dependencies and stay scalar for now.
+  ## Up is fully parallel (16/32-byte chunks). Sub/Average/Paeth chain on
+  ## `cur[i-bpp]`, so chunks seed from the buffer and propagate: Sub via
+  ## doubling shifts (linear), Average/Paeth one frontier per round with
+  ## a blend mask (nonlinear estimators run once per byte on final
+  ## taps). bpp 1/2 Average/Paeth and bpp-3 Paeth stay scalar: 5+
+  ## frontier rounds lose to the scalar loop (see t_simd_png timings).
+  ## Small rows (< 16 bytes) stay scalar to avoid setup cost.
   if cur.len != prev.len or cur.len == 0:
     if filter <= 4 and cur.len == prev.len: return true
     return filter <= 4
-  if filter == 2'u8 and cur.len >= 16:
-    let n = cur.len
-    let curP = addr cur[0]
-    let prevP = addr prev[0]
-    when defined(amd64):
-      if useAvx2 and n >= 32:
-        let m = (n div 32) * 32
-        upRowAvx2(curP, prevP, m)
-        let m2 = ((n - m) div 16) * 16
-        if m2 > 0:
-          upRowSse2(cast[ptr uint8](cast[int](curP) + m),
-            cast[ptr uint8](cast[int](prevP) + m), m2)
-        for i in (m + m2)..<n:
-          cur[i] = uint8((int(cur[i]) + int(prev[i])) and 0xFF)
-      else:
+  case filter
+  of 2:
+    if cur.len >= 16:
+      let n = cur.len
+      let curP = addr cur[0]
+      let prevP = addr prev[0]
+      when defined(amd64):
+        if useAvx2 and n >= 32:
+          let m = (n div 32) * 32
+          upRowAvx2(curP, prevP, m)
+          let m2 = ((n - m) div 16) * 16
+          if m2 > 0:
+            upRowSse2(cast[ptr uint8](cast[int](curP) + m),
+              cast[ptr uint8](cast[int](prevP) + m), m2)
+          for i in (m + m2)..<n:
+            cur[i] = uint8((int(cur[i]) + int(prev[i])) and 0xFF)
+        else:
+          let m = (n div 16) * 16
+          upRowSse2(curP, prevP, m)
+          for i in m..<n:
+            cur[i] = uint8((int(cur[i]) + int(prev[i])) and 0xFF)
+      elif defined(arm64):
         let m = (n div 16) * 16
-        upRowSse2(curP, prevP, m)
+        upRowNeon(curP, prevP, m)
         for i in m..<n:
           cur[i] = uint8((int(cur[i]) + int(prev[i])) and 0xFF)
-    elif defined(arm64):
-      let m = (n div 16) * 16
-      upRowNeon(curP, prevP, m)
-      for i in m..<n:
-        cur[i] = uint8((int(cur[i]) + int(prev[i])) and 0xFF)
-    else:
-      return unfilterRowScalar(filter, cur, prev, bpp)
-    return true
-  unfilterRowScalar(filter, cur, prev, bpp)
+      else:
+        return unfilterRowScalar(filter, cur, prev, bpp)
+      return true
+    unfilterRowScalar(filter, cur, prev, bpp)
+  of 1:
+    if cur.len >= 16 and bpp in {1, 2, 3, 4, 6, 8}:
+      when defined(amd64):
+        subRowSse2(addr cur[0], cur.len, bpp)
+      elif defined(arm64):
+        subRowNeon(addr cur[0], cur.len, bpp)
+      else:
+        return unfilterRowScalar(filter, cur, prev, bpp)
+      return true
+    unfilterRowScalar(filter, cur, prev, bpp)
+  of 3:
+    if cur.len >= 16 and bpp in {3, 4, 6, 8}:
+      when defined(amd64):
+        avgRowSse2(addr cur[0], addr prev[0], cur.len, bpp)
+      elif defined(arm64):
+        avgRowNeon(addr cur[0], addr prev[0], cur.len, bpp)
+      else:
+        return unfilterRowScalar(filter, cur, prev, bpp)
+      return true
+    unfilterRowScalar(filter, cur, prev, bpp)
+  of 4:
+    if cur.len >= 16 and bpp in {4, 6, 8}:
+      when defined(amd64):
+        paethRowSse2(addr cur[0], addr prev[0], cur.len, bpp)
+      elif defined(arm64):
+        paethRowNeon(addr cur[0], addr prev[0], cur.len, bpp)
+      else:
+        return unfilterRowScalar(filter, cur, prev, bpp)
+      return true
+    unfilterRowScalar(filter, cur, prev, bpp)
+  else:
+    unfilterRowScalar(filter, cur, prev, bpp)
 
 # ---------- JPEG DCT helpers ----------
 

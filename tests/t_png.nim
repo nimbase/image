@@ -1,6 +1,7 @@
 import unittest
 import image
 import image/codecs/png
+import image/simd
 import image/zlibwrap
 
 test "png rgb8 round-trip":
@@ -127,6 +128,61 @@ test "png adam7 multi-pass decodes bit-exact":
   for y in 0..<H:
     for x in 0..<W:
       check dec.value.rgb8.pixels[y * W + x].data == pxAt(x, y)
+
+test "png simd filters decode bit-exact":
+  # Hand-built Sub/Average/Paeth RGBA rows through the real decoder:
+  # rows are 32 bytes (SIMD chunks) and 20 bytes (16 + 4 tail), so the
+  # new kernels, carries and scalar tails all execute via decodePng.
+  # Paeth bpp-3 stays scalar by design; RGBA keeps every filter SIMD.
+  proc chunkF(t: array[4, uint8], body: seq[uint8]): seq[uint8] =
+    var r = newSeq[uint8](8 + body.len + 4)
+    let n = uint32(body.len)
+    r[0]=uint8((n shr 24) and 0xFF); r[1]=uint8((n shr 16) and 0xFF)
+    r[2]=uint8((n shr 8) and 0xFF); r[3]=uint8(n and 0xFF)
+    for i in 0..3: r[4+i] = t[i]
+    for i, b in body: r[8+i] = b
+    let c = chunkCrc(t, body)
+    r[8+body.len]=uint8((c shr 24) and 0xFF); r[8+body.len+1]=uint8((c shr 16) and 0xFF)
+    r[8+body.len+2]=uint8((c shr 8) and 0xFF); r[8+body.len+3]=uint8(c and 0xFF)
+    r
+  for (W, H) in [(8, 4), (5, 3)]:
+    for filter in [1'u8, 3, 4]:
+      var px = newSeq[Rgba[uint8]](W * H)
+      for y in 0..<H:
+        for x in 0..<W:
+          px[y*W+x] = Rgba[uint8](data: [uint8((x*37+y*91) and 0xFF),
+            uint8((x*53+y*29) and 0xFF), uint8((x*11+y*67) and 0xFF),
+            uint8((x*7+y*13+200) and 0xFF)])
+      const Bpp = 4
+      var raw: seq[uint8] = @[]
+      var prevRow = newSeq[uint8](W * Bpp)
+      for y in 0..<H:
+        raw.add(filter)
+        var cur = newSeq[uint8](W * Bpp)
+        for x in 0..<W:
+          let p = px[y*W+x].data
+          cur[4*x] = p[0]; cur[4*x+1] = p[1]
+          cur[4*x+2] = p[2]; cur[4*x+3] = p[3]
+        for i in 0..<cur.len:
+          let a = if i >= Bpp: int(cur[i-Bpp]) else: 0
+          let bb = int(prevRow[i])
+          let cc = if i >= Bpp: int(prevRow[i-Bpp]) else: 0
+          let pred = case filter
+            of 1: a
+            of 3: (a + bb) div 2
+            else: paeth(a, bb, cc)
+          raw.add(uint8((int(cur[i]) - pred) and 0xFF))
+        prevRow = move(cur)
+      let comp = deflateZlib(raw).value
+      let ihdr = @[0'u8, 0, 0, uint8(W), 0, 0, 0, uint8(H), 8, 6, 0, 0, 0]
+      var data = @[137'u8, 80, 78, 71, 13, 10, 26, 10]
+      data.add(chunkF([uint8('I'),uint8('H'),uint8('D'),uint8('R')], ihdr))
+      data.add(chunkF([uint8('I'),uint8('D'),uint8('A'),uint8('T')], comp))
+      data.add(chunkF([uint8('I'),uint8('E'),uint8('N'),uint8('D')], @[]))
+      let dec = decodePng(data)
+      check dec.ok
+      check dec.value.kind == dkRgba8
+      check dec.value.rgba8.pixels == px
 
 test "png scratch reuse is bit-identical":
   # Phase 2 S3: one PngScratch across decodes, both paths sharing the
