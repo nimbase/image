@@ -302,6 +302,41 @@ test "webp vp8l meta-huffman wins on gradients":
     check [p.data[0], p.data[1], p.data[2]] ==
       [px[i].data[0], px[i].data[1], px[i].data[2]]
 
+test "webp scratch reuse is bit-identical":
+  # Phase 2 S2: batch encoding through one Vp8lScratch. The LZ77 table
+  # is fully refilled per parse, so interleaving sizes must not leak
+  # across encodes.
+  proc loadRgba(name: string): RgbaImage =
+    let p = fixturesDir / "jpg" / "progressive" / name
+    var f = open(p, fmRead)
+    var raw = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, raw, 0, raw.len)
+    close(f)
+    let dec = decodeJpeg(raw)
+    check dec.ok
+    dec.value.toRgba8()
+  let a = loadRgba("cat.jpg") # 320x240 photo
+  let b = loadRgba("test.jpg") # 32x23 photo
+  let dynA = DynamicImage(kind: dkRgba8, rgba8: a)
+  let dynB = DynamicImage(kind: dkRgba8, rgba8: b)
+  var scratch = initVp8lScratch()
+  # Payload level: fresh vs scratch agree.
+  let paFresh = encodeVp8l(a)
+  check encodeVp8l(a, scratch) == paFresh
+  let h1 = scratch.head.data.len
+  check h1 > 0 # table backing allocated on first use
+  # Container level, interleaved sizes, then A again: identical.
+  let waFresh = encodeWebp(dynA).value
+  check encodeWebp(dynA, scratch).value == waFresh
+  check encodeWebp(dynB, scratch).value == encodeWebp(dynB).value
+  check encodeWebp(dynA, scratch).value == waFresh
+  check encodeVp8l(a, scratch) == paFresh
+  # Fixed-size table: no regrowth across encodes.
+  check scratch.head.data.len == h1
+  # Scratch-encoded output still round-trips.
+  let back = decodeWebp(encodeWebp(dynA, scratch).value)
+  check back.ok
+
 test "webp vp8l length prefix codes round-trip":
   # lengthSymExtra must invert copyDist for every length 1..4096.
   proc fwdCopyDist(prefix, extra: int): int =

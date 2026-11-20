@@ -2016,12 +2016,23 @@ proc encodeVp8lPayload*(img: RgbaImage, pxMain: seq[Rgba[uint8]],
   var head = newSeq[int](Vp8lHashSize)
   encodeVp8lPayloadImpl(img, pxMain, modes, colParams, plan, head)
 
-proc encodeVp8l*(img: RgbaImage): seq[uint8] =
-  ## VP8L encoder: predictor + subtract-green + (when they win) per-block
-  ## color transform and meta-Huffman, LZ77 backward matches + color cache.
-  ## Pixel-exact output any spec decoder accepts. Each optional stage is
-  ## kept only when its actual payload is smaller (reference philosophy:
-  ## never trust estimates).
+type Vp8lScratch* = object
+  ## Reusable cross-encode scratch for VP8L encoding. Owns the LZ77 hash
+  ## table (`Vp8lHashSize` ints, ~2 MB at default hash bits) across
+  ## encodes, so batch encoding pays one backing instead of one per
+  ## encode. Each parse fully refills the table, so reuse is output-
+  ## identical. Fixed size per build (`Vp8lHashBits` intdefine); no
+  ## shrink API needed. Not thread-safe — one per encoding thread.
+  head*: PooledBuffer[int]
+
+proc initVp8lScratch*(): Vp8lScratch =
+  ## Empty scratch; the backing is allocated on first use.
+  result.head = initPool(int, 0)
+
+proc encodeVp8lImpl(img: RgbaImage, headPool: var PooledBuffer[int]): seq[uint8] =
+  ## Shared encode body. `headPool` is the caller-owned LZ77 hash
+  ## backing (one per encode, or one per batch in a `Vp8lScratch`).
+  ## Output is identical either way: every parse refills it.
   let w = int(img.width); let h = int(img.height)
   if not Vp8lUseTransforms:
     return encodeVp8lPayload(img, img.pixels, @[], @[])
@@ -2034,7 +2045,6 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
   # One LZ77 hash backing shared by every parse below (base + color +
   # bucket + meta tries): each parse fully refills it, so a single
   # buffalo pool replaces one ~Vp8lHashSize-int alloc per attempt.
-  var headPool = initPool(int, Vp8lHashSize)
   withBorrow(headPool, headBuf):
     headBuf.setLen(Vp8lHashSize)
     var best = encodeVp8lPayloadImpl(img, px, modes, @[],
@@ -2065,9 +2075,24 @@ proc encodeVp8l*(img: RgbaImage): seq[uint8] =
         if meta.len < best.len: best = meta
     best
 
-proc encodeWebp*(img: DynamicImage): ImageResult[seq[uint8]] =
-  let rgba = img.toRgba8()
-  let payload = encodeVp8l(rgba)
+proc encodeVp8l*(img: RgbaImage): seq[uint8] =
+  ## VP8L encoder: predictor + subtract-green + (when they win) per-block
+  ## color transform and meta-Huffman, LZ77 backward matches + color cache.
+  ## Pixel-exact output any spec decoder accepts. Each optional stage is
+  ## kept only when its actual payload is smaller (reference philosophy:
+  ## never trust estimates).
+  var tmp = initPool(int, 0)
+  encodeVp8lImpl(img, tmp)
+
+proc encodeVp8l*(img: RgbaImage, scratch: var Vp8lScratch): seq[uint8] =
+  ## VP8L encoder reusing `scratch` across encodes. Bit-identical to
+  ## `encodeVp8l(img)`; only the LZ77 hash backing is retained between
+  ## encodes (not pixels, not payloads). Pass a long-lived scratch when
+  ## encoding many images in a row.
+  encodeVp8lImpl(img, scratch.head)
+
+proc wrapWebp(payload: seq[uint8]): seq[uint8] =
+  ## RIFF/WEBP/VP8L container around a raw VP8L payload.
   var output = @[uint8('R'),uint8('I'),uint8('F'),uint8('F')]
   let total = 4 + 8 + payload.len
   let pad = payload.len and 1
@@ -2078,4 +2103,14 @@ proc encodeWebp*(img: DynamicImage): ImageResult[seq[uint8]] =
   for k in 0..3: output.add(uint8((n shr (8*k)) and 0xFF))
   for b in payload: output.add(b)
   if pad == 1: output.add(0)
-  ok(output)
+  output
+
+proc encodeWebp*(img: DynamicImage): ImageResult[seq[uint8]] =
+  let rgba = img.toRgba8()
+  ok(wrapWebp(encodeVp8l(rgba)))
+
+proc encodeWebp*(img: DynamicImage, scratch: var Vp8lScratch): ImageResult[seq[uint8]] =
+  ## WebP lossless encoder reusing `scratch` across encodes.
+  ## Bit-identical to `encodeWebp(img)`.
+  let rgba = img.toRgba8()
+  ok(wrapWebp(encodeVp8l(rgba, scratch)))
