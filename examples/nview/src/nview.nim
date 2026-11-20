@@ -212,6 +212,17 @@ proc galleryCurrentPixels(w, h: ptr cint): pointer {.exportc.} =
   if cached.pixels.len == 0: return nil
   addr cached.pixels[0]
 
+proc galleryDropPixels() {.exportc.} =
+  ## Release the CPU backing after the GPU has its copy. The on-screen
+  ## image lives in the Metal texture until the next upload; nothing
+  ## reads `cached.pixels` in between (resize re-renders from the
+  ## texture), so steady state drops to scratch capacities instead of
+  ## pinning one full image. The next `loadAt` replaces `cached`
+  ## wholesale. Width/height are kept (shape queries still answer;
+  ## `galleryCurrentPixels` returns nil with no backing, and both
+  ## upload call sites run only on a freshly decoded image).
+  cached.pixels = @[]
+
 proc main() =
   if paramCount() < 1:
     stderr.writeLine("usage: nview <image-or-directory>")

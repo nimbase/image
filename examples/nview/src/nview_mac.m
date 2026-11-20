@@ -18,6 +18,7 @@ extern int galleryIndex(void);
 extern int galleryGo(int delta);
 extern const char *galleryCurrentName(void);
 extern unsigned char *galleryCurrentPixels(int *w, int *h);
+extern void galleryDropPixels(void);
 
 static NSString *const kPrevItem = @"nview.prev";
 static NSString *const kNameItem = @"nview.name";
@@ -152,7 +153,8 @@ static const char *kShaders =
     }
     return NO;
   }
-  [device retain];
+  // MTLCreateSystemDefaultDevice follows the Create rule (caller owns,
+  // +1); dealloc releases once, so no extra retain here.
   queue = [device newCommandQueue];
   NSString *src = [NSString stringWithUTF8String:kShaders];
   id<MTLLibrary> lib = [device newLibraryWithSource:src
@@ -172,7 +174,8 @@ static const char *kShaders =
   [vs release];
   [fs release];
   if (!pipeline) return NO;
-  [pipeline retain];
+  // new* already transfers ownership (+1), matching the single release
+  // in dealloc — no extra retain.
   return YES;
 }
 
@@ -217,6 +220,11 @@ static const char *kShaders =
   }
   (void)idx;
   [self uploadCurrentTexture];
+  // The texture now owns the on-screen image; drop Nim's CPU copy so
+  // steady state is scratch capacities, not one pinned full image.
+  // Safe: nothing reads galleryCurrentPixels until the next loadAt,
+  // which replaces the cache wholesale (resize renders from texture).
+  galleryDropPixels();
   [self updateTitle];
   [self render];
 }
@@ -306,23 +314,47 @@ static const char *kShaders =
     return it;
   }
   if ([ident isEqualToString:kNameItem]) {
-    nameField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 22)];
-    nameField.bezeled = NO;
-    nameField.drawsBackground = NO;
-    nameField.editable = NO;
-    nameField.selectable = NO;
-    nameField.alignment = NSTextAlignmentCenter;
-    nameField.font = [NSFont systemFontOfSize:13];
+    // The field is created once and owned by the controller. Toolbar
+    // rebuilds (and customization-palette previews, which must never
+    // clobber — let alone dangle — the live ivar) get a throwaway copy.
+    NSTextField *field = nil;
+    if (flag) {
+      if (!nameField) {
+        nameField = [[self makeNameField] retain];
+      } else {
+        // Moving to a fresh item: detach from the discarded one first
+        // (a view can only live in one superview).
+        [nameField removeFromSuperview];
+      }
+      field = nameField;
+    } else {
+      field = [self makeNameField];
+    }
     NSToolbarItem *it =
         [[[NSToolbarItem alloc] initWithItemIdentifier:ident] autorelease];
     it.label = @"Picture";
     it.paletteLabel = @"Picture name";
-    it.view = nameField;
+    it.view = field;
     it.minSize = NSMakeSize(200, 22);
     it.maxSize = NSMakeSize(600, 22);
     return it;
   }
   return nil;
+}
+
+// ----- shared name-field factory (autoreleased) -----
+
+- (NSTextField *)makeNameField {
+  NSTextField *f =
+      [[[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 22)]
+          autorelease];
+  f.bezeled = NO;
+  f.drawsBackground = NO;
+  f.editable = NO;
+  f.selectable = NO;
+  f.alignment = NSTextAlignmentCenter;
+  f.font = [NSFont systemFontOfSize:13];
+  return f;
 }
 
 - (NSArray<NSString *> *)toolbarAllowedItemIdentifiers:(NSToolbar *)t {
@@ -400,6 +432,7 @@ static const char *kShaders =
   [window makeFirstResponder:view];
   [window makeKeyAndOrderFront:nil];
   [self uploadCurrentTexture];
+  galleryDropPixels(); // steady state from here: see goDelta:
   [self updateTitle];
   [self render];
 }
