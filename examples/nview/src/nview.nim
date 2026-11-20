@@ -32,6 +32,11 @@ var
   cached: RgbaImage
   cachedName = ""
   hasCache = false
+  jpegScratch = initJpegScratch()
+    ## Cross-navigation JPEG entropy buffer (Phase 2 S1): one gallery
+    ## walk allocates the largest scan once instead of once per photo.
+    ## Bit-identical output; the gallery is fixed per process launch,
+    ## so no shrink discipline is needed here.
 
 proc decodeDyn(fmt: ImageFormat, bytes: seq[uint8]): ImageResult[DynamicImage] =
   ## Dispatch for formats that decode straight to DynamicImage.
@@ -80,7 +85,7 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
       let m = max(dd.value.w, dd.value.h)
       if m > 2400: denom = 4
       elif m > 1200: denom = 2
-    let r = decodeJpeg(bytes, denom)
+    let r = decodeJpeg(bytes, jpegScratch, denom)
     if not r.ok:
       raise newException(IOError, name & ": " & r.err.msg)
     result = r.value.toRgba8()
