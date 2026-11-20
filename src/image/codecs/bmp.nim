@@ -38,7 +38,7 @@ proc maskInfo(mask: uint32): tuple[shift, len: int] =
     inc l; m = m shr 1
   (s, l)
 
-proc decodeBmp*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc decodeBmp*(data: openArray[uint8]): ImageResult[DynamicImage] =
   if data.len < 14 or data[0] != uint8('B') or data[1] != uint8('M'):
     return err[DynamicImage](decodingError("bmp: bad signature"))
   let dataOff = int(u32le(data, 10))

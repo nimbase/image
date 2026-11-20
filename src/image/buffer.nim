@@ -25,13 +25,13 @@ type
 func newImageBuffer*[P](w, h: uint32, fill: P): ImageBuffer[P] =
   var px = newSeq[P](int(w) * int(h))
   for i in 0..<px.len: px[i] = fill
-  ImageBuffer[P](width: w, height: h, pixels: px)
+  ImageBuffer[P](width: w, height: h, pixels: move(px))
 
-func fromRaw*[P](w, h: uint32, buf: seq[P]): tuple[ok: bool, img: ImageBuffer[P]] =
+proc fromRaw*[P](w, h: uint32, buf: sink seq[P]): tuple[ok: bool, img: ImageBuffer[P]] =
   if uint64(buf.len) != uint64(w) * uint64(h):
     (false, ImageBuffer[P]())
   else:
-    (true, ImageBuffer[P](width: w, height: h, pixels: buf))
+    (true, ImageBuffer[P](width: w, height: h, pixels: move(buf)))
 
 func dimensions*[P](img: ImageBuffer[P]): tuple[w, h: uint32] =
   (img.width, img.height)
@@ -57,4 +57,4 @@ proc cropInPlace*[P](img: var ImageBuffer[P], r: Rect) =
         img.pixels[int(rr.y + uint32(y)) * int(img.width) + int(rr.x + uint32(x))]
   img.width = rr.width
   img.height = rr.height
-  img.pixels = outP
+  img.pixels = move(outP)

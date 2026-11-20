@@ -17,7 +17,7 @@ when not defined(macosx):
 {.compile: "nview_mac.m".}
 {.passL: "-framework Cocoa -framework Metal -framework QuartzCore".}
 
-import std/[os, strutils, algorithm]
+import std/[os, strutils, algorithm, memfiles]
 import image
 
 proc nview_run() {.importc.}
@@ -40,24 +40,81 @@ var
   pngScratch = initPngScratch()
     ## Cross-navigation PNG row buffers (Phase 2 S3), same terms.
 
-proc decodeDyn(fmt: ImageFormat, bytes: seq[uint8]): ImageResult[DynamicImage] =
+proc decodeDyn(fmt: ImageFormat, bytes: openArray[uint8]): ImageResult[DynamicImage] =
   ## Dispatch for formats that decode straight to DynamicImage.
+  ## Takes an openArray view (memfiles-friendly, zero-copy); the heif
+  ## path copies once (other agent owns that decoder's seq API).
   case fmt
   of fmtPng: decodePng(bytes, pngScratch)
-  of fmtJpeg: decodeJpeg(bytes)
+  of fmtJpeg: decodeJpeg(bytes, jpegScratch, 1)
   of fmtWebP: decodeWebp(bytes)
   of fmtBmp: decodeBmp(bytes)
   of fmtTiff: decodeTiff(bytes)
   of fmtTga: decodeTga(bytes)
   of fmtPnm: decodePnm(bytes)
   of fmtIco: decodeIco(bytes)
-  of fmtHeif: decodeHeif(bytes)
+  of fmtHeif: decodeHeif(@bytes)
   of fmtAvif: decodeAvif(bytes) # v1 stub: returns Unsupported, message propagates
   of fmtGif, fmtQoi, fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(AssertionDefect, "decodeDyn: unexpected " & $fmt)
 
+proc decodePath(path: string): RgbaImage =
+  ## Decode any supported file to RGBA8 via a read-only mmap view.
+  ## Zero file-byte copies: the MemFile window is passed as openArray
+  ## views straight into guess + decoders (heif copies once internally).
+  ## Raises IOError on failure. The mapping lives only for this call.
+  var mf =
+    try: memfiles.open(path)
+    except OSError as e: raise newException(IOError, path & ": " & e.msg)
+  defer: mf.close()
+  if mf.size <= 0:
+    raise newException(IOError, path & ": empty file")
+  template view(): auto =
+    cast[ptr UncheckedArray[uint8]](mf.mem).toOpenArray(0, mf.size - 1)
+  let (found, fmt) = guessFormat(view())
+  if not found:
+    raise newException(IOError, "cannot guess format: " & path)
+  case fmt
+  of fmtGif:
+    let r = gifFirstToRgba(view()) # v1: first frame only, no animation
+    if not r.ok:
+      raise newException(IOError, path & ": " & r.err.msg)
+    return r.value
+  of fmtQoi:
+    let r = decodeQoi(view())
+    if not r.ok:
+      raise newException(IOError, path & ": " & r.err.msg)
+    return r.value
+  of fmtHdr, fmtOpenExr, fmtFarbfeld:
+    raise newException(IOError, path & ": 16-bit/float input not supported in v1")
+  of fmtJpeg:
+    # scaled decode for large photos: pick the largest denom that keeps
+    # the image usable on screen (decode-time win for pixels the viewer
+    # would downscale in GL anyway).
+    var denom = 1
+    let dd = jpegDimensions(view())
+    if dd.ok:
+      let m = max(dd.value.w, dd.value.h)
+      if m > 2400: denom = 4
+      elif m > 1200: denom = 2
+    let r = decodeJpeg(view(), jpegScratch, denom)
+    if not r.ok:
+      raise newException(IOError, path & ": " & r.err.msg)
+    result = r.value.toRgba8()
+    if result.width == 0 or result.height == 0:
+      raise newException(IOError, path & ": unsupported pixel type in v1")
+    return result
+  else:
+    let r = decodeDyn(fmt, view())
+    if not r.ok:
+      raise newException(IOError, path & ": " & r.err.msg)
+    result = r.value.toRgba8()
+    if result.width == 0 or result.height == 0:
+      raise newException(IOError, path & ": unsupported pixel type in v1")
+
 proc decodeBytes(raw: string, name: string): RgbaImage =
-  ## Decode any supported file contents to RGBA8. Raises IOError on failure.
+  ## Legacy string-content entry (kept for tests): copies once into an
+  ## owned seq, then runs the same dispatch. Gallery uses decodePath.
   var bytes = newSeq[uint8](raw.len)
   if raw.len > 0:
     copyMem(addr bytes[0], unsafeAddr raw[0], raw.len)
@@ -66,21 +123,16 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
     raise newException(IOError, "cannot guess format: " & name)
   case fmt
   of fmtGif:
-    let r = gifFirstToRgba(bytes) # v1: first frame only, no animation
-    if not r.ok:
-      raise newException(IOError, name & ": " & r.err.msg)
+    let r = gifFirstToRgba(bytes)
+    if not r.ok: raise newException(IOError, name & ": " & r.err.msg)
     return r.value
   of fmtQoi:
     let r = decodeQoi(bytes)
-    if not r.ok:
-      raise newException(IOError, name & ": " & r.err.msg)
+    if not r.ok: raise newException(IOError, name & ": " & r.err.msg)
     return r.value
   of fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(IOError, name & ": 16-bit/float input not supported in v1")
   of fmtJpeg:
-    # scaled decode for large photos: pick the largest denom that keeps
-    # the image usable on screen (decode-time win for pixels the viewer
-    # would downscale in GL anyway).
     var denom = 1
     let dd = jpegDimensions(bytes)
     if dd.ok:
@@ -88,16 +140,14 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
       if m > 2400: denom = 4
       elif m > 1200: denom = 2
     let r = decodeJpeg(bytes, jpegScratch, denom)
-    if not r.ok:
-      raise newException(IOError, name & ": " & r.err.msg)
+    if not r.ok: raise newException(IOError, name & ": " & r.err.msg)
     result = r.value.toRgba8()
     if result.width == 0 or result.height == 0:
       raise newException(IOError, name & ": unsupported pixel type in v1")
     return result
   else:
     let r = decodeDyn(fmt, bytes)
-    if not r.ok:
-      raise newException(IOError, name & ": " & r.err.msg)
+    if not r.ok: raise newException(IOError, name & ": " & r.err.msg)
     result = r.value.toRgba8()
     if result.width == 0 or result.height == 0:
       raise newException(IOError, name & ": unsupported pixel type in v1")
@@ -106,7 +156,7 @@ proc loadAt(idx: int): bool =
   ## Decode gallery[idx] into the cache. Stays on the old image on error.
   let path = gallery[idx]
   try:
-    cached = decodeBytes(readFile(path), path)
+    cached = decodePath(path)
     cachedName = extractFilename(path)
     hasCache = true
     galleryIdx = idx

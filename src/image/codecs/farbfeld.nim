@@ -50,7 +50,7 @@ proc writeFarbfeld*(s: Stream, buf: openArray[uint8], w, h: uint32,
   s.write(raw)
   ok(true)
 
-proc decodeFarbfeld*(data: seq[uint8]): ImageResult[Rgba16Image] =
+proc decodeFarbfeld*(data: openArray[uint8]): ImageResult[Rgba16Image] =
   if data.len < 16:
     return err[Rgba16Image](decodingError("farbfeld: too short"))
   for i, c in FarbfeldMagic:

@@ -16,7 +16,7 @@ type
     bytesInRes*: uint32
     imageOffset*: uint32
 
-proc parseIcoDir(data: seq[uint8]): ImageResult[seq[IcoEntry]] =
+proc parseIcoDir(data: openArray[uint8]): ImageResult[seq[IcoEntry]] =
   if data.len < 6:
     return err[seq[IcoEntry]](decodingError("ico: too short"))
   let reserved = uint16(data[0]) or (uint16(data[1]) shl 8)
@@ -44,7 +44,7 @@ proc isPngPayload(data: openArray[uint8]): bool =
   data.len >= 8 and data[0]==137 and data[1]==80 and data[2]==78 and
     data[3]==71 and data[4]==13 and data[5]==10 and data[6]==26 and data[7]==10
 
-proc decodeBmpIcoPayload*(payload: seq[uint8]): ImageResult[DynamicImage] =
+proc decodeBmpIcoPayload*(payload: openArray[uint8]): ImageResult[DynamicImage] =
   ## ICO BMP payloads: DIB header (no file header), height doubled (XOR+AND),
   ## followed by trailing AND mask (1-bit transparency, bottom-up rows).
   if payload.len < 4:
@@ -75,7 +75,7 @@ proc decodeBmpIcoPayload*(payload: seq[uint8]): ImageResult[DynamicImage] =
   if wAct <= 0 or hAct <= 0:
     return err[DynamicImage](decodingError("ico: bad bmp dimensions"))
   # Patch a copy: halve DIB height, prepend file header.
-  var patched = payload
+  var patched = @payload
   if dibSize == 12:
     patched[6] = uint8(hAct and 0xFF); patched[7] = uint8((hAct shr 8) and 0xFF)
   else:
@@ -124,11 +124,12 @@ proc decodeBmpIcoPayload*(payload: seq[uint8]): ImageResult[DynamicImage] =
   let andOff = pixOffInPayload + rowStride * hAct * 2
   if andOff + andStride * hAct > payload.len:
     return dr # no AND mask present; opaque
-  proc andBit(x, y: int): bool =
-    # AND mask rows are bottom-up always
-    let yy = hAct - 1 - y
-    let b = payload[andOff + yy * andStride + x div 8]
-    ((b shr (7 - (x mod 8))) and 1) == 1
+  template andBit(x, y: int): bool =
+    # AND mask rows are bottom-up always (template: no openArray capture)
+    block:
+      let ayy = hAct - 1 - y
+      let ab = payload[andOff + ayy * andStride + x div 8]
+      ((ab shr (7 - (x mod 8))) and 1) == 1
   case dr.value.kind
   of dkRgb8:
     let s = dr.value.rgb8
@@ -149,17 +150,16 @@ proc decodeBmpIcoPayload*(payload: seq[uint8]): ImageResult[DynamicImage] =
   else:
     dr
 
-proc decodeIcoEntry(data: seq[uint8],
+proc decodeIcoEntry(data: openArray[uint8],
     e: IcoEntry): ImageResult[DynamicImage] =
   let off = int(e.imageOffset); let n = int(e.bytesInRes)
   if off + n > data.len or n == 0:
     return err[DynamicImage](decodingError("ico: entry OOB"))
-  let payload = data[off..<off+n]
-  if isPngPayload(payload):
-    return decodePng(payload)
-  decodeBmpIcoPayload(payload)
+  if isPngPayload(data.toOpenArray(off, off + n - 1)):
+    return decodePng(data.toOpenArray(off, off + n - 1))
+  decodeBmpIcoPayload(data.toOpenArray(off, off + n - 1))
 
-proc decodeIcoAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
+proc decodeIcoAll*(data: openArray[uint8]): ImageResult[seq[DynamicImage]] =
   let er = parseIcoDir(data)
   if not er.ok: return err[seq[DynamicImage]](er.err)
   var images: seq[DynamicImage] = @[]
@@ -171,7 +171,7 @@ proc decodeIcoAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
     return err[seq[DynamicImage]](decodingError("ico: no images"))
   ok(images)
 
-proc decodeIco*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc decodeIco*(data: openArray[uint8]): ImageResult[DynamicImage] =
   ## Largest entry wins (closest to reference behavior for stills).
   let er = parseIcoDir(data)
   if not er.ok: return err[DynamicImage](er.err)

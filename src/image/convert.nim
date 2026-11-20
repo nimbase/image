@@ -4,6 +4,7 @@
 ## Animated GIF / multi-page TIFF / multi-image ICO: first frame only.
 ## 16-bit / float32 sources auto-downconvert to 8-bit (never blank output).
 import std/options
+import std/memfiles
 import ./color
 import ./error
 import ./buffer
@@ -30,7 +31,7 @@ import ./codecs/heif/heif
 const WebpMaxDim* = 16384
   ## VP8L header stores width-1 / height-1 in 14 bits.
 
-proc decodeImage*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc decodeImage*(data: openArray[uint8]): ImageResult[DynamicImage] =
   ## Decode any supported format (magic-byte sniffed) to a DynamicImage.
   ## First frame wins for animated / multi-image inputs. Clean errors,
   ## never raises.
@@ -49,7 +50,7 @@ proc decodeImage*(data: seq[uint8]): ImageResult[DynamicImage] =
   of fmtPnm: decodePnm(data)
   of fmtIco: decodeIco(data)
   of fmtWebP: decodeWebp(data)
-  of fmtHeif: decodeHeif(data)
+  of fmtHeif: decodeHeif(@data)
   of fmtAvif: decodeAvif(data) # v1 stub: returns Unsupported, propagates
   of fmtOpenExr: decodeExr(data)
   of fmtGif:
@@ -242,10 +243,23 @@ proc encode*(req: WebpRequest): ImageResult[seq[uint8]] =
     return encodeWebp(DynamicImage(kind: dkRgba8, rgba8: n.value))
   encodeWebpLossy(n.value, req.quality)
 
-proc convertToWebp*(data: seq[uint8], quality = 75,
+proc convertToWebp*(data: openArray[uint8], quality = 75,
     lossless = false): ImageResult[seq[uint8]] =
   ## Convert any supported encoded image to WebP. Format is sniffed;
   ## first frame wins for animated / multi-image inputs.
   let d = decodeImage(data)
   if not d.ok: return err[seq[uint8]](d.err)
   d.value.toWebp(quality).lossless(lossless).encode()
+
+proc decodeImageFile*(path: string): ImageResult[DynamicImage] =
+  ## Decode any supported file via a read-only mmap window (no
+  ## readFile + copy: the mapped bytes are passed as openArray views
+  ## straight into the decoders). Heif copies once internally (other
+  ## agent owns that seq API); all other formats are zero-copy on input.
+  var mf =
+    try: memfiles.open(path)
+    except OSError as e: return err[DynamicImage](decodingError("open: " & e.msg))
+  defer: mf.close()
+  if mf.size <= 0:
+    return err[DynamicImage](decodingError("convert: empty file"))
+  decodeImage(cast[ptr UncheckedArray[uint8]](mf.mem).toOpenArray(0, mf.size - 1))

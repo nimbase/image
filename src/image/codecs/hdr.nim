@@ -34,10 +34,11 @@ func hdrToRgbe*(r, g, b: float32): Rgbe =
   let cb = uint8(trunc(b / mul * 256.0'f32))
   (cr, cg, cb, uint8(exp + 128))
 
-proc decodeHdr*(data: seq[uint8]): ImageResult[Rgb32FImage] =
-  # header: lines until empty line
+proc decodeHdr*(data: openArray[uint8]): ImageResult[Rgb32FImage] =
+  # header: lines until empty line. readLine takes the view explicitly:
+  # a nested proc may not capture the outer openArray (borrow safety).
   var pos = 0
-  proc readLine(): tuple[eof: bool, s: string] =
+  proc readLine(data: openArray[uint8], pos: var int): tuple[eof: bool, s: string] =
     if pos >= data.len: return (true, "")
     let start = pos
     while pos < data.len and data[pos] != uint8('\n'): inc pos
@@ -47,13 +48,13 @@ proc decodeHdr*(data: seq[uint8]): ImageResult[Rgb32FImage] =
     # strip trailing \r
     if s.len > 0 and s[^1] == '\r': s.setLen(s.len - 1)
     (false, s)
-  let (eof0, sig) = readLine()
+  let (eof0, sig) = readLine(data, pos)
   if eof0 or not sig.startsWith(HdrSignature):
     return err[Rgb32FImage](decodingError("hdr: bad signature"))
   var formatOk = false
   var gotFormat = false
   while true:
-    let (eof, line) = readLine()
+    let (eof, line) = readLine(data, pos)
     if eof: return err[Rgb32FImage](decodingError("hdr: EOF in header"))
     if line.len == 0: break
     if line.len > 0 and line[0] == '#': continue
@@ -66,7 +67,7 @@ proc decodeHdr*(data: seq[uint8]): ImageResult[Rgb32FImage] =
         formatOk = val == "32-bit_rle_rgbe"
   if gotFormat and not formatOk:
     return err[Rgb32FImage](unsupportedError(ukFormat, "hdr: unsupported FORMAT (need 32-bit_rle_rgbe)"))
-  let (eofD, dimLine) = readLine()
+  let (eofD, dimLine) = readLine(data, pos)
   if eofD: return err[Rgb32FImage](decodingError("hdr: EOF in dimensions"))
   let parts = dimLine.splitWhitespace()
   if parts.len != 4:

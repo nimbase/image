@@ -37,7 +37,7 @@ proc parseTgaHeader(data: openArray[uint8]): ImageResult[TgaHeader] =
     height: uint16(data[14]) or (uint16(data[15]) shl 8),
     pixelDepth: data[16], imgDesc: data[17]))
 
-proc decodeTga*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc decodeTga*(data: openArray[uint8]): ImageResult[DynamicImage] =
   let hr = parseTgaHeader(data)
   if not hr.ok: return err[DynamicImage](hr.err)
   let h = hr.value
@@ -94,7 +94,7 @@ proc decodeTga*(data: seq[uint8]): ImageResult[DynamicImage] =
     let cmapLen = cmapEntrySize * int(h.mapLen)
     if pos + cmapLen > data.len:
       return err[DynamicImage](decodingError("tga: truncated colormap"))
-    cmapBytes = data[pos..<pos+cmapLen]
+    cmapBytes = @(data.toOpenArray(pos, pos + cmapLen - 1))
     cmapStart = int(h.mapOrigin)
     pos += cmapLen
     if imgTypeIsColorMapped(h.imgType) and h.mapEntrySize in [15'u8, 16]:

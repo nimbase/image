@@ -1406,7 +1406,8 @@ proc readName(data: seq[uint8], pos: var int, maxLen: int): tuple[ok: bool, s: s
   inc(pos) # skip NUL
   (true, s)
 
-proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
+proc decodeExrAll*(raw: openArray[uint8]): ImageResult[seq[DynamicImage]] =
+  let data = @raw
   if data.len < 8:
     return err[seq[DynamicImage]](decodingError("exr: too short"))
   for i in 0..3:
@@ -1708,8 +1709,8 @@ proc decodeExrAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
   return err[seq[DynamicImage]](unsupportedError(ukColor,
     "exr: channel set " & $names))
 
-proc decodeExr*(data: seq[uint8]): ImageResult[DynamicImage] =
-  let r = decodeExrAll(data)
+proc decodeExr*(raw: openArray[uint8]): ImageResult[DynamicImage] =
+  let r = decodeExrAll(raw)
   if not r.ok: return err[DynamicImage](r.err)
   ok(r.value[0])
 

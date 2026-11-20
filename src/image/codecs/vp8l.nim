@@ -15,14 +15,15 @@ import ./vp8
 # ---------- LSB bit reader ----------
 
 type LsbReader = object
-  data: seq[uint8]
+  base: ptr UncheckedArray[uint8]
+  len: int
   pos: int
   buf: uint64
   nbits: int
 
 proc fillBits(r: var LsbReader) =
-  while r.nbits <= 56 and r.pos < r.data.len:
-    r.buf = r.buf or (uint64(r.data[r.pos]) shl r.nbits)
+  while r.nbits <= 56 and r.pos < r.len:
+    r.buf = r.buf or (uint64(r.base[r.pos]) shl r.nbits)
     r.nbits += 8
     inc(r.pos)
 
@@ -558,9 +559,13 @@ type Transform = object
   data: seq[uint8]
   tableSize: int
 
-proc decodeVp8l*(payload: seq[uint8], wantW, wantH: int): ImageResult[RgbaImage] =
-  ## payload starts at the 0x2f signature byte.
-  var r = LsbReader(data: payload, pos: 0, buf: 0, nbits: 0)
+proc decodeVp8l*(payload: openArray[uint8], wantW, wantH: int): ImageResult[RgbaImage] =
+  ## payload starts at the 0x2f signature byte. Borrows the caller bytes
+  ## (pointer + len, no copy); the reader never outlives this call.
+  let basePtr =
+    if payload.len == 0: nil
+    else: cast[ptr UncheckedArray[uint8]](unsafeAddr payload[0])
+  var r = LsbReader(base: basePtr, len: payload.len, pos: 0, buf: 0, nbits: 0)
   let (okS, sig) = r.readBits(8)
   if not okS or sig != 0x2F:
     return err[RgbaImage](decodingError("webp: bad VP8L signature"))
@@ -708,43 +713,47 @@ proc decodeVp8l*(payload: seq[uint8], wantW, wantH: int): ImageResult[RgbaImage]
 
 # ---------- RIFF container ----------
 
-proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
-  if data.len < 12 or data[0..3] != @[uint8('R'),uint8('I'),uint8('F'),uint8('F')] or
-      data[8..11] != @[uint8('W'),uint8('E'),uint8('B'),uint8('P')]:
+proc decodeWebp*(data: openArray[uint8]): ImageResult[DynamicImage] =
+  if data.len < 12 or data[0] != uint8('R') or data[1] != uint8('I') or
+      data[2] != uint8('F') or data[3] != uint8('F') or
+      data[8] != uint8('W') or data[9] != uint8('E') or
+      data[10] != uint8('B') or data[11] != uint8('P'):
     return err[DynamicImage](decodingError("webp: bad RIFF"))
   var pos = 12
-  var vp8l: seq[uint8] = @[]
-  var vp8body: seq[uint8] = @[]
+  var vp8lPos = -1; var vp8lLen = 0
+  var vp8Pos = -1; var vp8Len = 0
   var hasVp8 = false
   var hasAlph = false
   var hasAnim = false
   while pos + 8 <= data.len:
-    let tag = data[pos..<pos+4]
+    let t0 = data[pos]; let t1 = data[pos+1]
+    let t2 = data[pos+2]; let t3 = data[pos+3]
     let size = int(uint32(data[pos+4]) or (uint32(data[pos+5]) shl 8) or
       (uint32(data[pos+6]) shl 16) or (uint32(data[pos+7]) shl 24))
     pos += 8
     if pos + size > data.len:
       return err[DynamicImage](decodingError("webp: truncated chunk"))
-    let body = data[pos..<pos+size]
-    if tag == @[uint8('V'),uint8('P'),uint8('8'),uint8('L')]:
-      if vp8l.len == 0:
-        vp8l = body
-    elif tag == @[uint8('V'),uint8('P'),uint8('8'),uint8(' ')]:
+    if t0 == uint8('V') and t1 == uint8('P') and t2 == uint8('8') and t3 == uint8('L'):
+      if vp8lPos < 0:
+        vp8lPos = pos; vp8lLen = size
+    elif t0 == uint8('V') and t1 == uint8('P') and t2 == uint8('8') and t3 == uint8(' '):
       hasVp8 = true
-      if vp8body.len == 0:
-        vp8body = body
-    elif tag == @[uint8('A'),uint8('L'),uint8('P'),uint8('H')]:
+      if vp8Pos < 0:
+        vp8Pos = pos; vp8Len = size
+    elif t0 == uint8('A') and t1 == uint8('L') and t2 == uint8('P') and t3 == uint8('H'):
       hasAlph = true
-    elif tag == @[uint8('V'),uint8('P'),uint8('8'),uint8('X')]:
+    elif t0 == uint8('V') and t1 == uint8('P') and t2 == uint8('8') and t3 == uint8('X'):
       discard # canvas info; VP8/VP8L chunks follow inline
-    elif tag == @[uint8('A'),uint8('N'),uint8('I'),uint8('M')] or
-        tag == @[uint8('A'),uint8('N'),uint8('M'),uint8('F')]:
+    elif t0 == uint8('A') and t1 == uint8('N') and t2 == uint8('I') and
+        t3 == uint8('M') or
+        t0 == uint8('A') and t1 == uint8('N') and t2 == uint8('M') and
+        t3 == uint8('F'):
       hasAnim = true
     pos += size + (size and 1)
   if hasAnim:
     return err[DynamicImage](unsupportedError(ukGenericFeature, "webp: animation"))
-  if vp8l.len > 0 and not hasVp8:
-    let r = decodeVp8l(vp8l, 0, 0)
+  if vp8lPos >= 0 and vp8lLen > 0 and not hasVp8:
+    let r = decodeVp8l(data.toOpenArray(vp8lPos, vp8lPos + vp8lLen - 1), 0, 0)
     if not r.ok: return err[DynamicImage](r.err)
     # alpha handling like the reference: has_alpha flag -> Rgba else Rgb
     var hasAlpha = false
@@ -757,11 +766,11 @@ proc decodeWebp*(data: seq[uint8]): ImageResult[DynamicImage] =
       rgb[i] = Rgb[uint8](data: [p.data[0], p.data[1], p.data[2]])
     return ok(DynamicImage(kind: dkRgb8, rgb8:
       RgbImage(width: r.value.width, height: r.value.height, pixels: move(rgb))))
-  if hasVp8 and vp8body.len > 0:
+  if hasVp8 and vp8Pos >= 0 and vp8Len > 0:
     if hasAlph:
       return err[DynamicImage](unsupportedError(ukGenericFeature,
         "webp: alpha with lossy VP8"))
-    let fr = decodeVp8Frame(vp8body)
+    let fr = decodeVp8Frame(data.toOpenArray(vp8Pos, vp8Pos + vp8Len - 1))
     if not fr.ok: return err[DynamicImage](fr.err)
     let rgb = vp8ToRgb(fr.value)
     var px = newSeq[Rgb[uint8]](fr.value.width * fr.value.height)

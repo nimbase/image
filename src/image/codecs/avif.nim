@@ -111,7 +111,7 @@ proc ycgcoReInverse*(y, cg, co: int): tuple[r, g, b: int] =
   let b = t - (co shr 1)
   (co + b, g, b)
 
-proc decodeAvif*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc decodeAvif*(data: openArray[uint8]): ImageResult[DynamicImage] =
   ## AV1 bitstream decoding is out of scope for pure-Nim v1.
   if data.len < 12:
     return err[DynamicImage](decodingError("avif: too short"))

@@ -22,10 +22,7 @@ proc u32be(d: openArray[uint8], off: int): uint32 =
     (uint32(d[off+2]) shl 8) or uint32(d[off+3])
 
 proc chunkCrc*(typ: array[4, uint8], data: openArray[uint8]): uint32 =
-  var buf = newSeq[uint8](4 + data.len)
-  for i in 0..3: buf[i] = typ[i]
-  for i, b in data: buf[4+i] = b
-  crc32raw(buf)
+  crc32Chunk(typ, data)
 
 proc bitVal(row: openArray[uint8], bitpos: int): int =
   int((row[bitpos div 8] shr uint8(7 - (bitpos mod 8))) and 1)
@@ -347,7 +344,7 @@ proc initPngScratch*(): PngScratch =
   result.cur = initPool(uint8, 0)
   result.rows = initPool(uint8, 0)
 
-proc decodePngImpl(data: seq[uint8], scratch: var PngScratch): ImageResult[DynamicImage] =
+proc decodePngImpl(data: openArray[uint8], scratch: var PngScratch): ImageResult[DynamicImage] =
   ## Shared decode body. Row/pass buffers come from `scratch`
   ## (exact-sized per decode, capacity retained across decodes).
   ## Output is identical to fresh buffers: every row is fully
@@ -373,8 +370,14 @@ proc decodePngImpl(data: seq[uint8], scratch: var PngScratch): ImageResult[Dynam
     let typ = [data[pos+4], data[pos+5], data[pos+6], data[pos+7]]
     if pos + 12 + length > data.len:
       return err[DynamicImage](decodingError("png: truncated chunk"))
-    let body = data[pos+8..<pos+8+length]
-    if chunkCrc(typ, body) != u32be(data, pos + 8 + length):
+    let bodyPos = pos + 8
+    # CRC over type + body without the old 4+len temp buffer. Views are
+    # passed directly as openArray params (never stored: openArray
+    # cannot live in a let/var).
+    let crcOk =
+      if length == 0: chunkCrc(typ, data.toOpenArray(0, -1))
+      else: chunkCrc(typ, data.toOpenArray(bodyPos, bodyPos + length - 1))
+    if crcOk != u32be(data, pos + 8 + length):
       return err[DynamicImage](decodingError("png: CRC mismatch"))
     pos += 12 + length
     let ts = "" & char(typ[0]) & char(typ[1]) & char(typ[2]) & char(typ[3])
@@ -382,11 +385,11 @@ proc decodePngImpl(data: seq[uint8], scratch: var PngScratch): ImageResult[Dynam
       if gotIhdr or length != 13:
         return err[DynamicImage](decodingError("png: bad IHDR"))
       gotIhdr = true
-      width = u32be(body, 0); height = u32be(body, 4)
-      bitDepth = body[8]; colorType = body[9]
-      if body[10] != 0 or body[11] != 0:
+      width = u32be(data, bodyPos); height = u32be(data, bodyPos + 4)
+      bitDepth = data[bodyPos + 8]; colorType = data[bodyPos + 9]
+      if data[bodyPos + 10] != 0 or data[bodyPos + 11] != 0:
         return err[DynamicImage](decodingError("png: bad compression/filter"))
-      interlace = body[12]
+      interlace = data[bodyPos + 12]
       if interlace > 1:
         return err[DynamicImage](decodingError("png: bad interlace"))
       if width == 0 or height == 0:
@@ -401,19 +404,24 @@ proc decodePngImpl(data: seq[uint8], scratch: var PngScratch): ImageResult[Dynam
         return err[DynamicImage](decodingError("png: bad truecolor depth"))
     elif ts == "PLTE":
       var i = 0
-      while i + 2 < body.len:
-        plte.add((body[i], body[i+1], body[i+2])); i += 3
+      while i + 2 < length:
+        plte.add((data[bodyPos + i], data[bodyPos + i + 1],
+          data[bodyPos + i + 2])); i += 3
     elif ts == "tRNS":
       if colorType == 3:
-        trnsAlpha = body
-      elif colorType == 0 and body.len >= 2:
-        trnsGray = int((uint16(body[0]) shl 8) or uint16(body[1]))
-      elif colorType == 2 and body.len >= 6:
-        trnsRgb = (int((uint16(body[0]) shl 8) or uint16(body[1])),
-          int((uint16(body[2]) shl 8) or uint16(body[3])),
-          int((uint16(body[4]) shl 8) or uint16(body[5])))
+        if length > 0:
+          trnsAlpha = @(data.toOpenArray(bodyPos, bodyPos + length - 1))
+        else:
+          trnsAlpha = @[]
+      elif colorType == 0 and length >= 2:
+        trnsGray = int((uint16(data[bodyPos]) shl 8) or uint16(data[bodyPos + 1]))
+      elif colorType == 2 and length >= 6:
+        trnsRgb = (int((uint16(data[bodyPos]) shl 8) or uint16(data[bodyPos + 1])),
+          int((uint16(data[bodyPos + 2]) shl 8) or uint16(data[bodyPos + 3])),
+          int((uint16(data[bodyPos + 4]) shl 8) or uint16(data[bodyPos + 5])))
     elif ts == "IDAT":
-      for b in body: idat.add(b)
+      if length > 0:
+        idat.add(data.toOpenArray(bodyPos, bodyPos + length - 1))
     elif ts == "IEND":
       sawIend = true
       break
@@ -566,12 +574,12 @@ proc decodePngImpl(data: seq[uint8], scratch: var PngScratch): ImageResult[Dynam
       return buildFromSamples(colorType, bitDepth, w, h, get, plte,
         trnsAlpha, trnsGray, trnsRgb)
 
-proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc decodePng*(data: openArray[uint8]): ImageResult[DynamicImage] =
   ## PNG decode (non-interlaced streamed, Adam7 multi-pass).
   var tmp = initPngScratch()
   decodePngImpl(data, tmp)
 
-proc decodePng*(data: seq[uint8], scratch: var PngScratch): ImageResult[DynamicImage] =
+proc decodePng*(data: openArray[uint8], scratch: var PngScratch): ImageResult[DynamicImage] =
   ## PNG decode reusing `scratch` across decodes. Bit-identical to
   ## `decodePng(data)`; only the filter row/pass buffers are retained
   ## between decodes (not pixels). Pass a long-lived scratch when

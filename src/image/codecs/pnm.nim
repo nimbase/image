@@ -99,7 +99,7 @@ proc scaleToU16(v, maxval: uint32): uint16 =
   if maxval == 65535: uint16(v)
   else: uint16((v * 65535 + maxval div 2) div maxval)
 
-proc decodePnm*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc decodePnm*(data: openArray[uint8]): ImageResult[DynamicImage] =
   let hr = parsePnmHeader(data)
   if not hr.ok: return err[DynamicImage](hr.err)
   let (h, bodyOff) = hr.value

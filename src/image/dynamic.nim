@@ -65,13 +65,13 @@ func toRgba8*(img: DynamicImage): RgbaImage =
     var outP = newSeq[Rgba[uint8]](s.pixels.len)
     for i, p in s.pixels:
       outP[i] = Rgba[uint8](data: [p.data[0], p.data[1], p.data[2], 255'u8])
-    RgbaImage(width: s.width, height: s.height, pixels: outP)
+    RgbaImage(width: s.width, height: s.height, pixels: move(outP))
   of dkLuma8:
     let s = img.luma8
     var outP = newSeq[Rgba[uint8]](s.pixels.len)
     for i, p in s.pixels:
       outP[i] = Rgba[uint8](data: [p.data[0], p.data[0], p.data[0], 255'u8])
-    RgbaImage(width: s.width, height: s.height, pixels: outP)
+    RgbaImage(width: s.width, height: s.height, pixels: move(outP))
   else:
     # minimal fallback: blank; full conversions land with codec work
     RgbaImage(width: 0, height: 0, pixels: @[])
@@ -84,7 +84,7 @@ func toRgb8*(img: DynamicImage): RgbImage =
     var outP = newSeq[Rgb[uint8]](s.pixels.len)
     for i, p in s.pixels:
       outP[i] = Rgb[uint8](data: [p.data[0], p.data[1], p.data[2]])
-    RgbImage(width: s.width, height: s.height, pixels: outP)
+    RgbImage(width: s.width, height: s.height, pixels: move(outP))
   else:
     RgbImage(width: 0, height: 0, pixels: @[])
 
@@ -96,7 +96,7 @@ func toLuma8*(img: DynamicImage): GrayImage =
     var outP = newSeq[Luma[uint8]](s.pixels.len)
     for i, p in s.pixels:
       outP[i] = Luma[uint8](data: [rgbToLumaU8(p.data[0], p.data[1], p.data[2])])
-    GrayImage(width: s.width, height: s.height, pixels: outP)
+    GrayImage(width: s.width, height: s.height, pixels: move(outP))
   else:
     GrayImage(width: 0, height: 0, pixels: @[])
 
@@ -107,7 +107,7 @@ proc cropBuffer[P](src: ImageBuffer[P], x, y, w, h: uint32): ImageBuffer[P] =
     for xx in 0..<int(w):
       outP[yy * int(w) + xx] =
         src.pixels[(int(y) + yy) * sw + (int(x) + xx)]
-  ImageBuffer[P](width: w, height: h, pixels: outP)
+  ImageBuffer[P](width: w, height: h, pixels: move(outP))
 
 proc cropImage*(img: DynamicImage, x, y, w, h: uint32): ImageResult[DynamicImage] =
   ## Strict width/height crop. The rectangle must be fully inside the

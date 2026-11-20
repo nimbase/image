@@ -315,7 +315,7 @@ type JpegComponent = object
   dcPred*: int
   blocks*: PixBlocks
 
-proc jpegDimensions*(data: seq[uint8]): ImageResult[tuple[w, h: uint32]] =
+proc jpegDimensions*(data: openArray[uint8]): ImageResult[tuple[w, h: uint32]] =
   ## SOF-only header scan: image dimensions without decoding pixels.
   ## Used to pick a scaled-decode denominator before the full decode.
   if data.len < 2 or data[0] != 0xFF or data[1] != 0xD8:
@@ -368,7 +368,7 @@ proc shrinkAfterSpike*(s: var JpegScratch, steady: int) {.inline.} =
   ## Drop the entropy buffer to `steady` bytes after a large spike.
   s.clean.shrinkAfterSpike(steady)
 
-proc decodeJpegImpl(data: seq[uint8], denom: int,
+proc decodeJpegImpl(data: openArray[uint8], denom: int,
     clean: var PooledBuffer[uint8]): ImageResult[DynamicImage] =
   ## Shared decode body. `clean` is the caller-owned cleaned-entropy
   ## buffer (largest scan wins, capacity retained across scans and, when
@@ -412,7 +412,7 @@ proc decodeJpegImpl(data: seq[uint8], denom: int,
     var tProfGather = 0.0
     var tProfConvert = 0.0
 
-  proc buildCleanScan(startPos: int, buf: var PooledBuffer[uint8]): int =
+  proc buildCleanScan(data: openArray[uint8], startPos: int, buf: var PooledBuffer[uint8]): int =
     ## Entropy segment from startPos to the next marker; strips RSTn and
     ## stuffed 0x00 bytes, like the baseline path below. Reuses the
     ## caller-owned `buf` across scans (`clear()` keeps capacity, so
@@ -460,54 +460,54 @@ proc decodeJpegImpl(data: seq[uint8], denom: int,
     let segLen = (int(data[pos]) shl 8) or int(data[pos+1]); pos += 2
     if segLen < 2 or not need(segLen - 2):
       return err[DynamicImage](decodingError("jpeg: truncated segment"))
-    let body = data[pos..<pos+segLen-2]
+    let bodyPos = pos; let bodyLen = segLen - 2
     case m
     of 0xE0..0xEF, 0xFE:
-      if m == 0xEE and body.len >= 12 and body[0]==uint8('A') and
-          body[1]==uint8('d') and body[2]==uint8('o') and
-          body[3]==uint8('b') and body[4]==uint8('e'):
-        adobeTransform = int(body[11])
+      if m == 0xEE and bodyLen >= 12 and data[bodyPos + 0]==uint8('A') and
+          data[bodyPos + 1]==uint8('d') and data[bodyPos + 2]==uint8('o') and
+          data[bodyPos + 3]==uint8('b') and data[bodyPos + 4]==uint8('e'):
+        adobeTransform = int(data[bodyPos + 11])
     of 0xDB:
       var q = 0
-      while q < body.len:
-        let info = int(body[q]); inc(q)
+      while q < bodyLen:
+        let info = int(data[bodyPos + q]); inc(q)
         let tq = info and 15; let prec = info shr 4
         if tq > 3 or (prec != 0 and prec != 1):
           return err[DynamicImage](decodingError("jpeg: bad DQT"))
         let tabLen = if prec == 0: 64 else: 128
-        if q + tabLen > body.len:
+        if q + tabLen > bodyLen:
           return err[DynamicImage](decodingError("jpeg: truncated DQT"))
         for i in 0..63:
           qts[tq][Unzigzag[i]] =
-            if prec == 0: int(body[q+i])
-            else: (int(body[q+2*i]) shl 8) or int(body[q+2*i+1])
+            if prec == 0: int(data[bodyPos + q+i])
+            else: (int(data[bodyPos + q+2*i]) shl 8) or int(data[bodyPos + q+2*i+1])
         q += tabLen
         qtsSet[tq] = true
     of 0xC0, 0xC1, 0xC2:
-      if body.len < 6:
+      if bodyLen < 6:
         return err[DynamicImage](decodingError("jpeg: truncated SOF"))
-      if int(body[0]) != 8:
+      if int(data[bodyPos + 0]) != 8:
         return err[DynamicImage](unsupportedError(ukGenericFeature, "jpeg: precision"))
-      height = (int(body[1]) shl 8) or int(body[2])
-      width = (int(body[3]) shl 8) or int(body[4])
-      let nc = int(body[5])
-      if nc notin [1, 3, 4] or body.len < 6 + nc * 3:
+      height = (int(data[bodyPos + 1]) shl 8) or int(data[bodyPos + 2])
+      width = (int(data[bodyPos + 3]) shl 8) or int(data[bodyPos + 4])
+      let nc = int(data[bodyPos + 5])
+      if nc notin [1, 3, 4] or bodyLen < 6 + nc * 3:
         return err[DynamicImage](unsupportedError(ukGenericFeature, "jpeg: components"))
       if width == 0 or height == 0:
         return err[DynamicImage](decodingError("jpeg: empty image"))
       comps = @[]
       for i in 0..<nc:
-        let h = int(body[6+3*i+1] shr 4); let v = int(body[6+3*i+1] and 15)
+        let h = int(data[bodyPos + 6+3*i+1] shr 4); let v = int(data[bodyPos + 6+3*i+1] and 15)
         if h < 1 or h > 4 or v < 1 or v > 4:
           return err[DynamicImage](unsupportedError(ukGenericFeature,
             "jpeg: sampling factors"))
         # Quant table selector is bounds-checked here (not just at use):
         # `qts[tq]` below runs with checks off in the hot loops, so a
         # corrupt selector must fail cleanly now, not OOB later.
-        if int(body[6+3*i+2]) > 3:
+        if int(data[bodyPos + 6+3*i+2]) > 3:
           return err[DynamicImage](decodingError("jpeg: bad quant table"))
-        comps.add(JpegComponent(id: body[6+3*i], h: h, v: v,
-          tq: int(body[6+3*i+2]), dcPred: 0, blocks: PixBlocks()))
+        comps.add(JpegComponent(id: data[bodyPos + 6+3*i], h: h, v: v,
+          tq: int(data[bodyPos + 6+3*i+2]), dcPred: 0, blocks: PixBlocks()))
       sofFound = true
       if m == 0xC2:
         progressive = true
@@ -521,21 +521,21 @@ proc decodeJpegImpl(data: seq[uint8], denom: int,
           pcoef.add(newCoefGrid(pMcuX * comps[i].h * pMcuY * comps[i].v))
     of 0xC4:
       var q = 0
-      while q < body.len:
-        let info = int(body[q]); inc(q)
+      while q < bodyLen:
+        let info = int(data[bodyPos + q]); inc(q)
         let tc = info shr 4; let th = info and 15
         if th > 3 or (tc != 0 and tc != 1):
           return err[DynamicImage](decodingError("jpeg: bad DHT"))
-        if q + 16 > body.len:
+        if q + 16 > bodyLen:
           return err[DynamicImage](decodingError("jpeg: truncated DHT"))
         var counts: array[16, int]
         var total = 0
-        for i in 0..15: counts[i] = int(body[q+i]); total += counts[i]
+        for i in 0..15: counts[i] = int(data[bodyPos + q+i]); total += counts[i]
         q += 16
-        if q + total > body.len:
+        if q + total > bodyLen:
           return err[DynamicImage](decodingError("jpeg: truncated DHT symbols"))
         var syms: seq[int] = @[]
-        for i in 0..<total: syms.add(int(body[q+i]))
+        for i in 0..<total: syms.add(int(data[bodyPos + q+i]))
         q += total
         let (ok, t) = buildHuff(counts, syms)
         if not ok:
@@ -543,20 +543,20 @@ proc decodeJpegImpl(data: seq[uint8], denom: int,
         if tc == 0: dcTables[th] = t; dcSet[th] = true
         else: acTables[th] = t; acSet[th] = true
     of 0xDD:
-      if body.len < 2:
+      if bodyLen < 2:
         return err[DynamicImage](decodingError("jpeg: truncated DRI"))
-      restartInterval = (int(body[0]) shl 8) or int(body[1])
+      restartInterval = (int(data[bodyPos + 0]) shl 8) or int(data[bodyPos + 1])
     of 0xDA:
       if not sofFound:
         return err[DynamicImage](decodingError("jpeg: SOS before SOF"))
-      if body.len < 3:
+      if bodyLen < 3:
         return err[DynamicImage](decodingError("jpeg: truncated SOS"))
-      let ns = int(body[0])
-      if ns < 1 or ns > comps.len or body.len < 1 + ns * 2 + 3:
+      let ns = int(data[bodyPos + 0])
+      if ns < 1 or ns > comps.len or bodyLen < 1 + ns * 2 + 3:
         return err[DynamicImage](decodingError("jpeg: bad SOS"))
       scanComps = @[]
       for i in 0..<ns:
-        let cs = body[1+2*i]
+        let cs = data[bodyPos + 1+2*i]
         var ci = -1
         for k in 0..<comps.len:
           if comps[k].id == cs: ci = k; break
@@ -564,11 +564,11 @@ proc decodeJpegImpl(data: seq[uint8], denom: int,
           return err[DynamicImage](decodingError("jpeg: SOS unknown component"))
         # Huffman selectors are bounds-checked here: `dcTables[sc.dc]` /
         # `acTables[sc.ac]` in the hot scans run with checks off.
-        if int(body[1+2*i+1] shr 4) > 3 or int(body[1+2*i+1] and 15) > 3:
+        if int(data[bodyPos + 1+2*i+1] shr 4) > 3 or int(data[bodyPos + 1+2*i+1] and 15) > 3:
           return err[DynamicImage](decodingError("jpeg: bad Huffman table"))
-        scanComps.add((ci, int(body[1+2*i+1] shr 4), int(body[1+2*i+1] and 15)))
-      let ss = int(body[1+ns*2]); let se = int(body[1+ns*2+1])
-      let ah = int(body[1+ns*2+2] shr 4); let al = int(body[1+ns*2+2] and 15)
+        scanComps.add((ci, int(data[bodyPos + 1+2*i+1] shr 4), int(data[bodyPos + 1+2*i+1] and 15)))
+      let ss = int(data[bodyPos + 1+ns*2]); let se = int(data[bodyPos + 1+ns*2+1])
+      let ah = int(data[bodyPos + 1+ns*2+2] shr 4); let al = int(data[bodyPos + 1+ns*2+2] and 15)
       if not progressive:
         if ns != comps.len or ss != 0 or se != 63 or ah != 0 or al != 0:
           return err[DynamicImage](unsupportedError(ukGenericFeature,
@@ -620,7 +620,7 @@ proc decodeJpegImpl(data: seq[uint8], denom: int,
       pos += segLen - 2
       when defined(decodeProfile):
         let tProfScan0 = cpuTime()
-      let nextPos = buildCleanScan(pos, clean)
+      let nextPos = buildCleanScan(data, pos, clean)
       var reader = BitReader(data: clean.data, pos: 0, buf: 0, nbits: 0)
       for i in 0..<comps.len: comps[i].dcPred = 0
       var eobrun = 0
@@ -830,7 +830,7 @@ proc decodeJpegImpl(data: seq[uint8], denom: int,
   # (progressive finish needs no BitReader; blocks come from pcoef.)
   var reader = BitReader(data: @[], pos: 0, buf: 0, nbits: 0)
   if not progFinish:
-    discard buildCleanScan(scanStart, clean)
+    discard buildCleanScan(data, scanStart, clean)
     reader = BitReader(data: clean.data, pos: 0, buf: 0, nbits: 0)
   var maxH = 1; var maxV = 1
   for i in 0..<comps.len:
@@ -1074,7 +1074,7 @@ proc decodeJpegImpl(data: seq[uint8], denom: int,
       RgbImage(width: uint32(outW), height: uint32(outH), pixels: move(px))))
   err[DynamicImage](unsupportedError(ukGenericFeature, "jpeg: components"))
 
-proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
+proc decodeJpeg*(data: openArray[uint8], denom = 1): ImageResult[DynamicImage] =
   ## Baseline / progressive JPEG decode. `denom` 2/4/8 emits a
   ## 1/denom-scaled image (full IDCT + in-block box average,
   ## libjpeg `-scale` style); 1 is full resolution. Output dims are
@@ -1082,7 +1082,7 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
   var tmp = initPool(uint8, 0)
   decodeJpegImpl(data, denom, tmp)
 
-proc decodeJpeg*(data: seq[uint8], scratch: var JpegScratch,
+proc decodeJpeg*(data: openArray[uint8], scratch: var JpegScratch,
     denom = 1): ImageResult[DynamicImage] =
   ## Baseline / progressive JPEG decode reusing `scratch` across calls.
   ## Bit-identical to `decodeJpeg(data, denom)`; only the cleaned

@@ -37,7 +37,7 @@ proc readPalette(data: openArray[uint8], pos: var int, n: int): tuple[ok: bool, 
     pal[i] = (data[pos], data[pos+1], data[pos+2]); pos += 3
   (true, pal)
 
-proc decodeGif*(data: seq[uint8]): ImageResult[GifImage] =
+proc decodeGif*(data: openArray[uint8]): ImageResult[GifImage] =
   if data.len < 13:
     return err[GifImage](decodingError("gif: too short"))
   if not (data[0]==uint8('G') and data[1]==uint8('I') and data[2]==uint8('F') and
@@ -105,7 +105,7 @@ proc decodeGif*(data: seq[uint8]): ImageResult[GifImage] =
           let n = int(data[pos]); inc pos
           if n == 0: break
           if pos + n > data.len: fail("truncated app sub-block")
-          for i in 0..<n: appData.add(data[pos+i])
+          appData.add(data.toOpenArray(pos, pos + n - 1))
           pos += n
         if appId.startsWith("NETSCAPE2.0") and appData.len >= 3 and appData[0] == 1:
           let loops = uint16(appData[1]) or (uint16(appData[2]) shl 8)
@@ -142,7 +142,7 @@ proc decodeGif*(data: seq[uint8]): ImageResult[GifImage] =
           let n = int(data[pos]); inc pos
           if n == 0: break
           if pos + n > data.len: fail("truncated LZW block")
-          for i in 0..<n: comp.add(data[pos+i])
+          comp.appendMany(data.toOpenArray(pos, pos + n - 1))
           pos += n
         let dr = decodeLzwGif(comp.data, minCode, int(iw) * int(ih))
         if not dr.ok: return err[GifImage](dr.err)
@@ -161,11 +161,11 @@ proc decodeGif*(data: seq[uint8]): ImageResult[GifImage] =
             for x in 0..<int(iw):
               out2[y*int(iw)+x] = indices[src]; inc src
             y += step
-        indices = out2
+        indices = move(out2)
       frames.add(GifFrame(left: left, top: top, width: iw, height: ih,
         interlaced: (p and 0x40) != 0, delay: gceDelay, disposal: gceDisposal,
         transparent: gceTransp,
-        palette: (if lpal.len > 0: lpal else: gpal), indices: indices))
+        palette: (if lpal.len > 0: move(lpal) else: gpal), indices: move(indices)))
       hasGce = false
       gceDelay = delayMs(0); gceDisposal = gdNone; gceTransp = (false, 0)
     else:
@@ -194,7 +194,7 @@ proc gifFrameToRgba*(img: GifImage, fi: int): ImageResult[RgbaImage] =
       return err[RgbaImage](decodingError("gif: palette index out of range"))
   ok(RgbaImage(width: uint32(f.width), height: uint32(f.height), pixels: move(px)))
 
-proc gifFirstToRgba*(data: seq[uint8]): ImageResult[RgbaImage] =
+proc gifFirstToRgba*(data: openArray[uint8]): ImageResult[RgbaImage] =
   let g = decodeGif(data)
   if not g.ok: return err[RgbaImage](g.err)
   gifFrameToRgba(g.value, 0)
@@ -238,7 +238,7 @@ proc encodeGif*(frames: seq[seq[uint8]], width, height: uint16,
     while p < comp.len:
       let k = min(255, comp.len - p)
       result.add(uint8(k))
-      for i in 0..<k: result.add(comp[p+i])
+      result.add(comp.toOpenArray(p, p + k - 1))
       p += k
     result.add(0'u8)
   result.add(0x3B'u8)

@@ -1316,10 +1316,13 @@ proc decodeFrame(dec: var Vp8Decoder): Vp8Frame =
       dec.applyLoopFilter(mbx, mby, mb)
   dec.frame
 
-proc decodeVp8Frame*(data: seq[uint8]): ImageResult[Vp8Frame] =
+proc decodeVp8Frame*(data: openArray[uint8]): ImageResult[Vp8Frame] =
   ## Decodes a raw VP8 frame (the body of a `VP8 ` RIFF chunk).
+  ## Takes an openArray view (memfiles-friendly); copies once into the
+  ## owned decoder buffer. Internal partition slices remain owned seqs.
   try:
-    var dec = initVp8Decoder(data)
+    let owned = @data
+    var dec = initVp8Decoder(owned)
     ok(dec.decodeFrame())
   except Vp8DecodeError as e:
     err[Vp8Frame](decodingError(e.msg))

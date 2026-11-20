@@ -52,7 +52,7 @@ func typeSize(t: uint16): int =
   of 5, 10, 12: 8
   else: 0
 
-proc parseIfd(data: seq[uint8], off: int, e: TiffEndian): ImageResult[TiffIfd] =
+proc parseIfd(data: openArray[uint8], off: int, e: TiffEndian): ImageResult[TiffIfd] =
   if off + 2 > data.len:
     return err[TiffIfd](decodingError("tiff: truncated IFD"))
   let n = int(rd16(data, off, e))
@@ -156,28 +156,31 @@ proc undoPredictor(data: var seq[uint8], w, channels, bits: int) =
         data[bytePos] = uint8((s shr 8) and 0xFF)
         data[bytePos+1] = uint8(s and 0xFF)
 
-proc decompressStrip(raw: seq[uint8], compression: uint32,
+proc decompressStrip(raw: openArray[uint8], compression: uint32,
     expected: int): ImageResult[seq[uint8]] =
   case compression
   of 1:
     if raw.len < expected:
       return err[seq[uint8]](decodingError("tiff: truncated strip"))
-    ok(raw[0..<expected])
+    if expected == 0: ok(newSeq[uint8]())
+    else: ok(@(raw.toOpenArray(0, expected - 1)))
   of 5:
     let r = decodeLzwTiff(raw, expected)
     if not r.ok: return err[seq[uint8]](r.err)
     if r.value.len < expected:
       return err[seq[uint8]](decodingError("tiff: short LZW strip"))
-    ok(r.value[0..<expected])
+    if r.value.len == expected: ok(r.value)
+    else: ok(r.value[0..<expected])
   of 8, 32946:
     let r = inflateZlib(raw, expected)
     if not r.ok: return err[seq[uint8]](r.err)
     if r.value.len < expected:
       return err[seq[uint8]](decodingError("tiff: short deflate strip"))
-    ok(r.value[0..<expected])
+    if r.value.len == expected: ok(r.value)
+    else: ok(r.value[0..<expected])
   of 32773:
-    # PackBits
-    var output: seq[uint8] = @[]
+    # PackBits: exact reserve, bulk literal runs
+    var output = newSeqOfCap[uint8](expected)
     var p = 0
     while p < raw.len and output.len < expected:
       let n = int8(raw[p]); inc(p)
@@ -185,17 +188,19 @@ proc decompressStrip(raw: seq[uint8], compression: uint32,
         let k = int(n) + 1
         if p + k > raw.len:
           return err[seq[uint8]](decodingError("tiff: truncated packbits"))
-        for i in 0..<k: output.add(raw[p+i])
+        output.add(raw.toOpenArray(p, p + k - 1))
         p += k
       elif n > -128:
         if p >= raw.len:
           return err[seq[uint8]](decodingError("tiff: truncated packbits run"))
         let k = int(-n) + 1
-        for _ in 0..<k: output.add(raw[p])
+        let v = raw[p]
+        for _ in 0..<k: output.add(v)
         inc(p)
     if output.len < expected:
       return err[seq[uint8]](decodingError("tiff: short packbits strip"))
-    ok(output[0..<expected])
+    if output.len == expected: ok(move(output))
+    else: ok(output[0..<expected])
   of 7, 6, 99:
     err[seq[uint8]](unsupportedError(ukGenericFeature,
       "tiff: JPEG compression not supported"))
@@ -216,7 +221,7 @@ proc ycbcrToRgb(y, cb, cr: float32, coef: array[3, float32]): tuple[r, g, b: uin
 
 proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
     bits: seq[int], predictor: uint32, fillLsb: bool, e: TiffEndian,
-    ifd: TiffIfd, data: seq[uint8]): ImageResult[DynamicImage] =
+    ifd: TiffIfd, data: openArray[uint8]): ImageResult[DynamicImage] =
   let isFloat =
     block:
       let (f, v) = ifd.find(339)
@@ -447,7 +452,7 @@ proc buildChunky(full: seq[uint8], w, h, spp, bitDepth: int, photo: uint32,
   else:
     return err[DynamicImage](unsupportedError(ukColor, "tiff: photometric " & $photo))
 
-proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
+proc decodeIfd(data: openArray[uint8], ifd: TiffIfd,
     e: TiffEndian): ImageResult[DynamicImage] =
   let w = int(getU32(ifd, 256, e, 0))
   let h = int(getU32(ifd, 257, e, 0))
@@ -563,7 +568,9 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
           return err[DynamicImage](decodingError("tiff: strip OOB"))
         let rows = min(rowsPerChunk, h - y)
         let exp = planeExpected(w, rows) div spp
-        let dr = decompressStrip(data[off..<off+cnt], compression, exp)
+        let dr =
+          if cnt == 0: decompressStrip(data.toOpenArray(0, -1), compression, exp)
+          else: decompressStrip(data.toOpenArray(off, off + cnt - 1), compression, exp)
         if not dr.ok: return err[DynamicImage](dr.err)
         var blk = dr.value
         if predictor == 2: undoPredictor(blk, w, 1, bitDepth)
@@ -600,7 +607,9 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
         return err[DynamicImage](decodingError("tiff: strip OOB"))
       let rows = min(rowsPerChunk, h - y)
       let exp = planeExpected(w, rows)
-      let dr = decompressStrip(data[off..<off+cnt], compression, exp)
+      let dr =
+          if cnt == 0: decompressStrip(data.toOpenArray(0, -1), compression, exp)
+          else: decompressStrip(data.toOpenArray(off, off + cnt - 1), compression, exp)
       if not dr.ok: return err[DynamicImage](dr.err)
       var blk = dr.value
       if predictor == 2: undoPredictor(blk, w, spp, bitDepth)
@@ -621,7 +630,9 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
       let tx = ti mod tilesAcross; let ty = ti div tilesAcross
       let cw = chunkWidths[ti]; let chh = chunkHeights[ti]
       let exp = planeExpected(cw, chh)
-      let dr = decompressStrip(data[off..<off+cnt], compression, exp)
+      let dr =
+          if cnt == 0: decompressStrip(data.toOpenArray(0, -1), compression, exp)
+          else: decompressStrip(data.toOpenArray(off, off + cnt - 1), compression, exp)
       if not dr.ok: return err[DynamicImage](dr.err)
       var blk = dr.value
       if predictor == 2: undoPredictor(blk, cw, spp, bitDepth)
@@ -654,7 +665,7 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
   return buildChunky(full, w, h, spp, bitDepth, photo, bits, predictor,
     fillLsb, e, ifd, data)
 
-proc decodeTiffAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
+proc decodeTiffAll*(data: openArray[uint8]): ImageResult[seq[DynamicImage]] =
   if data.len < 8:
     return err[seq[DynamicImage]](decodingError("tiff: too short"))
   var e = teLittle
@@ -681,7 +692,7 @@ proc decodeTiffAll*(data: seq[uint8]): ImageResult[seq[DynamicImage]] =
     return err[seq[DynamicImage]](decodingError("tiff: no images"))
   ok(pages)
 
-proc decodeTiff*(data: seq[uint8]): ImageResult[DynamicImage] =
+proc decodeTiff*(data: openArray[uint8]): ImageResult[DynamicImage] =
   let r = decodeTiffAll(data)
   if not r.ok: return err[DynamicImage](r.err)
   ok(r.value[0])

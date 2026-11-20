@@ -71,3 +71,12 @@ proc deflateZlib*(data: openArray[uint8], level = 6): ImageResult[seq[uint8]] =
 func crc32raw*(data: openArray[uint8]): uint32 =
   if data.len == 0: return 0
   crc32Checksum(data)
+
+func crc32Chunk*(typ: array[4, uint8], data: openArray[uint8]): uint32 =
+  ## PNG chunk CRC without the 4+len temp buffer: incremental update over
+  ## the type bytes then the body. Bit-identical to crc32raw(typ & data).
+  var crc = 0xFFFFFFFF'u32
+  crc = crc32Update(crc, unsafeAddr typ[0], 4)
+  if data.len > 0:
+    crc = crc32Update(crc, unsafeAddr data[0], data.len)
+  crc xor 0xFFFFFFFF'u32

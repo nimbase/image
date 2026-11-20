@@ -36,7 +36,7 @@ proc parseQoiHeader*(data: openArray[uint8]): ImageResult[QoiHeader] =
     return err[QoiHeader](decodingError("qoi: zero dimension"))
   ok(QoiHeader(width: w, height: h, channels: data[12], colorspace: data[13]))
 
-proc decodeQoi*(data: seq[uint8]): ImageResult[RgbaImage] =
+proc decodeQoi*(data: openArray[uint8]): ImageResult[RgbaImage] =
   let hr = parseQoiHeader(data)
   if not hr.ok: return err[RgbaImage](hr.err)
   let h = hr.value
