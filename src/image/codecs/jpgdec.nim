@@ -116,6 +116,20 @@ proc receiveExtend(r: var BitReader, s: int): tuple[ok: bool, v: int] {.inline.}
   if v < (1 shl (s - 1)): (true, v - (1 shl s) + 1)
   else: (true, v)
 
+proc alignToByte(r: var BitReader) {.inline.} =
+  ## Discard padding bits to the next byte boundary. Restart intervals
+  ## end byte-aligned (the encoder stuffs 1-bits, then emits RSTn), and
+  ## the cleaned stream has RSTn stripped — so the boundary is purely
+  ## positional: drop `nbits mod 8` buffered bits. Without this, the
+  ## padding decodes as Huffman codes and the stream desyncs at the
+  ## first restart (e.g. "AC overflow" on files with DRI).
+  {.push checks: off.}
+  let drop = r.nbits and 7
+  if drop > 0:
+    r.buf = r.buf shl drop
+    r.nbits -= drop
+  {.pop.}
+
 # ---------- Huffman tables ----------
 
 const huffFastBits = 8
@@ -826,6 +840,7 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
         if restartInterval > 0 and mcuIdx mod restartInterval == 0:
           for i in 0..<comps.len: comps[i].dcPred = 0
           eobrun = 0
+          reader.alignToByte()
       {.pop.}
       if scanErr != "":
         when defined(progDebug):
@@ -943,6 +958,7 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
       inc(mcuIdx)
       if restartInterval > 0 and mcuIdx mod restartInterval == 0:
         for i in 0..<comps.len: comps[i].dcPred = 0
+        reader.alignToByte()
     {.pop.}
     when defined(decodeProfile):
       tProfIdct += cpuTime() - tProfBase0

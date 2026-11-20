@@ -94,7 +94,8 @@ test "jpeg progressive trimmed padding tail":
   for (name, w, h, sum) in [
       ("pad-trim.jpg", 32'u32, 23'u32, 301492'u64),
       ("pad-trim-422.jpg", 17'u32, 23'u32, 160524'u64),
-      ("pad-trim-440.jpg", 17'u32, 23'u32, 160135'u64)]:
+      ("pad-trim-440.jpg", 17'u32, 23'u32, 160135'u64),
+      ("restart.jpg", 64'u32, 48'u32, 989368'u64)]:
     let p = fixturesDir / "jpg" / "progressive" / name
     var f = open(p, fmRead)
     var raw = newSeq[uint8](getFileSize(f))
@@ -114,6 +115,29 @@ test "jpeg progressive trimmed padding tail":
 test "jpeg bad data":
   check decodeJpeg(@[0xFF'u8, 0xD8, 0xFF, 0x00]).ok == false
   check decodeJpeg(@[0'u8, 1]).ok == false
+
+test "jpeg restart intervals":
+  # DRI + RSTn (cjpeg -restart 1): intervals end byte-aligned (1-bit
+  # stuffing before each RSTn, stripped by buildCleanScan), so the
+  # reader must discard to the byte boundary at every interval or the
+  # stream desyncs — clean failure ("AC overflow") or, worse, silent
+  # garbage (pre-fix small fixture decoded ok with sum 597257 instead
+  # of 989368). Sums validated against djpeg -nosmooth (maxdiff <= 2).
+  for (name, sum) in [("restart.jpg", 989368'u64)]:
+    let p = fixturesDir / "jpg" / name
+    var f = open(p, fmRead)
+    var raw = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, raw, 0, raw.len)
+    close(f)
+    let dec = decodeJpeg(raw)
+    check dec.ok
+    check dec.value.kind == dkRgb8
+    check dec.value.dimensions() == (64'u32, 48'u32)
+    var s = 0'u64
+    for px in dec.value.rgb8.pixels:
+      s += uint64(px.data[0]) + uint64(px.data[1]) + uint64(px.data[2])
+    check s == sum
+    check decodeJpeg(raw[0 ..< raw.len div 2]).ok == false
 
 test "jpeg scratch reuse is bit-identical":
   # Phase 2 S1: a long-lived JpegScratch must decode exactly what a
