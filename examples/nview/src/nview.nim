@@ -167,7 +167,7 @@ proc loadAt(idx: int): bool =
 
 # --- C ABI used by nview_mac.m (all values valid until the next nav call) ---
 
-proc galleryInit(path: cstring): cint {.exportc.} =
+proc galleryInit*(path: cstring): cint {.exportc.} =
   let p = $path
   var dir, start = ""
   if dirExists(p):
@@ -194,17 +194,17 @@ proc galleryInit(path: cstring): cint {.exportc.} =
     return 1
   0
 
-proc galleryCount(): cint {.exportc.} = cint(gallery.len)
+proc galleryCount*(): cint {.exportc.} = cint(gallery.len)
 proc galleryIndex(): cint {.exportc.} = cint(galleryIdx)
 
-proc galleryGo(delta: cint): cint {.exportc.} =
+proc galleryGo*(delta: cint): cint {.exportc.} =
   ## Move (wraps around); returns the new index, or -1 keeping the old
   ## image when the target fails to decode.
   if gallery.len == 0 or not hasCache: return -1
   let n = ((galleryIdx + int(delta)) mod gallery.len + gallery.len) mod gallery.len
   if loadAt(n): cint(n) else: -1
 
-proc galleryCurrentName(): cstring {.exportc.} = cstring(cachedName)
+proc galleryCurrentName*(): cstring {.exportc.} = cstring(cachedName)
 
 proc galleryCurrentPixels(w, h: ptr cint): pointer {.exportc.} =
   w[] = cint(cached.width)
@@ -212,7 +212,7 @@ proc galleryCurrentPixels(w, h: ptr cint): pointer {.exportc.} =
   if cached.pixels.len == 0: return nil
   addr cached.pixels[0]
 
-proc galleryDropPixels() {.exportc.} =
+proc galleryDropPixels*() {.exportc.} =
   ## Release the CPU backing after the GPU has its copy. The on-screen
   ## image lives in the Metal texture until the next upload; nothing
   ## reads `cached.pixels` in between (resize re-renders from the
@@ -231,4 +231,7 @@ proc main() =
     quit(1)
   nview_run()
 
-main()
+when isMainModule:
+  # Importing this module (e.g. a headless gallery-walk memory test)
+  # gets the model + C ABI without launching the app.
+  main()
