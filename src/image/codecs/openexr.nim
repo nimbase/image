@@ -14,6 +14,7 @@
 ## zero-run table packing, RLE pseudo-symbol; slow-path decoder).
 import std/sequtils
 import std/math
+import buffalo
 import ../color
 import ../error
 import ../buffer
@@ -1010,38 +1011,40 @@ proc hufDecompress*(comp: openArray[uint8], nRaw: int):
 
 proc pizWavEncodeChunk(wav: var seq[uint16], w, rows: int,
     chanBytes: seq[int], maxVal: uint16) =
-  ## Forward wavelet per channel/lane (via contiguous lane buffers).
-  ## One lane buffer reused across lanes (fully regathered per lane).
-  var lane = newSeq[uint16](rows * w)
+  ## Forward wavelet per channel/lane (one pooled lane buffer reused
+  ## across lanes; fully regathered per lane).
+  var lanePool = initPool(uint16, rows * w)
   var base = 0
-  for ci in 0..<chanBytes.len:
-    let wc = chanBytes[ci] div 2
-    for j in 0..<wc:
-      for y in 0..<rows:
-        for x in 0..<w:
-          lane[y * w + x] = wav[base + y * w * wc + x * wc + j]
-      pizWav2DEncode(lane, w, 1, rows, w, maxVal)
-      for y in 0..<rows:
-        for x in 0..<w:
-          wav[base + y * w * wc + x * wc + j] = lane[y * w + x]
-    base += rows * w * wc
+  withBorrow(lanePool, lane):
+    for ci in 0..<chanBytes.len:
+      let wc = chanBytes[ci] div 2
+      for j in 0..<wc:
+        for y in 0..<rows:
+          for x in 0..<w:
+            lane.data[y * w + x] = wav[base + y * w * wc + x * wc + j]
+        pizWav2DEncode(lane.data, w, 1, rows, w, maxVal)
+        for y in 0..<rows:
+          for x in 0..<w:
+            wav[base + y * w * wc + x * wc + j] = lane.data[y * w + x]
+      base += rows * w * wc
 
 proc pizWavDecodeChunk(wav: var seq[uint16], w, rows: int,
     chanBytes: seq[int], maxVal: uint16) =
   ## Inverse wavelet per channel/lane.
-  var lane = newSeq[uint16](rows * w)
+  var lanePool = initPool(uint16, rows * w)
   var base = 0
-  for ci in 0..<chanBytes.len:
-    let wc = chanBytes[ci] div 2
-    for j in 0..<wc:
-      for y in 0..<rows:
-        for x in 0..<w:
-          lane[y * w + x] = wav[base + y * w * wc + x * wc + j]
-      pizWav2DDecode(lane, w, 1, rows, w, maxVal)
-      for y in 0..<rows:
-        for x in 0..<w:
-          wav[base + y * w * wc + x * wc + j] = lane[y * w + x]
-    base += rows * w * wc
+  withBorrow(lanePool, lane):
+    for ci in 0..<chanBytes.len:
+      let wc = chanBytes[ci] div 2
+      for j in 0..<wc:
+        for y in 0..<rows:
+          for x in 0..<w:
+            lane.data[y * w + x] = wav[base + y * w * wc + x * wc + j]
+        pizWav2DDecode(lane.data, w, 1, rows, w, maxVal)
+        for y in 0..<rows:
+          for x in 0..<w:
+            wav[base + y * w * wc + x * wc + j] = lane.data[y * w + x]
+      base += rows * w * wc
 
 proc pizApplyChunk*(planar: openArray[uint8], w, rows: int,
     chanBytes: seq[int], ptypes: seq[int32]): tuple[ok: bool, blk: seq[uint8]] =

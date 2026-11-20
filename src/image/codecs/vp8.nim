@@ -8,6 +8,7 @@
 ## `ImageResult.err` at decodeVp8Frame. Never panics on truncated input:
 ## the bit reader returns defaults past EOF and each section checks.
 import std/bitops
+import buffalo
 import ./vp8tables
 import ../error
 
@@ -440,44 +441,51 @@ proc fillRowFancy1(row: var seq[uint8], yRow, uRow, vRow: openArray[uint8]) =
 proc fillRgbFancy(buf: var seq[uint8], yBuf, uBuf, vBuf: seq[uint8],
     width, height, bufWidth: int) =
   ## buf.len = width*height*3; chroma rows padded to bufWidth div 2.
+  ## Row buffers are pooled and borrowed per phase (top, pairs, tail);
+  ## fully refilled on every use, so one clear per borrow suffices.
   let chromaBufW = bufWidth div 2
   let chromaW = (width + 1) div 2
-  var topRow = newSeq[uint8](width * 3)
-  fillRowFancy1(topRow, toOpenArray(yBuf, 0, width - 1),
-    toOpenArray(uBuf, 0, chromaW - 1), toOpenArray(vBuf, 0, chromaW - 1))
-  for i in 0..<topRow.len: buf[i] = topRow[i]
+  var rowPoolA = initPool(uint8, width * 3)
+  var rowPoolB = initPool(uint8, width * 3)
+  withBorrow(rowPoolA, topRow):
+    topRow.setLen(width * 3)
+    fillRowFancy1(topRow.data, toOpenArray(yBuf, 0, width - 1),
+      toOpenArray(uBuf, 0, chromaW - 1), toOpenArray(vBuf, 0, chromaW - 1))
+    blit(buf.toOpenArray(0, width * 3 - 1), topRow.toOpenArray())
   var outPos = width * 3
   var yPos = bufWidth
   var cPos = 0
-  var row1 = newSeq[uint8](width * 3)
-  var row2 = newSeq[uint8](width * 3)
-  while outPos + 2 * width * 3 <= buf.len and
-      yPos + 2 * bufWidth <= height * bufWidth:
-    fillRowFancy2(row1, toOpenArray(yBuf, yPos, yPos + width - 1),
-      toOpenArray(uBuf, cPos, cPos + chromaW - 1),
-      toOpenArray(uBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
-      toOpenArray(vBuf, cPos, cPos + chromaW - 1),
-      toOpenArray(vBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1))
-    fillRowFancy2(row2, toOpenArray(yBuf, yPos + bufWidth,
-        yPos + bufWidth + width - 1),
-      toOpenArray(uBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
-      toOpenArray(uBuf, cPos, cPos + chromaW - 1),
-      toOpenArray(vBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
-      toOpenArray(vBuf, cPos, cPos + chromaW - 1))
-    for i in 0..<row1.len:
-      buf[outPos + i] = row1[i]
-      buf[outPos + width * 3 + i] = row2[i]
-    outPos += 2 * width * 3
-    yPos += 2 * bufWidth
-    cPos += chromaBufW
+  withBorrows(rowPoolA, row1, rowPoolB, row2):
+    row1.setLen(width * 3)
+    row2.setLen(width * 3)
+    while outPos + 2 * width * 3 <= buf.len and
+        yPos + 2 * bufWidth <= height * bufWidth:
+      fillRowFancy2(row1.data, toOpenArray(yBuf, yPos, yPos + width - 1),
+        toOpenArray(uBuf, cPos, cPos + chromaW - 1),
+        toOpenArray(uBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
+        toOpenArray(vBuf, cPos, cPos + chromaW - 1),
+        toOpenArray(vBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1))
+      fillRowFancy2(row2.data, toOpenArray(yBuf, yPos + bufWidth,
+          yPos + bufWidth + width - 1),
+        toOpenArray(uBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
+        toOpenArray(uBuf, cPos, cPos + chromaW - 1),
+        toOpenArray(vBuf, cPos + chromaBufW, cPos + chromaBufW + chromaW - 1),
+        toOpenArray(vBuf, cPos, cPos + chromaW - 1))
+      blit(buf.toOpenArray(outPos, outPos + width * 3 - 1), row1.toOpenArray())
+      blit(buf.toOpenArray(outPos + width * 3, outPos + 2 * width * 3 - 1),
+        row2.toOpenArray())
+      outPos += 2 * width * 3
+      yPos += 2 * bufWidth
+      cPos += chromaBufW
   if outPos < buf.len:
     let chromaH = (height + 1) div 2
     let startC = (chromaH - 1) * chromaBufW
-    var rowL = newSeq[uint8](width * 3)
-    fillRowFancy1(rowL, toOpenArray(yBuf, yPos, yPos + width - 1),
-      toOpenArray(uBuf, startC, startC + chromaW - 1),
-      toOpenArray(vBuf, startC, startC + chromaW - 1))
-    for i in 0..<rowL.len: buf[outPos + i] = rowL[i]
+    withBorrow(rowPoolA, rowL):
+      rowL.setLen(width * 3)
+      fillRowFancy1(rowL.data, toOpenArray(yBuf, yPos, yPos + width - 1),
+        toOpenArray(uBuf, startC, startC + chromaW - 1),
+        toOpenArray(vBuf, startC, startC + chromaW - 1))
+      blit(buf.toOpenArray(outPos, outPos + width * 3 - 1), rowL.toOpenArray())
 
 # ---------- intra prediction (Section 12, RFC 6386) ----------
 

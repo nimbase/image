@@ -3,6 +3,7 @@
 ## None/LZW/Deflate/PackBits, predictors, photometrics incl. YCbCr/CMYK/palette.
 ## JPEG-in-TIFF and BigTIFF return Unsupported.
 import std/math
+import buffalo
 import ../color
 import ../error
 import ../buffer
@@ -495,13 +496,15 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
   var chunkWidths: seq[int] = @[]
   var chunkHeights: seq[int] = @[]
   if not tiled:
-    let offsets = getArray(ifd, TStripOffsets, e, 1, 0)
-    let counts = getArray(ifd, TStripByteCounts, e, 1, 0)
     let fOff = ifd.find(TStripOffsets)
     let fCnt = ifd.find(TStripByteCounts)
     if not fOff.found or not fCnt.found:
       return err[DynamicImage](decodingError("tiff: missing strip tags"))
-    let n = max(fOff.v.count, fCnt.v.count)
+    # Read the full offset/count arrays (not just the first element):
+    # multi-strip files reuse only chunk 0 otherwise (wrong pixels).
+    let n = int(max(fOff.v.count, fCnt.v.count))
+    let offsets = getArray(ifd, TStripOffsets, e, n, 0)
+    let counts = getArray(ifd, TStripByteCounts, e, n, 0)
     rowsPerChunk = int(getU32(ifd, TRowsPerStrip, e, uint32(h)))
     if rowsPerChunk == 0:
       return err[DynamicImage](decodingError("tiff: bad rows per strip"))
@@ -522,9 +525,9 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
     let fCnt = ifd.find(TTileByteCounts)
     if not fOff.found or not fCnt.found:
       return err[DynamicImage](decodingError("tiff: missing tile tags"))
-    let offsets = getArray(ifd, TTileOffsets, e, 1, 0)
-    let counts = getArray(ifd, TTileByteCounts, e, 1, 0)
-    let n = max(int(fOff.v.count), int(fCnt.v.count))
+    let n = int(max(fOff.v.count, fCnt.v.count))
+    let offsets = getArray(ifd, TTileOffsets, e, n, 0)
+    let counts = getArray(ifd, TTileByteCounts, e, n, 0)
     let tilesAcross = (w + tw - 1) div tw
     chunks = newSeq[Chunk](n)
     chunkWidths = newSeq[int](n)
@@ -609,6 +612,9 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
   else:
     let tw = int(getU32(ifd, TTileWidth, e, 0))
     let tilesAcross = (w + tw - 1) div tw
+    # Pooled sub-byte row scratch, reused across all tiles (grows to the
+    # widest tile once, then stays flat).
+    var rowSampPool = initPool(uint16, 0)
     for ti, (off, cnt) in chunks:
       if off + cnt > data.len:
         return err[DynamicImage](decodingError("tiff: tile OOB"))
@@ -628,21 +634,23 @@ proc decodeIfd(data: seq[uint8], ifd: TiffIfd,
                 full[((ty*rowsPerChunk+r)*w + tx*tw+x)*spp*bytesPerSample + c*bytesPerSample+b] =
                   blk[r*rb + x*spp*bytesPerSample + c*bytesPerSample+b]
       else:
-        # sub-byte tiles: unpack then place (one row buffer reused
-        # across the tile's rows instead of per-row alloc)
-        var rowSamp = newSeq[uint16](cw * spp)
-        for r in 0..<chh:
-          let srcRb = (cw * spp * bitDepth + 7) div 8
-          let dstRb = (w * spp * bitDepth + 7) div 8
-          unpackBits(blk.toOpenArray(r*srcRb, r*srcRb+srcRb-1),
-            cw * spp, bitDepth, fillLsb, rowSamp)
-          for x in 0..<cw*spp:
-            let dstBit = (ty*rowsPerChunk+r)*w*spp + tx*tw*spp + x
-            # need full[] as packed bits: write bit
-            let byteIdx = (ty*rowsPerChunk+r)*dstRb + dstBit div 8
-            let bitInByte = 7 - (dstBit mod 8)
-            if rowSamp[x] != 0:
-              full[byteIdx] = full[byteIdx] or uint8(1 shl bitInByte)
+        # sub-byte tiles: unpack then place (one pooled row buffer reused
+        # across all tile rows instead of per-row alloc)
+        withBorrow(rowSampPool, rowSamp):
+          for r in 0..<chh:
+            let srcRb = (cw * spp * bitDepth + 7) div 8
+            let dstRb = (w * spp * bitDepth + 7) div 8
+            unpackBits(blk.toOpenArray(r*srcRb, r*srcRb+srcRb-1),
+              cw * spp, bitDepth, fillLsb, rowSamp.data)
+            for x in 0..<cw*spp:
+              # full stores packed rows byte-aligned (dstRb bytes each):
+              # row base plus the within-row bit offset (matches sampAt).
+              let rowBase = (ty*rowsPerChunk + r) * dstRb
+              let colBit = tx*tw*spp + x
+              let byteIdx = rowBase + colBit div 8
+              let bitInByte = 7 - (colBit mod 8)
+              if rowSamp.data[x] != 0:
+                full[byteIdx] = full[byteIdx] or uint8(1 shl bitInByte)
   return buildChunky(full, w, h, spp, bitDepth, photo, bits, predictor,
     fillLsb, e, ifd, data)
 

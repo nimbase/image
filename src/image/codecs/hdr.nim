@@ -2,6 +2,7 @@
 ## Radiance RGBE: #?RADIANCE, FORMAT=32-bit_rle_rgbe, -Y H +X W, flat + new/old RLE.
 import std/math
 import std/strutils
+import buffalo
 import ../color
 import ../error
 import ../buffer
@@ -81,84 +82,86 @@ proc decodeHdr*(data: seq[uint8]): ImageResult[Rgb32FImage] =
     return ok(Rgb32FImage(width: w, height: h, pixels: @[]))
   let n = int(w) * int(h)
   var px = newSeq[Rgb[float32]](n)
-  # scanlines top-down, each of width w. One scanline buffer reused
-  # across rows (each row fully overwrites it) instead of per-row alloc.
-  var scan = newSeq[Rgbe](int(w))
+  # scanlines top-down, each of width w. One pooled scanline buffer reused
+  # across rows (each row fully overwrites it) via a scoped borrow.
+  var scanPool = initPool(Rgbe, int(w))
   var idx = 0
-  for _ in 0..<int(h):
-    if pos + 4 > data.len:
-      return err[Rgb32FImage](decodingError("hdr: truncated scanline"))
-    let fb: Rgbe = (data[pos], data[pos+1], data[pos+2], data[pos+3])
-    pos += 4
-    if fb.r == 2 and fb.g == 2 and fb.e < 128:
-      # new RLE per component; fb.b holds high byte of width? Reference ignores, uses w.
-      # Actually marker is (2,2,hi,lo); validate loosely.
-      for comp in 0..3:
-        var p = 0
-        while p < int(w):
-          if pos >= data.len:
-            return err[Rgb32FImage](decodingError("hdr: truncated RLE"))
-          let rl = int(data[pos]); inc pos
-          if rl <= 128:
-            if p + rl > int(w) or pos + rl > data.len:
-              return err[Rgb32FImage](decodingError("hdr: bad RLE length"))
-            for k in 0..<rl:
+  withBorrow(scanPool, scan):
+    scan.setLen(int(w))
+    for _ in 0..<int(h):
+      if pos + 4 > data.len:
+        return err[Rgb32FImage](decodingError("hdr: truncated scanline"))
+      let fb: Rgbe = (data[pos], data[pos+1], data[pos+2], data[pos+3])
+      pos += 4
+      if fb.r == 2 and fb.g == 2 and fb.e < 128:
+        # new RLE per component; fb.b holds high byte of width? Reference ignores, uses w.
+        # Actually marker is (2,2,hi,lo); validate loosely.
+        for comp in 0..3:
+          var p = 0
+          while p < int(w):
+            if pos >= data.len:
+              return err[Rgb32FImage](decodingError("hdr: truncated RLE"))
+            let rl = int(data[pos]); inc pos
+            if rl <= 128:
+              if p + rl > int(w) or pos + rl > data.len:
+                return err[Rgb32FImage](decodingError("hdr: bad RLE length"))
+              for k in 0..<rl:
+                let v = data[pos]; inc pos
+                case comp
+                of 0: scan[p+k].r = v
+                of 1: scan[p+k].g = v
+                of 2: scan[p+k].b = v
+                else: scan[p+k].e = v
+              p += rl
+            else:
+              let run = rl - 128
+              if p + run > int(w) or pos >= data.len:
+                return err[Rgb32FImage](decodingError("hdr: bad RLE run"))
               let v = data[pos]; inc pos
-              case comp
-              of 0: scan[p+k].r = v
-              of 1: scan[p+k].g = v
-              of 2: scan[p+k].b = v
-              else: scan[p+k].e = v
-            p += rl
+              for k in 0..<run:
+                case comp
+                of 0: scan[p+k].r = v
+                of 1: scan[p+k].g = v
+                of 2: scan[p+k].b = v
+                else: scan[p+k].e = v
+              p += run
+      else:
+        # old RLE
+        if fb.r == 1 and fb.g == 1 and fb.b == 1:
+          return err[Rgb32FImage](decodingError("hdr: first pixel RLE marker"))
+        scan[0] = fb
+        var x = 1
+        var shift = 0
+        var prev = fb
+        while x < int(w):
+          if pos + 4 > data.len:
+            return err[Rgb32FImage](decodingError("hdr: truncated old RLE"))
+          let pix: Rgbe = (data[pos], data[pos+1], data[pos+2], data[pos+3])
+          pos += 4
+          if pix.r == 1 and pix.g == 1 and pix.b == 1:
+            let rl0 = int(pix.e)
+            if shift >= 32:
+              if rl0 != 0:
+                return err[Rgb32FImage](decodingError("hdr: overly long repeat"))
+            else:
+              let rl = rl0 shl shift
+              shift += 8
+              if x + rl > int(w):
+                return err[Rgb32FImage](decodingError("hdr: bad old RLE length"))
+              for k in 0..<rl: scan[x+k] = prev
+              x += rl
           else:
-            let run = rl - 128
-            if p + run > int(w) or pos >= data.len:
-              return err[Rgb32FImage](decodingError("hdr: bad RLE run"))
-            let v = data[pos]; inc pos
-            for k in 0..<run:
-              case comp
-              of 0: scan[p+k].r = v
-              of 1: scan[p+k].g = v
-              of 2: scan[p+k].b = v
-              else: scan[p+k].e = v
-            p += run
-    else:
-      # old RLE
-      if fb.r == 1 and fb.g == 1 and fb.b == 1:
-        return err[Rgb32FImage](decodingError("hdr: first pixel RLE marker"))
-      scan[0] = fb
-      var x = 1
-      var shift = 0
-      var prev = fb
-      while x < int(w):
-        if pos + 4 > data.len:
-          return err[Rgb32FImage](decodingError("hdr: truncated old RLE"))
-        let pix: Rgbe = (data[pos], data[pos+1], data[pos+2], data[pos+3])
-        pos += 4
-        if pix.r == 1 and pix.g == 1 and pix.b == 1:
-          let rl0 = int(pix.e)
-          if shift >= 32:
-            if rl0 != 0:
-              return err[Rgb32FImage](decodingError("hdr: overly long repeat"))
-          else:
-            let rl = rl0 shl shift
-            shift += 8
-            if x + rl > int(w):
-              return err[Rgb32FImage](decodingError("hdr: bad old RLE length"))
-            for k in 0..<rl: scan[x+k] = prev
-            x += rl
-        else:
-          shift = 0
-          prev = pix
-          scan[x] = pix
-          inc x
-      # flat uncompressed scanlines are a degenerate case of old RLE without markers;
-      # handled by same loop when no markers appear. But pure-flat files store raw
-      # pixels without any marker logic? Reference treats non-marker first pixel +
-      # sequential pixels as literal — same as above. OK.
-    for i in 0..<int(w):
-      px[idx] = rgbeToHdr(scan[i])
-      inc idx
+            shift = 0
+            prev = pix
+            scan[x] = pix
+            inc x
+        # flat uncompressed scanlines are a degenerate case of old RLE without markers;
+        # handled by same loop when no markers appear. But pure-flat files store raw
+        # pixels without any marker logic? Reference treats non-marker first pixel +
+        # sequential pixels as literal — same as above. OK.
+      for i in 0..<int(w):
+        px[idx] = rgbeToHdr(scan[i])
+        inc idx
   ok(Rgb32FImage(width: w, height: h, pixels: move(px)))
 
 proc rleCompressChannel(data: openArray[uint8]): seq[uint8] =
