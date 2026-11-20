@@ -81,6 +81,36 @@ test "jpeg progressive":
       s += uint64(px.data[0]) + uint64(px.data[1]) + uint64(px.data[2])
     check s == sum
 
+test "jpeg progressive trimmed padding tail":
+  # Non-interleaved progressive scans use the component's visible block
+  # grid (libjpeg-turbo jcmaster.c per_scan_setup: width_in_blocks x
+  # height_in_blocks), which can be one block narrower/shorter than the
+  # MCU-padded coefficient grid. These cjpeg fixtures also cover the
+  # MCU block-tile split for non-square sampling (4:2:2 / 4:4:0): the
+  # tile row is `b div h`, not `b div v` (those coincide only at 4:2:0).
+  # 32x23 4:2:0 has 3 visible Y block rows (12 blocks) vs 4 padded;
+  # 17x23 has a padding column (4:2:2) or row (4:4:0). Sums validated
+  # against djpeg -nosmooth (maxdiff <= 3).
+  for (name, w, h, sum) in [
+      ("pad-trim.jpg", 32'u32, 23'u32, 301492'u64),
+      ("pad-trim-422.jpg", 17'u32, 23'u32, 160524'u64),
+      ("pad-trim-440.jpg", 17'u32, 23'u32, 160135'u64)]:
+    let p = fixturesDir / "jpg" / "progressive" / name
+    var f = open(p, fmRead)
+    var raw = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, raw, 0, raw.len)
+    close(f)
+    let dec = decodeJpeg(raw)
+    check dec.ok
+    check dec.value.kind == dkRgb8
+    check dec.value.dimensions() == (w, h)
+    var s = 0'u64
+    for px in dec.value.rgb8.pixels:
+      s += uint64(px.data[0]) + uint64(px.data[1]) + uint64(px.data[2])
+    check s == sum
+    # Truncating real pixels (mid-scan) must still fail.
+    check decodeJpeg(raw[0 ..< raw.len div 2]).ok == false
+
 test "jpeg bad data":
   check decodeJpeg(@[0xFF'u8, 0xD8, 0xFF, 0x00]).ok == false
   check decodeJpeg(@[0'u8, 1]).ok == false

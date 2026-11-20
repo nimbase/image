@@ -605,14 +605,23 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
       let isDc = ss == 0 and se == 0
       let isFirst = ah == 0
       # Non-interleaved scans visit one block per MCU in plain raster order
-      # over the component's block grid (T.81: a single-component scan MCU
-      # is a single block; libjpeg-turbo jdinput.c per_scan_setup,
-      # zune-jpeg parse_*_non_interleaved). Emulate with 1x1 effective
-      # blocks; the formulas below then yield blk == mcuIdx.
+      # over the component's *visible* block grid: width_in_blocks x
+      # height_in_blocks (libjpeg-turbo jcmaster.c per_scan_setup,
+      # jdinput.c per_scan_setup; same in zune-jpeg). That grid can be
+      # one block narrower/shorter than the MCU-padded `pcoef` grid that
+      # interleaved scans use, and encoders omit the phantom padding
+      # blocks entirely (e.g. 640x360 4:2:0 Y has 45 visible block rows
+      # but a padded 46th). Emulate with 1x1 effective blocks, but keep
+      # the padded row stride for coefficient storage.
       let nonInter = scanComps.len == 1
       var totalMcus = pMcuX * pMcuY
+      var scanCols = pMcuX
       if nonInter:
-        totalMcus = pcoef[scanComps[0].comp].len
+        let ci = scanComps[0].comp
+        scanCols = (width * comps[ci].h + 8 * pMaxH - 1) div (8 * pMaxH)
+        let scanRows =
+          (height * comps[ci].v + 8 * pMaxV - 1) div (8 * pMaxV)
+        totalMcus = scanCols * scanRows
       var mcuIdx = 0
       var scanErr = ""
       # Unchecked scan body: every index is bounded by validated
@@ -627,12 +636,15 @@ proc decodeJpeg*(data: seq[uint8], denom = 1): ImageResult[DynamicImage] =
           let ci = sc.comp
           let bh = if nonInter: 1 else: comps[ci].h
           let bv = if nonInter: 1 else: comps[ci].v
-          let emx = if nonInter: pMcuX * comps[ci].h else: pMcuX
+          let emx = if nonInter: scanCols else: pMcuX
           let nb = bh * bv
-          let cols = emx * bh
+          # Storage stride stays MCU-padded even when the scan grid is not.
+          let cols = pMcuX * comps[ci].h
           for b in 0..<nb:
             let bx = (mcuIdx mod emx) * bh + (b mod bh)
-            let by = (mcuIdx div emx) * bv + (b div bv)
+            # Rows advance by `h` blocks per MCU row (not `v`): the b
+            # raster is row-major over the h x v block tile.
+            let by = (mcuIdx div emx) * bv + (b div bh)
             let blk = by * cols + bx
             if isDc:
               if isFirst:

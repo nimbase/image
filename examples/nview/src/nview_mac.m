@@ -58,6 +58,11 @@ static const char *kShaders =
 - (instancetype)initWithFrame:(NSRect)frame controller:(id)c {
   if ((self = [super initWithFrame:frame])) {
     controller = c;
+    // Explicit layer (rather than relying on +layerClass): deterministic
+    // across AppKit versions. Layer-hosting views don't auto-resize
+    // their layer, so setFrameSize: keeps it in sync below.
+    CAMetalLayer *layer = [CAMetalLayer layer];
+    self.layer = layer;
     self.wantsLayer = YES;
   }
   return self;
@@ -69,6 +74,7 @@ static const char *kShaders =
 
 - (void)setFrameSize:(NSSize)size {
   [super setFrameSize:size];
+  self.layer.frame = NSMakeRect(0, 0, size.width, size.height);
   [controller render];
 }
 
