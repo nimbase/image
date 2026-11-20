@@ -115,6 +115,45 @@ test "jpeg bad data":
   check decodeJpeg(@[0xFF'u8, 0xD8, 0xFF, 0x00]).ok == false
   check decodeJpeg(@[0'u8, 1]).ok == false
 
+test "jpeg scratch reuse is bit-identical":
+  # Phase 2 S1: a long-lived JpegScratch must decode exactly what a
+  # fresh buffer decodes, while retaining capacity across calls.
+  proc readRaw(p: string): seq[uint8] =
+    var f = open(p, fmRead)
+    result = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, result, 0, result.len)
+    close(f)
+  proc rgbSum(d: DynamicImage): uint64 =
+    for px in d.rgb8.pixels:
+      result += uint64(px.data[0]) + uint64(px.data[1]) + uint64(px.data[2])
+  let small = readRaw(fixturesDir / "jpg" / "progressive" / "pad-trim.jpg")
+  let big = readRaw(fixturesDir / "pexels-shahin-mren-92379627-29895390.jpg")
+  var scratch = initJpegScratch()
+  # Fresh vs scratch agree on both sizes, both denoms.
+  check rgbSum(decodeJpeg(small).value) == 301492'u64
+  check rgbSum(decodeJpeg(small, scratch).value) == 301492'u64
+  check rgbSum(decodeJpeg(small, scratch, 2).value) ==
+    rgbSum(decodeJpeg(small, 2).value)
+  # Large photo through the same scratch: identical pixels, and the
+  # pool grew to hold its largest scan.
+  let bigSum = rgbSum(decodeJpeg(big).value)
+  check rgbSum(decodeJpeg(big, scratch).value) == bigSum
+  let cap1 = scratch.clean.data.len
+  check cap1 > 1_000_000 # largest entropy scan of a 32 MP photo
+  check rgbSum(decodeJpeg(big, scratch).value) == bigSum
+  # Small again after large: still identical, and the header is
+  # trimmed back to the small scan (exactness matters: the BitReader
+  # bounds on data.len, so stale bytes must never linger in length).
+  check rgbSum(decodeJpeg(small, scratch).value) == 301492'u64
+  check scratch.clean.data.len < cap1
+  # shrinkAfterSpike drops the peak; decoding still works after.
+  shrinkAfterSpike(scratch, 1024)
+  check scratch.clean.data.len == 1024
+  check rgbSum(decodeJpeg(small, scratch).value) == 301492'u64
+  # Truncation still fails through the scratch overload.
+  check decodeJpeg(small[0 ..< small.len div 2], scratch).ok == false
+
+
 proc boxDown(px: seq[Rgb[uint8]], w, h, d: int): seq[Rgb[uint8]] =
   let w2 = (w + d - 1) div d
   let h2 = (h + d - 1) div d
