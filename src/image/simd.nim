@@ -14,6 +14,7 @@ when defined(gcc) or defined(clang):
   {.localPassc: "-ffp-contract=off".}
 
 import std/math
+import ./color
 import ./simd/x86_sse2
 
 when defined(amd64):
@@ -94,6 +95,64 @@ proc ycbcrRowSimd*(yP, cbP, crP, rgbP: ptr uint8, n: int) =
       Rgb[3*i] = r; Rgb[3*i+1] = g; Rgb[3*i+2] = b
   else:
     ycbcrRowScalar(yP, cbP, crP, rgbP, n)
+
+proc ycbcrRowRgbaScalar*(yP, cbP, crP: ptr uint8, rgbaP: ptr Rgba[uint8],
+    n: int) =
+  ## Scalar oracle: planar Y/Cb/Cr rows to interleaved RGBA bytes
+  ## (alpha 255). Same converter as `ycbcrToRgb`, so pixels match
+  ## `decodeJpeg` + `toRgba8` exactly; vectorized row paths must match
+  ## this the same way they match `ycbcrRowScalar`.
+  let Y = cast[ptr UncheckedArray[uint8]](yP)
+  let Cb = cast[ptr UncheckedArray[uint8]](cbP)
+  let Cr = cast[ptr UncheckedArray[uint8]](crP)
+  let Rgba = cast[ptr UncheckedArray[Rgba[uint8]]](rgbaP)
+  for i in 0..<n:
+    let (r, g, b) = ycbcrToRgb(Y[i], Cb[i], Cr[i])
+    Rgba[i] = Rgba[uint8](data: [r, g, b, 255'u8])
+
+proc ycbcrRowRgbaSimd*(yP, cbP, crP: ptr uint8, rgbaP: ptr Rgba[uint8],
+    n: int) =
+  ## RGBA row converter with runtime dispatch. Same float math and
+  ## truncation as `ycbcrRowSimd`, alpha lane 255; identical pixels.
+  if n <= 0: return
+  let rb = cast[ptr uint8](rgbaP)
+  when defined(amd64):
+    if useAvx2 and n >= 8:
+      let m = (n div 4) * 4
+      ycbcrRowRgbaAvx(yP, cbP, crP, rb, m)
+      let m2 = ((n - m) div 2) * 2
+      if m2 > 0:
+        ycbcrRowRgbaSse2(u8p(yP, m), u8p(cbP, m), u8p(crP, m),
+          u8p(rb, m*4), m2)
+      for i in (m + m2)..<n:
+        let (r, g, b) = ycbcrToRgb(
+          cast[ptr UncheckedArray[uint8]](yP)[i],
+          cast[ptr UncheckedArray[uint8]](cbP)[i],
+          cast[ptr UncheckedArray[uint8]](crP)[i])
+        let Rgba = cast[ptr UncheckedArray[Rgba[uint8]]](rgbaP)
+        Rgba[i] = Rgba[uint8](data: [r, g, b, 255'u8])
+    else:
+      let m = (n div 2) * 2
+      if m > 0: ycbcrRowRgbaSse2(yP, cbP, crP, rb, m)
+      for i in m..<n:
+        let (r, g, b) = ycbcrToRgb(
+          cast[ptr UncheckedArray[uint8]](yP)[i],
+          cast[ptr UncheckedArray[uint8]](cbP)[i],
+          cast[ptr UncheckedArray[uint8]](crP)[i])
+        let Rgba = cast[ptr UncheckedArray[Rgba[uint8]]](rgbaP)
+        Rgba[i] = Rgba[uint8](data: [r, g, b, 255'u8])
+  elif defined(arm64):
+    let m = (n div 2) * 2
+    if m > 0: ycbcrRowRgbaNeon(yP, cbP, crP, rb, m)
+    for i in m..<n:
+      let (r, g, b) = ycbcrToRgb(
+        cast[ptr UncheckedArray[uint8]](yP)[i],
+        cast[ptr UncheckedArray[uint8]](cbP)[i],
+        cast[ptr UncheckedArray[uint8]](crP)[i])
+      let Rgba = cast[ptr UncheckedArray[Rgba[uint8]]](rgbaP)
+      Rgba[i] = Rgba[uint8](data: [r, g, b, 255'u8])
+  else:
+    ycbcrRowRgbaScalar(yP, cbP, crP, rgbaP, n)
 
 proc unfilterRowScalar*(filter: uint8, cur, prev: var seq[uint8],
     bpp: int): bool =

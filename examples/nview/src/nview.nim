@@ -17,7 +17,7 @@ when not defined(macosx):
 {.compile: "nview_mac.m".}
 {.passL: "-framework Cocoa -framework Metal -framework QuartzCore".}
 
-import std/[os, strutils, algorithm, memfiles]
+import std/[os, strutils, algorithm, memfiles, posix]
 import image
 
 proc nview_run() {.importc.}
@@ -29,11 +29,18 @@ const SupportedExts = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
 var
   gallery: seq[string] = @[]
   galleryIdx = 0
-  cached: RgbaImage
-    ## Grow-only display pool shared across slides: `decodePathInto`
-    ## blits into `cached.pixels` via `setLen` (capacity retained), and
-    ## `galleryDropPixels` drops the length but keeps the backing, so a
-    ## walk allocates the largest slide once instead of once per photo.
+  poolBase: pointer = nil
+    ## OS-backed display buffer: mapped per slide at exact size,
+    ## unmapped on GPU upload. Nim's allocator never returns freed heap
+    ## to the OS, so a heap pool would pin one display image (128 MB at
+    ## 32 MP) forever; an mmap'd buffer returns its pages deterministically
+    ## while the Metal texture keeps the on-screen image. Same-size
+    ## consecutive slides still fault the same pages with no heap churn.
+  poolCapPx = 0
+    ## Mapped capacity in pixels (always exactly the current image; the
+    ## mapping lives only between decode and upload).
+  poolW, poolH = 0
+    ## Current image dims; 0 means empty (galleryCurrentPixels nil).
   cachedName = ""
   hasCache = false
   jpegScratch = initJpegScratch()
@@ -62,76 +69,70 @@ proc decodeDyn(fmt: ImageFormat, bytes: openArray[uint8]): ImageResult[DynamicIm
   of fmtGif, fmtQoi, fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(AssertionDefect, "decodeDyn: unexpected " & $fmt)
 
-proc blitRgbaInto(dst: var RgbaImage, src: RgbaImage) =
-  ## Copy `src` into `dst`, reusing `dst.pixels` capacity (grow-only
-  ## pool). `setLen` keeps the backing when shrinking or regrowing
-  ## within capacity, so a gallery walk allocates the largest slide
-  ## once instead of once per photo. Fully overwritten, so no zeroing
-  ## discipline needed beyond `setLen` itself.
-  dst.width = src.width
-  dst.height = src.height
-  dst.pixels.setLen(src.pixels.len)
+proc poolDrop() =
+  ## Release the display mapping, returning its pages to the OS at once.
+  ## Idempotent; safe to call with no mapping (failed decodes, startup).
+  if poolBase != nil:
+    discard munmap(poolBase, poolCapPx * sizeof(Rgba[uint8]))
+    poolBase = nil
+    poolCapPx = 0
+  poolW = 0
+  poolH = 0
+
+proc poolTake(nPx: int): ptr UncheckedArray[Rgba[uint8]] =
+  ## Map an exact-size RGBA display buffer. The mapping lives only
+  ## between decode and upload; any previous mapping is released first
+  ## (normal flow drops after every upload, so this is a no-op).
+  if poolBase != nil: poolDrop()
+  if nPx <= 0:
+    raise newException(IOError, "nview: empty image")
+  let bytes = nPx * sizeof(Rgba[uint8])
+  poolBase = mmap(nil, bytes, PROT_READ or PROT_WRITE,
+    MAP_PRIVATE or MAP_ANONYMOUS, -1, 0)
+  if poolBase == cast[pointer](MAP_FAILED):
+    poolBase = nil
+    raise newException(OutOfMemDefect, "nview: display pool mmap failed")
+  poolCapPx = nPx
+  cast[ptr UncheckedArray[Rgba[uint8]]](poolBase)
+
+proc blitRgbaInto(dst: ptr UncheckedArray[Rgba[uint8]], src: RgbaImage) =
+  ## Copy `src` into the caller-sized pool slot. Fully overwritten.
   if src.pixels.len > 0:
-    copyMem(addr dst.pixels[0], unsafeAddr src.pixels[0],
+    copyMem(addr dst[0], unsafeAddr src.pixels[0],
       src.pixels.len * sizeof(Rgba[uint8]))
 
-proc blitDynamicInto(dyn: DynamicImage, dst: var RgbaImage): bool =
-  ## Convert `dyn` into `dst`, reusing `dst.pixels` capacity (same
-  ## pool terms as `blitRgbaInto`). Returns false without touching
-  ## `dst` for variants nview cannot display (16-bit/float stay an
-  ## error at the call site). Only the 8-bit LDR kinds the gallery
-  ## supports are handled, matching the old `toRgba8` coverage.
+proc blitDynamicInto(dyn: DynamicImage,
+    dst: ptr UncheckedArray[Rgba[uint8]]): bool =
+  ## Convert `dyn` into the caller-sized pool slot. Returns false
+  ## without touching `dst` for variants nview cannot display
+  ## (16-bit/float stay an error at the call site). Only the 8-bit LDR
+  ## kinds the gallery supports are handled, matching `toRgba8`.
   case dyn.kind
   of dkRgba8:
     blitRgbaInto(dst, dyn.rgba8)
     true
   of dkRgb8:
     let s = dyn.rgb8
-    dst.width = s.width
-    dst.height = s.height
-    dst.pixels.setLen(s.pixels.len)
     for i, p in s.pixels:
-      dst.pixels[i] = Rgba[uint8](data: [p.data[0], p.data[1], p.data[2], 255'u8])
+      dst[i] = Rgba[uint8](data: [p.data[0], p.data[1], p.data[2], 255'u8])
     true
   of dkLuma8:
     let s = dyn.luma8
-    dst.width = s.width
-    dst.height = s.height
-    dst.pixels.setLen(s.pixels.len)
     for i, p in s.pixels:
-      dst.pixels[i] = Rgba[uint8](data: [p.data[0], p.data[0], p.data[0], 255'u8])
+      dst[i] = Rgba[uint8](data: [p.data[0], p.data[0], p.data[0], 255'u8])
     true
   else:
     false
 
-const MaxDisplayPx* {.intdefine.} = 12_000_000
-  ## Decode-resolution cap for display: JPEGs are decoded at the
-  ## smallest denom whose output still covers this many pixels, so the
-  ## GPU downscales from real detail. The denom box path is a cheap
-  ## component-space filter (visibly worse than Preview even at 4x
-  ## oversample: maxdiff 119 vs a proper downscale), while full-res
-  ## decode costs ~0.04 s more on a 6.5 MP photo and downscales cleanly
-  ## (maxdiff 10, zero pixels >10 vs fancy at 4x). A 32 MP photo lands
-  ## at denom 2 (8 MP texture). Override with
-  ## `-d:NviewMaxDisplayPx=<n>` to trade texture memory for sharpness.
-
-proc displayDenom*(w, h: uint32): int =
-  ## Smallest JPEG denom (1/2/4/8) whose output fits `MaxDisplayPx`.
-  ## Pure function so the headless harness can pin the policy.
-  result = 1
-  var dw = uint64(w); var dh = uint64(h)
-  while dw * dh > uint64(MaxDisplayPx) and result < 8:
-    result *= 2
-    dw = (dw + 1) div 2; dh = (dh + 1) div 2
-
-proc decodePathInto(path: string, dst: var RgbaImage) =
-  ## Decode `path` into `dst`, reusing `dst.pixels` capacity (grow-only
-  ## display pool shared across slides). File bytes come from a
-  ## read-only mmap view: zero heap copies (`heif` copies once
-  ## internally — other agent owns that seq API). The mapping lives
-  ## only for this call. Raises IOError on failure, leaving `dst`
-  ## untouched (decode lands in temporaries; the pool is blitted only
-  ## on success, so a failed slide keeps the old picture).
+proc decodePathInto(path: string) =
+  ## Decode `path` into the OS-backed display pool (mapped at exact
+  ## size for this call). File bytes come from a read-only mmap view:
+  ## zero heap copies (`heif` copies once internally — other agent owns
+  ## that seq API). JPEG decodes straight into the pool (no Rgb temp);
+  ## other formats decode to a temp, then blit. The mapping lives only
+  ## for this call. Raises IOError on failure with the pool released,
+  ## so a failed slide keeps the old picture (which lives on in the
+  ## Metal texture).
   var mf =
     try: memfiles.open(path)
     except OSError as e: raise newException(IOError, path & ": " & e.msg)
@@ -143,39 +144,64 @@ proc decodePathInto(path: string, dst: var RgbaImage) =
   let (found, fmt) = guessFormat(view())
   if not found:
     raise newException(IOError, "cannot guess format: " & path)
+  template fail(msg: string) =
+    poolDrop()
+    raise newException(IOError, path & ": " & msg)
   case fmt
   of fmtGif:
     let r = gifFirstToRgba(view()) # v1: first frame only, no animation
-    if not r.ok:
-      raise newException(IOError, path & ": " & r.err.msg)
+    if not r.ok: fail(r.err.msg)
+    let dst = poolTake(r.value.pixels.len)
     blitRgbaInto(dst, r.value)
+    poolW = int(r.value.width)
+    poolH = int(r.value.height)
   of fmtQoi:
     let r = decodeQoi(view())
-    if not r.ok:
-      raise newException(IOError, path & ": " & r.err.msg)
+    if not r.ok: fail(r.err.msg)
+    let dst = poolTake(r.value.pixels.len)
     blitRgbaInto(dst, r.value)
+    poolW = int(r.value.width)
+    poolH = int(r.value.height)
   of fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(IOError, path & ": 16-bit/float input not supported in v1")
   of fmtJpeg:
-    # Decode at (near-)full resolution: the denom box path is a cheap
-    # component-space filter, visibly worse than Preview — the GPU
-    # downscales from real detail instead. Only photos above
-    # MaxDisplayPx step down (32 MP lands at denom 2, an 8 MP texture).
-    var denom = 1
+    # Always full resolution, straight into the pool: the denom box
+    # path is a cheap component-space filter, visibly worse than
+    # Preview — the GPU downscales from real detail instead.
     let dd = jpegDimensions(view())
-    if dd.ok:
-      denom = displayDenom(dd.value.w, dd.value.h)
-    let r = decodeJpeg(view(), jpegScratch, denom)
+    if not dd.ok: fail(dd.err.msg)
+    let nPx = int(dd.value.w) * int(dd.value.h)
+    let dst = poolTake(nPx)
+    let r = decodeJpegRgbaInto(view(), jpegScratch, dst, nPx, 1)
     if not r.ok:
-      raise newException(IOError, path & ": " & r.err.msg)
-    if not blitDynamicInto(r.value, dst):
-      raise newException(IOError, path & ": unsupported pixel type in v1")
+      if r.err.kind == ekUnsupported:
+        # 4-component (CMYK/YCCK): temp + convert fallback. Rare;
+        # the temp is transient heap (arenas may retain it).
+        poolDrop()
+        let t = decodeJpeg(view(), jpegScratch, 1)
+        if not t.ok: fail(t.err.msg)
+        let d2 = t.value.toRgba8()
+        if d2.width == 0 or d2.height == 0: fail("unsupported pixel type in v1")
+        let dst2 = poolTake(d2.pixels.len)
+        blitRgbaInto(dst2, d2)
+        poolW = int(d2.width)
+        poolH = int(d2.height)
+      else:
+        fail(r.err.msg)
+    else:
+      poolW = r.value.w
+      poolH = r.value.h
   else:
     let r = decodeDyn(fmt, view())
-    if not r.ok:
-      raise newException(IOError, path & ": " & r.err.msg)
+    if not r.ok: fail(r.err.msg)
+    # Size the pool from the decoded dims before touching it; the
+    # convert only runs on success, so failure leaves nothing mapped.
+    let (dw, dh) = r.value.dimensions()
+    let dst = poolTake(int(dw) * int(dh))
     if not blitDynamicInto(r.value, dst):
-      raise newException(IOError, path & ": unsupported pixel type in v1")
+      fail("unsupported pixel type in v1")
+    poolW = int(dw)
+    poolH = int(dh)
 
 proc decodeBytes(raw: string, name: string): RgbaImage =
   ## Legacy string-content entry (kept for tests): copies once into an
@@ -198,11 +224,7 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
   of fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(IOError, name & ": 16-bit/float input not supported in v1")
   of fmtJpeg:
-    var denom = 1
-    let dd = jpegDimensions(bytes)
-    if dd.ok:
-      denom = displayDenom(dd.value.w, dd.value.h)
-    let r = decodeJpeg(bytes, jpegScratch, denom)
+    let r = decodeJpeg(bytes, jpegScratch, 1)
     if not r.ok: raise newException(IOError, name & ": " & r.err.msg)
     result = r.value.toRgba8()
     if result.width == 0 or result.height == 0:
@@ -216,11 +238,12 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
       raise newException(IOError, name & ": unsupported pixel type in v1")
 
 proc loadAt(idx: int): bool =
-  ## Decode gallery[idx] into the shared display pool. Stays on the old
-  ## image on error (`decodePathInto` only blits on success).
+  ## Decode gallery[idx] into the display pool. Stays on the old image
+  ## on error (`decodePathInto` releases the pool on failure; the old
+  ## picture lives on in the Metal texture).
   let path = gallery[idx]
   try:
-    decodePathInto(path, cached)
+    decodePathInto(path)
     cachedName = extractFilename(path)
     hasCache = true
     galleryIdx = idx
@@ -271,22 +294,20 @@ proc galleryGo*(delta: cint): cint {.exportc.} =
 proc galleryCurrentName*(): cstring {.exportc.} = cstring(cachedName)
 
 proc galleryCurrentPixels(w, h: ptr cint): pointer {.exportc.} =
-  w[] = cint(cached.width)
-  h[] = cint(cached.height)
-  if cached.pixels.len == 0: return nil
-  addr cached.pixels[0]
+  w[] = cint(poolW)
+  h[] = cint(poolH)
+  if poolBase == nil or poolW <= 0 or poolH <= 0: return nil
+  poolBase
 
 proc galleryDropPixels*() {.exportc.} =
-  ## Drop the CPU length after the GPU has its copy, keeping the pool
-  ## capacity for the next slide. The on-screen image lives in the Metal
-  ## texture until the next upload; nothing reads `cached.pixels` in
-  ## between (resize re-renders from the texture). `setLen(0)` retains
-  ## the backing (unlike `= @[]`, which frees it), so a gallery walk
-  ## allocates the largest slide once and reuses it. Width/height are
-  ## kept (shape queries still answer; `galleryCurrentPixels` returns
-  ## nil with no backing, and both upload call sites run only on a
-  ## freshly decoded image).
-  cached.pixels.setLen(0)
+  ## Release the display mapping after the GPU has its copy: pages go
+  ## back to the OS at once (munmap — Nim heap never returns pages, so
+  ## a heap pool would pin one display image, 128 MB at 32 MP, forever).
+  ## The on-screen image lives in the Metal texture until the next
+  ## upload; nothing reads the pool in between (resize re-renders from
+  ## the texture). The next `loadAt` maps a fresh exact-size buffer, so
+  ## steady state holds no CPU pixels at all. Idempotent.
+  poolDrop()
 
 proc main() =
   if paramCount() < 1:

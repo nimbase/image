@@ -34,23 +34,27 @@ Every LDR format the library guesses: PNG, JPEG, GIF (first frame only),
 WebP, BMP, TIFF, TGA, PNM, ICO, QOI, HEIF. AVIF reports its
 `Unsupported` stub message; 16-bit/float sources (HDR, EXR, farbfeld)
 stay on the current picture with a clear error — no tone mapping in v1.
-Large JPEGs decode at reduced scale only when they exceed
-`MaxDisplayPx` (12 MP, `-d:NviewMaxDisplayPx=`): the smallest denom
-(1/2/4/8) that still covers the cap, so the GPU always downscales
-from real detail. A 32 MP photo lands at denom 2 (8 MP texture).
+JPEGs always decode at full resolution; the GPU downscales from
+real detail for display (the denom box path is a cheap
+component-space filter, visibly worse than Preview).
 
 ## Memory
 
 File bytes never enter the Nim heap: each slide mmaps the file
 read-only (`memfiles`) and decodes straight from the view, which is
 unmapped before the next slide (only HEIF copies once — that decoder's
-seq API belongs to another agent). The decoded RGBA lives in one
-grow-only display pool (`cached.pixels`): each slide blits into it via
-`setLen` (capacity retained), and after GPU upload the length drops to
-zero while the backing is kept — so a walk allocates the largest slide
-once instead of once per photo, with no per-slide Rgba alloc. The Metal
-texture is likewise grow-only, and the 64-byte quad goes through
-`setVertexBytes`, so no per-frame buffer is created.
+seq API belongs to another agent). JPEGs decode at full resolution
+straight into the display buffer (`decodeJpegRgbaInto` — no Rgb temp,
+no conversion alloc, bit-identical to decode + `toRgba8`); other
+formats decode to a temp, then blit. The display buffer itself is
+`mmap`'d per slide at exact size and `munmap`'d on GPU upload — Nim's
+allocator never returns freed heap to the OS, so a heap pool would pin
+one display image (128 MB at 32 MP) forever, plus ~170 MB of retained
+decoder arenas. Steady state therefore holds no CPU pixels at all:
+texture + decode scratch + ~10 MB arenas. The Metal texture stays
+grow-only (max of each dimension, so mixed-orientation galleries never
+reallocate), and the 64-byte quad goes through `setVertexBytes`, so no
+per-frame buffer is created.
 
 To check steady state without a debugger (which perturbs the target), two
 environment hooks drive the real UI path and log the process footprint:

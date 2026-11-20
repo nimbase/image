@@ -1,6 +1,7 @@
 import unittest
 import std/random
 import std/times
+import image/color
 import image/simd
 
 test "simd idct matches scalar exactly":
@@ -51,6 +52,26 @@ test "simd ycbcr row matches scalar exactly":
     if len > 0:
       ycbcrRowScalar(addr yA[0], addr cbA[0], addr crA[0], addr outA[0], len)
       ycbcrRowSimd(addr yA[0], addr cbA[0], addr crA[0], addr outB[0], len)
+    check outA == outB
+
+test "simd ycbcr rgba row matches scalar exactly":
+  # RGBA lanes bit-identical to scalar oracle (alpha 255); lengths
+  # cover every dispatch tail (scalar/2-wide/4-wide/odd leftovers).
+  var rng = initRand(999)
+  for len in [0, 1, 2, 3, 5, 7, 8, 9, 15, 16, 17, 100, 1000, 4096]:
+    var yA = newSeq[uint8](len); var cbA = newSeq[uint8](len)
+    var crA = newSeq[uint8](len)
+    for i in 0..<len:
+      yA[i] = uint8(rng.rand(255))
+      cbA[i] = uint8(rng.rand(255))
+      crA[i] = uint8(rng.rand(255))
+    var outA = newSeq[Rgba[uint8]](len)
+    var outB = newSeq[Rgba[uint8]](len)
+    if len > 0:
+      ycbcrRowRgbaScalar(addr yA[0], addr cbA[0], addr crA[0], addr outA[0],
+        len)
+      ycbcrRowRgbaSimd(addr yA[0], addr cbA[0], addr crA[0], addr outB[0],
+        len)
     check outA == outB
 
 test "simd ycbcr row timing (informational)":

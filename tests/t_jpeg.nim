@@ -139,6 +139,86 @@ test "jpeg restart intervals":
     check s == sum
     check decodeJpeg(raw[0 ..< raw.len div 2]).ok == false
 
+test "jpeg rgbaInto matches conversion exactly":
+  # decodeJpegRgbaInto writes straight into a caller buffer (no Rgb
+  # temp, no conversion alloc): pixels must equal decode + toRgba8,
+  # across gray/color, denoms, and restart scans. Short/nil/truncated
+  # inputs fail cleanly with the destination untouched.
+  proc readRaw(p: string): seq[uint8] =
+    var f = open(p, fmRead)
+    result = newSeq[uint8](getFileSize(f))
+    discard readBytes(f, result, 0, result.len)
+    close(f)
+  proc intoSum(raw: seq[uint8], denom: int, capExtra = 0): tuple[ok: bool, s: uint64, w, h: int] =
+    var scratch = initJpegScratch()
+    let dd = jpegDimensions(raw)
+    if not dd.ok: return (false, 0, 0, 0)
+    let n = ((int(dd.value.w) + denom - 1) div denom) *
+      ((int(dd.value.h) + denom - 1) div denom)
+    var buf = newSeq[Rgba[uint8]](n + capExtra)
+    let r = decodeJpegRgbaInto(raw, scratch,
+      cast[ptr UncheckedArray[Rgba[uint8]]](addr buf[0]), n + capExtra, denom)
+    if not r.ok: return (false, 0, 0, 0)
+    var s = 0'u64
+    for i in 0..<n:
+      s += uint64(buf[i].data[0]) + uint64(buf[i].data[1]) +
+        uint64(buf[i].data[2]) + uint64(buf[i].data[3])
+    (true, s, r.value.w, r.value.h)
+  proc convSum(raw: seq[uint8], denom: int): tuple[s: uint64, w, h: int] =
+    let d = decodeJpeg(raw, denom).value.toRgba8()
+    var s = 0'u64
+    for px in d.pixels:
+      s += uint64(px.data[0]) + uint64(px.data[1]) +
+        uint64(px.data[2]) + uint64(px.data[3])
+    (s, int(d.width), int(d.height))
+  # synthetic gray + color round-trips
+  var gpx = newSeq[Luma[uint8]](64)
+  for i in 0..<64: gpx[i] = Luma[uint8](data: [uint8(i * 4)])
+  let genc = encodeJpeg(DynamicImage(kind: dkLuma8,
+    luma8: GrayImage(width: 8, height: 8, pixels: gpx)), 90)
+  check genc.ok
+  let (gOk, gS, gW, gH) = intoSum(genc.value, 1)
+  check gOk
+  let gC = convSum(genc.value, 1)
+  check (gS, gW, gH) == (gC.s, gC.w, gC.h)
+  var cpx = newSeq[Rgb[uint8]](256)
+  for y in 0..<16:
+    for x in 0..<16:
+      cpx[y*16+x] = Rgb[uint8](data: [uint8(x*16), uint8(y*16), 128'u8])
+  let cenc = encodeJpeg(DynamicImage(kind: dkRgb8,
+    rgb8: RgbImage(width: 16, height: 16, pixels: cpx)), 85)
+  check cenc.ok
+  for d in [1, 2, 4, 8]:
+    let (ok, s, w, h) = intoSum(cenc.value, d)
+    check ok
+    let c = convSum(cenc.value, d)
+    check (s, w, h) == (c.s, c.w, c.h)
+  # vendored fixtures: baseline, progressive, restart (both kinds)
+  for name in ["jpg/iptc.jpg", "jpg/progressive/test.jpg",
+      "jpg/progressive/cat.jpg", "jpg/progressive/3.jpg",
+      "jpg/restart.jpg", "jpg/progressive/restart.jpg"]:
+    let raw = readRaw(fixturesDir / name)
+    for d in [1, 2]:
+      let (ok, s, w, h) = intoSum(raw, d)
+      check ok
+      let c = convSum(raw, d)
+      check (s, w, h) == (c.s, c.w, c.h)
+  # short buffer fails cleanly, destination untouched (sentinel)
+  let raw = readRaw(fixturesDir / "jpg" / "progressive" / "pad-trim.jpg")
+  var small = newSeq[Rgba[uint8]](10)
+  for i in 0..<10:
+    small[i] = Rgba[uint8](data: [1'u8, 2, 3, 4])
+  var scratch = initJpegScratch()
+  check decodeJpegRgbaInto(raw, scratch,
+    cast[ptr UncheckedArray[Rgba[uint8]]](addr small[0]), 10, 1).ok == false
+  for i in 0..<10:
+    check small[i].data == [1'u8, 2, 3, 4]
+  check decodeJpegRgbaInto(raw, scratch, nil, 1000000, 1).ok == false
+  check decodeJpegRgbaInto(raw[0 ..< raw.len div 2], scratch,
+    cast[ptr UncheckedArray[Rgba[uint8]]](addr small[0]), 10, 1).ok == false
+  check decodeJpegRgbaInto(@[0xFF'u8, 0xD8], scratch,
+    cast[ptr UncheckedArray[Rgba[uint8]]](addr small[0]), 10, 1).ok == false
+
 test "jpeg scratch reuse is bit-identical":
   # Phase 2 S1: a long-lived JpegScratch must decode exactly what a
   # fresh buffer decodes, while retaining capacity across calls.

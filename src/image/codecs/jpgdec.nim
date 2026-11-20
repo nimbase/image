@@ -398,7 +398,9 @@ proc shrinkAfterSpike*(s: var JpegScratch, steady: int) {.inline.} =
   s.clean.shrinkAfterSpike(steady)
 
 proc decodeJpegImpl(data: openArray[uint8], denom: int,
-    scratch: var JpegScratch): ImageResult[DynamicImage] =
+    scratch: var JpegScratch,
+    rgbaDst: ptr UncheckedArray[Rgba[uint8]] = nil,
+    rgbaCap: int = 0): ImageResult[DynamicImage] =
   ## Shared decode body. `scratch` is the caller-owned transient store:
   ## `clean` (largest scan wins, capacity retained across scans and,
   ## when it lives in a `JpegScratch`, across decodes) plus the three
@@ -406,6 +408,14 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
   ## buffers: every scan rebuilds `clean` from `clear()`, and every
   ## gather row fully overwrites its target before the SIMD convert
   ## reads it.
+  ##
+  ## Into mode (`rgbaDst != nil`): gray and 3-component scans convert
+  ## straight into the caller buffer — no Rgb temp, no conversion alloc —
+  ## and return a dims-only `dkRgba8` image (pixels live in the caller
+  ## buffer, which must hold `ceil(w/denom)*ceil(h/denom)` pixels; short
+  ## buffers fail cleanly before any write). 4-component scans return
+  ## Unsupported (fall back to the conversion path). Only the Into
+  ## wrapper below passes a destination; existing callers are untouched.
   if denom notin [1, 2, 4, 8]:
     return err[DynamicImage](paramError(pkGeneric, "jpeg: denom 1/2/4/8"))
   if data.len < 2 or data[0] != 0xFF or data[1] != 0xD8:
@@ -973,6 +983,26 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
     let tProfAsm0 = cpuTime()
     echo "decodeProfile afterIdct peak=", peakMb(), "MB"
   if comps.len == 1:
+    if rgbaDst != nil:
+      if outW * outH > rgbaCap:
+        return err[DynamicImage](paramError(pkDimensionMismatch,
+          "jpeg: destination too small"))
+      let cols = mcuCountX * comps[0].h
+      # Unchecked: `bx`/`by` are quotient math inside the block grid,
+      # `rgbaDst` holds outW*outH (checked above).
+      {.push checks: off.}
+      for y in 0..<outH:
+        for x in 0..<outW:
+          let bx = x div blk; let by = y div blk
+          let v = comps[0].blocks[by*cols+bx][(y mod blk)*blk + (x mod blk)]
+          rgbaDst[y*outW+x] = Rgba[uint8](data: [v, v, v, 255'u8])
+      {.pop.}
+      when defined(decodeProfile):
+        tProfAsm += cpuTime() - tProfAsm0
+        echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,
+          "s asm=", tProfAsm, "s"
+      return ok(DynamicImage(kind: dkRgba8, rgba8:
+        RgbaImage(width: uint32(outW), height: uint32(outH), pixels: @[])))
     var px = newSeq[Luma[uint8]](outW * outH)
     let cols = mcuCountX * comps[0].h
     # Unchecked: `bx`/`by` are quotient math inside the block grid.
@@ -989,8 +1019,13 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
     return ok(DynamicImage(kind: dkLuma8, luma8:
       GrayImage(width: uint32(outW), height: uint32(outH), pixels: move(px))))
   elif comps.len == 3 or comps.len == 4:
+    if rgbaDst != nil and comps.len == 4:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "jpeg: CMYK into RGBA"))
     let isYcck = adobeTransform == 2
-    var px = newSeq[Rgb[uint8]](outW * outH)
+    var px: seq[Rgb[uint8]] =
+      if rgbaDst != nil: @[]
+      else: newSeq[Rgb[uint8]](outW * outH)
     when defined(decodeProfile):
       echo "decodeProfile afterPxAlloc peak=", peakMb(), "MB"
     if comps.len == 3:
@@ -1081,8 +1116,12 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
         when defined(decodeProfile):
           tProfGather += cpuTime() - tProfG0
           let tProfC0 = cpuTime()
-        ycbcrRowSimd(addr yRow[0], addr cbRow[0], addr crRow[0],
-          cast[ptr uint8](addr px[y*outW]), outW)
+        if rgbaDst != nil:
+          ycbcrRowRgbaSimd(addr yRow[0], addr cbRow[0], addr crRow[0],
+            addr rgbaDst[y*outW], outW)
+        else:
+          ycbcrRowSimd(addr yRow[0], addr cbRow[0], addr crRow[0],
+            cast[ptr uint8](addr px[y*outW]), outW)
         when defined(decodeProfile):
           tProfConvert += cpuTime() - tProfC0
       {.pop.}
@@ -1091,6 +1130,9 @@ proc decodeJpegImpl(data: openArray[uint8], denom: int,
         echo "decodeProfile entropy=", tProfEntropy, "s idct=", tProfIdct,
           "s asm=", tProfAsm, "s gather=", tProfGather, "s convert=",
           tProfConvert, "s"
+      if rgbaDst != nil:
+        return ok(DynamicImage(kind: dkRgba8, rgba8:
+          RgbaImage(width: uint32(outW), height: uint32(outH), pixels: @[])))
       return ok(DynamicImage(kind: dkRgb8, rgb8:
         RgbImage(width: uint32(outW), height: uint32(outH), pixels: move(px))))
     for y in 0..<outH:
@@ -1138,3 +1180,32 @@ proc decodeJpeg*(data: openArray[uint8], scratch: var JpegScratch,
   ## decoding many photos in a row; call `shrinkAfterSpike` to release
   ## a past entropy peak.
   decodeJpegImpl(data, denom, scratch)
+
+proc decodeJpegRgbaInto*(data: openArray[uint8], scratch: var JpegScratch,
+    dst: ptr UncheckedArray[Rgba[uint8]], capPx: int,
+    denom = 1): ImageResult[tuple[w, h: int]] =
+  ## Decode baseline/progressive JPEG straight into a caller-owned RGBA
+  ## buffer: no Rgb temp, no conversion alloc. Bit-identical to
+  ## `decodeJpeg(data, scratch, denom)` + `toRgba8` for gray and
+  ## 3-component input; 4-component (CMYK/YCCK) returns Unsupported
+  ## (fall back to the conversion path). `capPx` must cover
+  ## `ceil(w/denom)*ceil(h/denom)` pixels; a short (or nil) destination
+  ## fails cleanly with `dst` untouched.
+  if denom notin [1, 2, 4, 8]:
+    return err[tuple[w, h: int]](paramError(pkGeneric,
+      "jpeg: denom 1/2/4/8"))
+  if dst == nil or capPx <= 0:
+    return err[tuple[w, h: int]](paramError(pkGeneric,
+      "jpeg: no destination"))
+  let dd = jpegDimensions(data)
+  if not dd.ok:
+    return err[tuple[w, h: int]](dd.err)
+  let ow = (int(dd.value.w) + denom - 1) div denom
+  let oh = (int(dd.value.h) + denom - 1) div denom
+  if ow * oh > capPx:
+    return err[tuple[w, h: int]](paramError(pkDimensionMismatch,
+      "jpeg: destination too small"))
+  let r = decodeJpegImpl(data, denom, scratch, dst, capPx)
+  if not r.ok:
+    return err[tuple[w, h: int]](r.err)
+  ok((w: ow, h: oh))

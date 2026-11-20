@@ -56,6 +56,42 @@ when defined(amd64):
       for k in 0..3: Rgb[3*i+2+3*k] = uint8(clamp(int(o[k]), 0, 255))
       i += 4
 
+  proc ycbcrRowRgbaAvx*(yP, cbP, crP, rgbaP: ptr uint8, n4: int) =
+    ## YCbCr to interleaved RGBA over `n4` pixels (`n4` a multiple of 4),
+    ## alpha 255. Same op order/grouping as `ycbcrRowAvx`: bit-identical
+    ## RGB lanes.
+    let Y = cast[ptr UncheckedArray[uint8]](yP)
+    let Cb = cast[ptr UncheckedArray[uint8]](cbP)
+    let Cr = cast[ptr UncheckedArray[uint8]](crP)
+    let Rgba = cast[ptr UncheckedArray[uint8]](rgbaP)
+    let c128 = mm256_set1_pd(128.0)
+    let k1402 = mm256_set1_pd(1.402)
+    let k0344 = mm256_set1_pd(0.344136)
+    let k0714 = mm256_set1_pd(0.714136)
+    let k1772 = mm256_set1_pd(1.772)
+    let half = mm256_set1_pd(0.5)
+    var o: array[4, int32]
+    var i = 0
+    while i < n4:
+      let yv = mm256_set_pd(float64(Y[i+3]), float64(Y[i+2]),
+        float64(Y[i+1]), float64(Y[i]))
+      let cbv = mm256_sub_pd(mm256_set_pd(float64(Cb[i+3]), float64(Cb[i+2]),
+        float64(Cb[i+1]), float64(Cb[i])), c128)
+      let crv = mm256_sub_pd(mm256_set_pd(float64(Cr[i+3]), float64(Cr[i+2]),
+        float64(Cr[i+1]), float64(Cr[i])), c128)
+      let rv = mm256_add_pd(mm256_add_pd(yv, mm256_mul_pd(k1402, crv)), half)
+      let gv = mm256_add_pd(mm256_sub_pd(mm256_sub_pd(yv,
+        mm256_mul_pd(k0344, cbv)), mm256_mul_pd(k0714, crv)), half)
+      let bv = mm256_add_pd(mm256_add_pd(yv, mm256_mul_pd(k1772, cbv)), half)
+      mm_storeu_si128(addr o[0], mm256_cvttpd_epi32(rv))
+      for k in 0..3: Rgba[4*i+4*k] = uint8(clamp(int(o[k]), 0, 255))
+      mm_storeu_si128(addr o[0], mm256_cvttpd_epi32(gv))
+      for k in 0..3: Rgba[4*i+1+4*k] = uint8(clamp(int(o[k]), 0, 255))
+      mm_storeu_si128(addr o[0], mm256_cvttpd_epi32(bv))
+      for k in 0..3: Rgba[4*i+2+4*k] = uint8(clamp(int(o[k]), 0, 255))
+      for k in 0..3: Rgba[4*i+3+4*k] = 255'u8
+      i += 4
+
   proc fdctPass1Avx*(pxP, midP, cosP, cfacP: ptr float64) =
     ## First FDCT pass: `mid[v][x] += px[y][x] * CosT[v][y]`, then scale rows.
     for v in 0..7:
