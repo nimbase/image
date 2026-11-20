@@ -328,7 +328,31 @@ proc buildFromSamples(colorType, bitDepth: uint8, w, h: int,
       return ok(DynamicImage(kind: dkRgba8, rgba8:
         RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px))))
 
-proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
+type PngScratch* = object
+  ## Reusable cross-decode scratch for PNG decoding. Owns the filter
+  ## row buffers (non-interlaced: two rows) and the Adam7 pass buffers
+  ## (largest pass) across decodes, so a gallery walk pays the sizing
+  ## once instead of once per photo. Pools are used `.data`-direct with
+  ## exact `setLen` (same escape-safe discipline as the in-call S1
+  ## pools — the non-interlaced `nextRow` closure cannot capture a
+  ## borrow); `pool.len` stays 0, capacity lives in `data`. Not
+  ## thread-safe — one per decoding thread.
+  prev*: PooledBuffer[uint8]
+  cur*: PooledBuffer[uint8]
+  rows*: PooledBuffer[uint8]
+
+proc initPngScratch*(): PngScratch =
+  ## Empty scratch; backings are allocated on first use.
+  result.prev = initPool(uint8, 0)
+  result.cur = initPool(uint8, 0)
+  result.rows = initPool(uint8, 0)
+
+proc decodePngImpl(data: seq[uint8], scratch: var PngScratch): ImageResult[DynamicImage] =
+  ## Shared decode body. Row/pass buffers come from `scratch`
+  ## (exact-sized per decode, capacity retained across decodes).
+  ## Output is identical to fresh buffers: every row is fully
+  ## overwritten per use, `prev` explicitly zeroed where row 0
+  ## filters against zeros.
   if data.len < 8:
     return err[DynamicImage](decodingError("png: too short"))
   for i in 0..7:
@@ -431,8 +455,18 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
     # are requested strictly increasing and consumed immediately.
     if inflatedStr.len < h * (rowBytes + 1):
       return err[DynamicImage](decodingError("png: truncated IDAT"))
-    var prev = newSeq[uint8](rowBytes)
-    var cur = newSeq[uint8](rowBytes)
+    # Scratch-owned rows, exact-sized per decode (capacity retained
+    # across decodes). Bound to locals for the `nextRow` closure, which
+    # may not capture a borrow — plain seqs are fine. `prev` is zeroed
+    # up front so row 0 filters against zeros exactly like a fresh seq.
+    scratch.prev.ensureCap(rowBytes)
+    scratch.prev.data.setLen(rowBytes)
+    if rowBytes > 0:
+      zeroMem(addr scratch.prev.data[0], rowBytes)
+    scratch.cur.ensureCap(rowBytes)
+    scratch.cur.data.setLen(rowBytes)
+    var prev = scratch.prev.data
+    var cur = scratch.cur.data
     var p2 = 0
     var filterErr = false
     proc nextRow(y: int): seq[uint8] =
@@ -452,9 +486,10 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
     # Adam7
     var full = newSeq[uint8](h * w * channels * sampBytes)
     # Pass scratch hoisted before the loop and sized once to the largest
-    # pass: prev/cur hold one filter row, rowsPool the largest pass's
+    # pass: prev/cur hold one filter row, rows the largest pass's
     # de-filtered rows. Backing grows once, then stays flat across all 7
-    # passes. Pools are used via `.data` directly (no `withBorrows`): the
+    # passes — and, when it lives in a `PngScratch`, across decodes.
+    # Pools are used via `.data` directly (no `withBorrows`): the
     # row loop is pixel-hot and a nested borrow scope measurably perturbs
     # its codegen (same-binary A/B: ~24 vs ~20.6 ms on 512x512); the
     # direct pattern is escape-safe by construction — every range is
@@ -470,30 +505,30 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
       let pb = (pw * channels * int(bitDepth) + 7) div 8
       maxPassBytes = max(maxPassBytes, pb)
       maxRowsBytes = max(maxRowsBytes, ph * pb)
-    var prevPool = initPool(uint8, maxPassBytes)
-    var curPool = initPool(uint8, maxPassBytes)
-    var rowsPool = initPool(uint8, maxRowsBytes)
+    scratch.prev.ensureCap(maxPassBytes)
+    scratch.cur.ensureCap(maxPassBytes)
+    scratch.rows.ensureCap(maxRowsBytes)
     for pass in 0..6:
       let pw = (w - Adam7X[pass] + Adam7DX[pass] - 1) div Adam7DX[pass]
       let ph = (h - Adam7Y[pass] + Adam7DY[pass] - 1) div Adam7DY[pass]
       if pw == 0 or ph == 0: continue
       let passBytes = (pw * channels * int(bitDepth) + 7) div 8
-      prevPool.data.setLen(passBytes)
-      curPool.data.setLen(passBytes)
-      rowsPool.data.setLen(ph * passBytes)
+      scratch.prev.data.setLen(passBytes)
+      scratch.cur.data.setLen(passBytes)
+      scratch.rows.data.setLen(ph * passBytes)
       if passBytes > 0:
-        zeroMem(addr prevPool.data[0], passBytes)
+        zeroMem(addr scratch.prev.data[0], passBytes)
       for y in 0..<ph:
         if p + 1 + passBytes > inflated.len:
           return err[DynamicImage](decodingError("png: truncated Adam7"))
         let f = inflated[p]; inc(p)
-        copyMem(addr curPool.data[0], unsafeAddr inflated[p], passBytes)
+        copyMem(addr scratch.cur.data[0], unsafeAddr inflated[p], passBytes)
         p += passBytes
-        if not simdUnfilterRow(f, curPool.data, prevPool.data, fbpp):
+        if not simdUnfilterRow(f, scratch.cur.data, scratch.prev.data, fbpp):
           return err[DynamicImage](decodingError("png: bad filter"))
-        copyMem(addr rowsPool.data[y * passBytes], unsafeAddr curPool.data[0],
+        copyMem(addr scratch.rows.data[y * passBytes], unsafeAddr scratch.cur.data[0],
           passBytes)
-        copyMem(addr prevPool.data[0], unsafeAddr curPool.data[0], passBytes)
+        copyMem(addr scratch.prev.data[0], unsafeAddr scratch.cur.data[0], passBytes)
       if bitDepth >= 8:
         let bpc = channels * sampBytes
         for y in 0..<ph:
@@ -501,7 +536,7 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
             let dx = Adam7X[pass] + x * Adam7DX[pass]
             let dy = Adam7Y[pass] + y * Adam7DY[pass]
             for k in 0..<bpc:
-              full[(dy*w+dx)*bpc+k] = rowsPool.data[y*passBytes + x*bpc + k]
+              full[(dy*w+dx)*bpc+k] = scratch.rows.data[y*passBytes + x*bpc + k]
       else:
         let maxv = (1 shl int(bitDepth)) - 1
         for y in 0..<ph:
@@ -511,7 +546,7 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
             for c in 0..<channels:
               var v = 0
               for k in 0..<int(bitDepth):
-                v = (v shl 1) or bitVal(rowsPool.data.toOpenArray(
+                v = (v shl 1) or bitVal(scratch.rows.data.toOpenArray(
                   y*passBytes, y*passBytes+passBytes-1),
                   (x*channels+c)*int(bitDepth)+k)
               full[(dy*w+dx)*channels+c] = uint8((v * 255 + maxv div 2) div maxv)
@@ -530,6 +565,18 @@ proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
         uint16(full[(y*w+x)*channels+c])
       return buildFromSamples(colorType, bitDepth, w, h, get, plte,
         trnsAlpha, trnsGray, trnsRgb)
+
+proc decodePng*(data: seq[uint8]): ImageResult[DynamicImage] =
+  ## PNG decode (non-interlaced streamed, Adam7 multi-pass).
+  var tmp = initPngScratch()
+  decodePngImpl(data, tmp)
+
+proc decodePng*(data: seq[uint8], scratch: var PngScratch): ImageResult[DynamicImage] =
+  ## PNG decode reusing `scratch` across decodes. Bit-identical to
+  ## `decodePng(data)`; only the filter row/pass buffers are retained
+  ## between decodes (not pixels). Pass a long-lived scratch when
+  ## decoding many images in a row.
+  decodePngImpl(data, scratch)
 
 proc encodeChunk(typ: array[4, uint8], body: openArray[uint8]): seq[uint8] =
   result = newSeq[uint8](8 + body.len + 4)

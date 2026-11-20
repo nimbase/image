@@ -37,11 +37,13 @@ var
     ## walk allocates the largest scan once instead of once per photo.
     ## Bit-identical output; the gallery is fixed per process launch,
     ## so no shrink discipline is needed here.
+  pngScratch = initPngScratch()
+    ## Cross-navigation PNG row buffers (Phase 2 S3), same terms.
 
 proc decodeDyn(fmt: ImageFormat, bytes: seq[uint8]): ImageResult[DynamicImage] =
   ## Dispatch for formats that decode straight to DynamicImage.
   case fmt
-  of fmtPng: decodePng(bytes)
+  of fmtPng: decodePng(bytes, pngScratch)
   of fmtJpeg: decodeJpeg(bytes)
   of fmtWebP: decodeWebp(bytes)
   of fmtBmp: decodeBmp(bytes)

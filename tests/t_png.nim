@@ -128,6 +128,72 @@ test "png adam7 multi-pass decodes bit-exact":
     for x in 0..<W:
       check dec.value.rgb8.pixels[y * W + x].data == pxAt(x, y)
 
+test "png scratch reuse is bit-identical":
+  # Phase 2 S3: one PngScratch across decodes, both paths sharing the
+  # pools. Interleaved Up-filtered rows catch stale-prev residue;
+  # mixing paths exercises ensureCap growth/shrink on shared pools.
+  proc pxAt(x, y: int): array[3, uint8] =
+    [uint8((x * 7 + y * 13) and 0xFF), uint8((x * 3 + y * 11) and 0xFF),
+      uint8((x + y * 5) and 0xFF)]
+  proc adam7Blob(W, H: int): seq[uint8] =
+    var raw: seq[uint8] = @[]
+    for pass in 0..6:
+      let pw = (W - Adam7X[pass] + Adam7DX[pass] - 1) div Adam7DX[pass]
+      let ph = (H - Adam7Y[pass] + Adam7DY[pass] - 1) div Adam7DY[pass]
+      if pw == 0 or ph == 0: continue
+      var prevRow = newSeq[uint8](pw * 3)
+      for y in 0..<ph:
+        raw.add(2) # Up
+        var cur = newSeq[uint8](pw * 3)
+        for x in 0..<pw:
+          let p = pxAt(Adam7X[pass] + x * Adam7DX[pass],
+            Adam7Y[pass] + y * Adam7DY[pass])
+          cur[3 * x] = p[0]; cur[3 * x + 1] = p[1]; cur[3 * x + 2] = p[2]
+        for i in 0..<cur.len: raw.add(cur[i] - prevRow[i])
+        prevRow = move(cur)
+    let comp = deflateZlib(raw).value
+    let ihdr = @[0'u8, 0, 0, uint8(W), 0, 0, 0, uint8(H), 8, 2, 0, 0, 1]
+    proc chunk(t: array[4, uint8], body: seq[uint8]): seq[uint8] =
+      var r = newSeq[uint8](8 + body.len + 4)
+      let n = uint32(body.len)
+      r[0] = uint8((n shr 24) and 0xFF); r[1] = uint8((n shr 16) and 0xFF)
+      r[2] = uint8((n shr 8) and 0xFF); r[3] = uint8(n and 0xFF)
+      for i in 0..3: r[4 + i] = t[i]
+      for i, b in body: r[8 + i] = b
+      let c = chunkCrc(t, body)
+      r[8 + body.len] = uint8((c shr 24) and 0xFF)
+      r[8 + body.len + 1] = uint8((c shr 16) and 0xFF)
+      r[8 + body.len + 2] = uint8((c shr 8) and 0xFF)
+      r[8 + body.len + 3] = uint8(c and 0xFF)
+      r
+    result = @[137'u8, 80, 78, 71, 13, 10, 26, 10]
+    result.add(chunk([uint8('I'), uint8('H'), uint8('D'), uint8('R')], ihdr))
+    result.add(chunk([uint8('I'), uint8('D'), uint8('A'), uint8('T')], comp))
+    result.add(chunk([uint8('I'), uint8('E'), uint8('N'), uint8('D')], @[]))
+  var npx = newSeq[Rgb[uint8]](129 * 65)
+  for y in 0..<65:
+    for x in 0..<129:
+      npx[y * 129 + x] = Rgb[uint8](data: [uint8((x * 7 + y * 13) and 0xFF),
+        uint8((x * 3 + y * 11) and 0xFF), uint8((x + y * 5) and 0xFF)])
+  let nimg = DynamicImage(kind: dkRgb8,
+    rgb8: RgbImage(width: 129, height: 65, pixels: npx))
+  let nonInter = encodePng(nimg).value
+  let inter = adam7Blob(10, 10)
+  var scratch = initPngScratch()
+  # Fresh baselines.
+  let freshNI = decodePng(nonInter).value.rgb8.pixels
+  let freshI = decodePng(inter).value.rgb8.pixels
+  # Interlaced, then non-interlaced, then interlaced again: identical.
+  check decodePng(inter, scratch).value.rgb8.pixels == freshI
+  let rows1 = scratch.rows.data.len
+  check rows1 > 0 # largest-pass rows retained
+  check decodePng(nonInter, scratch).value.rgb8.pixels == freshNI
+  check decodePng(inter, scratch).value.rgb8.pixels == freshI
+  # Deterministic sizing: same image repeat keeps the same lengths.
+  check scratch.rows.data.len == rows1
+  # Truncation still fails through the scratch overload.
+  check decodePng(inter[0 ..< inter.len div 2], scratch).ok == false
+
 test "png larger odd-dim round trips exact":
   # odd dims exercise row streaming + edge clamping (non-multiple-of-8)
   var px = newSeq[Rgb[uint8]](129 * 65)
