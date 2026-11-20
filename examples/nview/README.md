@@ -34,8 +34,10 @@ Every LDR format the library guesses: PNG, JPEG, GIF (first frame only),
 WebP, BMP, TIFF, TGA, PNM, ICO, QOI, HEIF. AVIF reports its
 `Unsupported` stub message; 16-bit/float sources (HDR, EXR, farbfeld)
 stay on the current picture with a clear error — no tone mapping in v1.
-Large JPEGs decode scaled-down (denom 2/4 by dimension), matching what
-the old viewer did for pixels the screen would downscale anyway.
+Large JPEGs decode at reduced scale only when they exceed
+`MaxDisplayPx` (12 MP, `-d:NviewMaxDisplayPx=`): the smallest denom
+(1/2/4/8) that still covers the cap, so the GPU always downscales
+from real detail. A 32 MP photo lands at denom 2 (8 MP texture).
 
 ## Memory
 

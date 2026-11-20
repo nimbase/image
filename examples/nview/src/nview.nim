@@ -104,6 +104,26 @@ proc blitDynamicInto(dyn: DynamicImage, dst: var RgbaImage): bool =
   else:
     false
 
+const MaxDisplayPx* {.intdefine.} = 12_000_000
+  ## Decode-resolution cap for display: JPEGs are decoded at the
+  ## smallest denom whose output still covers this many pixels, so the
+  ## GPU downscales from real detail. The denom box path is a cheap
+  ## component-space filter (visibly worse than Preview even at 4x
+  ## oversample: maxdiff 119 vs a proper downscale), while full-res
+  ## decode costs ~0.04 s more on a 6.5 MP photo and downscales cleanly
+  ## (maxdiff 10, zero pixels >10 vs fancy at 4x). A 32 MP photo lands
+  ## at denom 2 (8 MP texture). Override with
+  ## `-d:NviewMaxDisplayPx=<n>` to trade texture memory for sharpness.
+
+proc displayDenom*(w, h: uint32): int =
+  ## Smallest JPEG denom (1/2/4/8) whose output fits `MaxDisplayPx`.
+  ## Pure function so the headless harness can pin the policy.
+  result = 1
+  var dw = uint64(w); var dh = uint64(h)
+  while dw * dh > uint64(MaxDisplayPx) and result < 8:
+    result *= 2
+    dw = (dw + 1) div 2; dh = (dh + 1) div 2
+
 proc decodePathInto(path: string, dst: var RgbaImage) =
   ## Decode `path` into `dst`, reusing `dst.pixels` capacity (grow-only
   ## display pool shared across slides). File bytes come from a
@@ -137,15 +157,14 @@ proc decodePathInto(path: string, dst: var RgbaImage) =
   of fmtHdr, fmtOpenExr, fmtFarbfeld:
     raise newException(IOError, path & ": 16-bit/float input not supported in v1")
   of fmtJpeg:
-    # scaled decode for large photos: pick the largest denom that keeps
-    # the image usable on screen (decode-time win for pixels the viewer
-    # would downscale in GL anyway).
+    # Decode at (near-)full resolution: the denom box path is a cheap
+    # component-space filter, visibly worse than Preview — the GPU
+    # downscales from real detail instead. Only photos above
+    # MaxDisplayPx step down (32 MP lands at denom 2, an 8 MP texture).
     var denom = 1
     let dd = jpegDimensions(view())
     if dd.ok:
-      let m = max(dd.value.w, dd.value.h)
-      if m > 2400: denom = 4
-      elif m > 1200: denom = 2
+      denom = displayDenom(dd.value.w, dd.value.h)
     let r = decodeJpeg(view(), jpegScratch, denom)
     if not r.ok:
       raise newException(IOError, path & ": " & r.err.msg)
@@ -160,7 +179,7 @@ proc decodePathInto(path: string, dst: var RgbaImage) =
 
 proc decodeBytes(raw: string, name: string): RgbaImage =
   ## Legacy string-content entry (kept for tests): copies once into an
-  ## owned seq, then runs the same dispatch. Gallery uses decodePath.
+  ## owned seq, then runs the same dispatch. Gallery uses decodePathInto.
   var bytes = newSeq[uint8](raw.len)
   if raw.len > 0:
     copyMem(addr bytes[0], unsafeAddr raw[0], raw.len)
@@ -182,9 +201,7 @@ proc decodeBytes(raw: string, name: string): RgbaImage =
     var denom = 1
     let dd = jpegDimensions(bytes)
     if dd.ok:
-      let m = max(dd.value.w, dd.value.h)
-      if m > 2400: denom = 4
-      elif m > 1200: denom = 2
+      denom = displayDenom(dd.value.w, dd.value.h)
     let r = decodeJpeg(bytes, jpegScratch, denom)
     if not r.ok: raise newException(IOError, name & ": " & r.err.msg)
     result = r.value.toRgba8()
