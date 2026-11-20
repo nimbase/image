@@ -11,6 +11,16 @@
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <mach/mach.h>
+
+static double nviewFootprintMB(void) {
+  task_vm_info_data_t info;
+  mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) !=
+      KERN_SUCCESS)
+    return -1;
+  return (double)info.phys_footprint / 1048576.0;
+}
 
 // --- C ABI owned by nview.nim (gallery model + decoders) ---
 extern int galleryCount(void);
@@ -112,12 +122,16 @@ static const char *kShaders =
   id<MTLDevice> device;
   id<MTLCommandQueue> queue;
   id<MTLRenderPipelineState> pipeline;
-  id<MTLTexture> texture; // retained; replaced per image
+  id<MTLTexture> texture; // retained; grow-only, reused across images
+  id<MTLCommandBuffer> lastCmd; // retained; guards texture reuse hazards
   int imgW;
   int imgH;
+  int texW; // allocated texture dimensions (>= imgW/imgH)
+  int texH;
 }
 - (void)goDelta:(int)d;
 - (void)render;
+- (void)autoAdvance:(NSTimer *)timer;
 @end
 
 @implementation GalleryController
@@ -125,13 +139,17 @@ static const char *kShaders =
 - (instancetype)init {
   if ((self = [super init])) {
     texture = nil;
+    lastCmd = nil;
     imgW = 0;
     imgH = 0;
+    texW = 0;
+    texH = 0;
   }
   return self;
 }
 
 - (void)dealloc {
+  [lastCmd release];
   [texture release];
   [pipeline release];
   [queue release];
@@ -185,20 +203,50 @@ static const char *kShaders =
   int w = 0, h = 0;
   unsigned char *px = galleryCurrentPixels(&w, &h);
   if (!px || w <= 0 || h <= 0) return;
-  MTLTextureDescriptor *desc =
-      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:
-                                    MTLPixelFormatRGBA8Unorm
-                                                         width:w
-                                                        height:h
-                                                     mipmapped:NO];
-  id<MTLTexture> t = [device newTextureWithDescriptor:desc];
-  [t replaceRegion:MTLRegionMake2D(0, 0, w, h)
-       mipmapLevel:0
-         withBytes:px
-       bytesPerRow:w * 4];
-  [texture release];
-  texture = [t retain];
-  [t release];
+  // Grow-only texture: slides of different sizes reuse the same GPU
+  // allocation instead of allocating/releasing one texture per photo.
+  // A new allocation happens only when a photo exceeds the current
+  // capacity, so a gallery settles at its largest slide.
+  // Reusing the texture means overwriting pixels the previous frame may
+  // still be sampling. Wait for that command buffer before writing (it
+  // is normally already done; decode happened first). Fresh allocations
+  // don't need this because the old texture is never overwritten.
+  if (texture && w <= texW && h <= texH && lastCmd) {
+    [lastCmd waitUntilCompleted];
+    [lastCmd release];
+    lastCmd = nil;
+  }
+  if (!texture || w > texW || h > texH) {
+    int nw = w > texW ? w : texW;
+    int nh = h > texH ? h : texH;
+    // Guard against pathological mixes (e.g. 6000x100 then 100x6000):
+    // if max-of-each would waste more than 2x the useful area, take the
+    // exact new dimensions instead.
+    long long grown = (long long)nw * nh;
+    long long need = (long long)w * h;
+    long long oldArea = (long long)texW * texH;
+    long long cap = 2 * (need > oldArea ? need : oldArea);
+    if (grown > cap) {
+      nw = w;
+      nh = h;
+    }
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:
+                                      MTLPixelFormatRGBA8Unorm
+                                                           width:nw
+                                                          height:nh
+                                                       mipmapped:NO];
+    id<MTLTexture> t = [device newTextureWithDescriptor:desc];
+    if (!t) return;
+    [texture release];
+    texture = t; // new* transfers ownership (+1); dealloc releases once.
+    texW = nw;
+    texH = nh;
+  }
+  [texture replaceRegion:MTLRegionMake2D(0, 0, w, h)
+             mipmapLevel:0
+               withBytes:px
+             bytesPerRow:w * 4];
   imgW = w;
   imgH = h;
 }
@@ -213,20 +261,38 @@ static const char *kShaders =
 }
 
 - (void)goDelta:(int)d {
-  int idx = galleryGo(d);
-  if (idx < 0) {
-    NSBeep(); // target failed to decode; Nim logged why. Keep old image.
-    return;
+  // Own pool per navigation: decode, texture upload and render create
+  // Foundation/Metal temporaries; draining at slide boundaries keeps
+  // steady-state memory deterministic regardless of caller (button,
+  // key, or timer).
+  @autoreleasepool {
+    int idx = galleryGo(d);
+    if (idx < 0) {
+      NSBeep(); // target failed to decode; Nim logged why. Keep old image.
+      return;
+    }
+    (void)idx;
+    [self uploadCurrentTexture];
+    // The texture now owns the on-screen image; drop Nim's CPU copy so
+    // steady state is scratch capacities, not one pinned full image.
+    // Safe: nothing reads galleryCurrentPixels until the next loadAt,
+    // which replaces the cache wholesale (resize renders from texture).
+    galleryDropPixels();
+    [self updateTitle];
+    [self render];
+    if (getenv("NVIEW_LOG_MEM")) {
+      NSLog(@"nview-mem idx=%d %dx%d tex=%dx%d footprint=%.2fMB", idx, imgW,
+            imgH, texW, texH, nviewFootprintMB());
+    }
   }
-  (void)idx;
-  [self uploadCurrentTexture];
-  // The texture now owns the on-screen image; drop Nim's CPU copy so
-  // steady state is scratch capacities, not one pinned full image.
-  // Safe: nothing reads galleryCurrentPixels until the next loadAt,
-  // which replaces the cache wholesale (resize renders from texture).
-  galleryDropPixels();
-  [self updateTitle];
-  [self render];
+}
+
+// Test hook: drive the exact button path on a timer so memory can be
+// sampled in-process (no debugger JIT contamination). Off unless
+// NVIEW_AUTO_MS is set.
+- (void)autoAdvance:(NSTimer *)timer {
+  (void)timer;
+  [self goDelta:1];
 }
 
 // ----- rendering -----
@@ -252,16 +318,21 @@ static const char *kShaders =
   float s = fminf(dw / (float)imgW, dh / (float)imgH);
   float fx = (imgW * s) / dw;
   float fy = (imgH * s) / dh;
-  // Row 0 (image top) is texel v=0; clip y is up.
+  // Row 0 (image top) is texel v=0; clip y is up. UVs map the used
+  // texel region (the texture can be larger than the current photo);
+  // half-texel insets keep linear filtering from bleeding into the
+  // unused area. Exact-size textures are still sampled correctly
+  // (texel centers).
+  float u0 = 0.5f / (float)texW;
+  float v0 = 0.5f / (float)texH;
+  float u1 = ((float)imgW - 0.5f) / (float)texW;
+  float v1 = ((float)imgH - 0.5f) / (float)texH;
   const float verts[4][4] = {
-      {-fx, -fy, 0.0f, 1.0f},
-      {fx, -fy, 1.0f, 1.0f},
-      {-fx, fy, 0.0f, 0.0f},
-      {fx, fy, 1.0f, 0.0f},
+      {-fx, -fy, u0, v1},
+      {fx, -fy, u1, v1},
+      {-fx, fy, u0, v0},
+      {fx, fy, u1, v0},
   };
-  id<MTLBuffer> vb = [device newBufferWithBytes:verts
-                                         length:sizeof(verts)
-                                        options:MTLResourceStorageModeShared];
   MTLRenderPassDescriptor *rp =
       [MTLRenderPassDescriptor renderPassDescriptor];
   rp.colorAttachments[0].texture = drawable.texture;
@@ -271,7 +342,7 @@ static const char *kShaders =
   id<MTLCommandBuffer> cb = [queue commandBuffer];
   id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
   [enc setRenderPipelineState:pipeline];
-  [enc setVertexBuffer:vb offset:0 atIndex:0];
+  [enc setVertexBytes:verts length:sizeof(verts) atIndex:0];
   [enc setFragmentTexture:texture atIndex:0];
   [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip
           vertexStart:0
@@ -279,7 +350,8 @@ static const char *kShaders =
   [enc endEncoding];
   [cb presentDrawable:drawable];
   [cb commit];
-  [vb release];
+  [lastCmd release];
+  lastCmd = [cb retain];
 }
 
 // ----- toolbar -----
@@ -435,6 +507,14 @@ static const char *kShaders =
   galleryDropPixels(); // steady state from here: see goDelta:
   [self updateTitle];
   [self render];
+  const char *autoMs = getenv("NVIEW_AUTO_MS");
+  if (autoMs && atoi(autoMs) > 0) {
+    [NSTimer scheduledTimerWithTimeInterval:(double)atoi(autoMs) / 1000.0
+                                     target:self
+                                   selector:@selector(autoAdvance:)
+                                   userInfo:nil
+                                    repeats:YES];
+  }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app {

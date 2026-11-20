@@ -36,3 +36,22 @@ WebP, BMP, TIFF, TGA, PNM, ICO, QOI, HEIF. AVIF reports its
 stay on the current picture with a clear error — no tone mapping in v1.
 Large JPEGs decode scaled-down (denom 2/4 by dimension), matching what
 the old viewer did for pixels the screen would downscale anyway.
+
+## Memory
+
+After each GPU upload the decoded RGBA pixels are dropped, and the Metal
+texture is grow-only: slides of different sizes reuse one allocation, so
+a gallery settles at its largest picture instead of allocating and
+releasing a texture per navigation. The renderer also uploads its 64-byte
+quad through `setVertexBytes`, so no per-frame buffer is created.
+
+To check steady state without a debugger (which perturbs the target), two
+environment hooks drive the real UI path and log the process footprint:
+
+```sh
+NVIEW_AUTO_MS=1000 NVIEW_LOG_MEM=1 ./bin/nview ~/Pictures
+```
+
+`NVIEW_AUTO_MS` advances on that interval, and `NVIEW_LOG_MEM` prints
+`phys_footprint` after each slide. A wrapping gallery should climb only
+while it discovers larger images or larger decode scratch, then stay flat.
