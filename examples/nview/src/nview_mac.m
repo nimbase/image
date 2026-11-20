@@ -327,12 +327,25 @@ static const char *kShaders =
 
 - (NSArray<NSString *> *)toolbarAllowedItemIdentifiers:(NSToolbar *)t {
   (void)t;
-  return @[ kPrevItem, kNameItem, kNextItem ];
+  return @[
+    kPrevItem, kNameItem, kNextItem,
+    NSToolbarFlexibleSpaceItemIdentifier,
+    NSToolbarSpaceItemIdentifier,
+  ];
 }
 
 - (NSArray<NSString *> *)toolbarDefaultItemIdentifiers:(NSToolbar *)t {
   (void)t;
-  return @[ kPrevItem, kNameItem, kNextItem ];
+  // Prev pinned left, name truly centered, Next pinned right. The
+  // flexible spaces absorb the width difference between the two buttons
+  // so the picture name stays centered instead of drifting.
+  return @[
+    kPrevItem,
+    NSToolbarFlexibleSpaceItemIdentifier,
+    kNameItem,
+    NSToolbarFlexibleSpaceItemIdentifier,
+    kNextItem,
+  ];
 }
 
 - (void)goPrev:(id)sender {
@@ -376,7 +389,10 @@ static const char *kShaders =
   [window center];
   NSToolbar *tb = [[[NSToolbar alloc] initWithIdentifier:@"nview"] autorelease];
   tb.delegate = self;
-  tb.displayMode = NSToolbarDisplayModeIconAndLabel;
+  // IconOnly: the Prev/Next buttons and the name field are custom views
+  // (their own titles/text stay visible); the small toolbar labels below
+  // ("Previous"/"Picture"/"Next") would only add noise, so hide them.
+  tb.displayMode = NSToolbarDisplayModeIconOnly;
   window.toolbar = tb;
   view = [[[MetalImageView alloc] initWithFrame:frame
                                      controller:self] autorelease];
