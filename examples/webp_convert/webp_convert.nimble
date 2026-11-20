@@ -10,5 +10,5 @@ bin           = @["webp_convert"]
 
 # Dependencies
 
-requires "nim >= 2.2.0"
+requires "nim >= 2.4.0"
 requires "image >= 0.1.0"

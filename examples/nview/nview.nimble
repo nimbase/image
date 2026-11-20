@@ -10,6 +10,6 @@ bin           = @["nview"]
 
 # Dependencies
 
-requires "nim >= 2.2.0"
+requires "nim >= 2.4.0"
 requires "archive >= 0.1.0"
 requires "image >= 0.1.0"

@@ -4,5 +4,13 @@ jobs:
   test:
     uses: nimbase/setup-nim-action/.github/workflows/test.yml@main
     with:
-      nim-version: '2.2.12'
+      # Nim 2.4: buffalo requires >= 2.4.0 (nimble hard-fails the version
+      # solve otherwise), and local dev + clue.lock are on 2.4.0.
+      nim-version: '2.4.0'
       os: '[{"os":"ubuntu-latest"},{"os":"ubuntu-24.04-arm"},{"os":"macos-15"},{"os":"macos-15-intel"}]'
+      # Registry buffalo (0.1.0) predates the withBorrow/withBorrows/blit
+      # DSL the decoders need, so overlay the workspace buffalo at the
+      # pinned commit (bump together with packages/buffalo) before
+      # `nimble install` resolves `buffalo >= 0.1.0`, which then sees the
+      # requirement satisfied and skips the registry copy.
+      pre-install-command: "git clone https://github.com/nimbase/buffalo.git ../buffalo && git -C ../buffalo checkout 3410498dc1200023acb8a9bd6fc13cc652a73f33 && cd ../buffalo && nimble install -Y"
