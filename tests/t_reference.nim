@@ -3,8 +3,8 @@
 ## design). Pixel-exact assertions live in t_jpeg/t_exr/t_webp; this is
 ## the gate that no fixture regresses to an error or crash.
 ## Expected failures: none for EXR (PIZ/RLE/ZIP/ZIPS/PXR24/B44/B44A all
-## supported; tiled/multipart have no fixtures), VP8X+ALPH
-## (`lossy_alpha.webp`, alpha compositing follow-up), and HEIF video/J2K
+## supported; tiled/multipart have no fixtures), none for WebP (VP8X+ALPH
+## lossy alpha decodes since the alpha follow-up), and HEIF video/J2K
 ## (`hevc-*`, `j2k-*` — bitstream decoders out of scope for pure-Nim v1).
 import unittest
 import std/os
@@ -26,7 +26,7 @@ test "reference fixtures decode":
   for p in walkDirRec(fixturesDir):
     if dirExists(p): continue
     let ext = splitFile(p).ext.toLowerAscii()
-    let expectFail = p.contains("lossy_alpha") or p.contains("hevc-") or
+    let expectFail = p.contains("hevc-") or
       p.contains("j2k-")
     case ext
     of ".jpg", ".jpeg":

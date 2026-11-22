@@ -1,7 +1,8 @@
 ## WebP codec — references/image/src/codecs/webp/ + image-webp@0.2.0
 ## VP8L lossless decode (meta-Huffman, LZ77, color cache, 4 transforms) +
 ## literal-only VP8L encoder. VP8 lossy keyframe decode (vp8.nim).
-## Animation / ALPH-with-VP8 return Unsupported.
+## VP8 lossy keyframe decode (vp8.nim), incl. VP8X + ALPH transparency.
+## Animation returns Unsupported.
 ## Bitstream: LSB-first. Pixels in buffer order [R,G,B,A].
 import std/math
 import std/algorithm
@@ -559,27 +560,11 @@ type Transform = object
   data: seq[uint8]
   tableSize: int
 
-proc decodeVp8l*(payload: openArray[uint8], wantW, wantH: int): ImageResult[RgbaImage] =
-  ## payload starts at the 0x2f signature byte. Borrows the caller bytes
-  ## (pointer + len, no copy); the reader never outlives this call.
-  let basePtr =
-    if payload.len == 0: nil
-    else: cast[ptr UncheckedArray[uint8]](unsafeAddr payload[0])
-  var r = LsbReader(base: basePtr, len: payload.len, pos: 0, buf: 0, nbits: 0)
-  let (okS, sig) = r.readBits(8)
-  if not okS or sig != 0x2F:
-    return err[RgbaImage](decodingError("webp: bad VP8L signature"))
-  let (okW, ww) = r.readBits(14)
-  let (okH, hh) = r.readBits(14)
-  let (okA, alphaUsed) = r.readBits(1)
-  let (okV, ver) = r.readBits(3)
-  if not (okW and okH and okA and okV):
-    return err[RgbaImage](decodingError("webp: truncated VP8L header"))
-  let w = int(ww) + 1; let h = int(hh) + 1
-  if ver != 0:
-    return err[RgbaImage](decodingError("webp: bad VP8L version"))
-  if (wantW > 0 and w != wantW) or (wantH > 0 and h != wantH):
-    return err[RgbaImage](decodingError("webp: VP8L size mismatch"))
+proc decodeVp8lBody(r: var LsbReader, w, h: int): ImageResult[RgbaImage] =
+  ## VP8L body after the 5-byte signature/dimension header (transform bit
+  ## onward): transforms, coded image data, inverse transforms. Shared by
+  ## `decodeVp8l` (header path below) and the ALPH C==1 path (headerless
+  ## stream with explicit canvas dimensions from VP8X/VP8).
   # transforms
   var transforms: seq[Transform] = @[]
   var order: seq[int] = @[]
@@ -711,6 +696,112 @@ proc decodeVp8l*(payload: openArray[uint8], wantW, wantH: int): ImageResult[Rgba
     px[i] = Rgba[uint8](data: [img[4*i], img[4*i+1], img[4*i+2], img[4*i+3]])
   ok(RgbaImage(width: uint32(w), height: uint32(h), pixels: move(px)))
 
+proc decodeVp8l*(payload: openArray[uint8], wantW, wantH: int): ImageResult[RgbaImage] =
+  ## payload starts at the 0x2f signature byte. Borrows the caller bytes
+  ## (pointer + len, no copy); the reader never outlives this call.
+  let basePtr =
+    if payload.len == 0: nil
+    else: cast[ptr UncheckedArray[uint8]](unsafeAddr payload[0])
+  var r = LsbReader(base: basePtr, len: payload.len, pos: 0, buf: 0, nbits: 0)
+  let (okS, sig) = r.readBits(8)
+  if not okS or sig != 0x2F:
+    return err[RgbaImage](decodingError("webp: bad VP8L signature"))
+  let (okW, ww) = r.readBits(14)
+  let (okH, hh) = r.readBits(14)
+  let (okA, alphaUsed) = r.readBits(1)
+  let (okV, ver) = r.readBits(3)
+  if not (okW and okH and okA and okV):
+    return err[RgbaImage](decodingError("webp: truncated VP8L header"))
+  let w = int(ww) + 1; let h = int(hh) + 1
+  if ver != 0:
+    return err[RgbaImage](decodingError("webp: bad VP8L version"))
+  if (wantW > 0 and w != wantW) or (wantH > 0 and h != wantH):
+    return err[RgbaImage](decodingError("webp: VP8L size mismatch"))
+  decodeVp8lBody(r, w, h)
+
+proc decodeVp8lHeaderless*(payload: openArray[uint8], w, h: int): ImageResult[RgbaImage] =
+  ## Headerless VP8L stream: no signature/dimension header, the payload
+  ## starts at the transform bit. Used by the ALPH C==1 path, where
+  ## dimensions come from the VP8X canvas / VP8 frame instead of the
+  ## stream. Borrows the caller bytes like `decodeVp8l`.
+  if w <= 0 or h <= 0 or w > 16384 or h > 16384:
+    return err[RgbaImage](decodingError("webp: bad ALPH dimensions"))
+  let basePtr =
+    if payload.len == 0: nil
+    else: cast[ptr UncheckedArray[uint8]](unsafeAddr payload[0])
+  var r = LsbReader(base: basePtr, len: payload.len, pos: 0, buf: 0, nbits: 0)
+  decodeVp8lBody(r, w, h)
+
+func unfilterAlpha*(f: int, data: var seq[uint8], w, h: int) =
+  ## In-place inverse of the ALPH filter (container spec 2.7.1.2). `data`
+  ## holds the stored values X in scan order; each output pixel is
+  ## `(predictor + X) mod 256` over already-reconstructed neighbors
+  ## (scan order keeps left/above/above-left final before use).
+  case f
+  of 0: discard # none
+  of 1: # horizontal: left, else above for x == 0, else 0
+    for y in 0..<h:
+      for x in 0..<w:
+        let i = y * w + x
+        let pred =
+          if x > 0: int(data[i - 1])
+          elif y > 0: int(data[i - w])
+          else: 0
+        data[i] = uint8((pred + int(data[i])) and 0xFF)
+  of 2: # vertical: above, else left for y == 0, else 0
+    for y in 0..<h:
+      for x in 0..<w:
+        let i = y * w + x
+        let pred =
+          if y > 0: int(data[i - w])
+          elif x > 0: int(data[i - 1])
+          else: 0
+        data[i] = uint8((pred + int(data[i])) and 0xFF)
+  else: # gradient: clip(A + B - C), edges fall back to one neighbor
+    for y in 0..<h:
+      for x in 0..<w:
+        let i = y * w + x
+        let pred =
+          if x == 0 and y == 0: 0
+          elif y == 0: int(data[i - 1])
+          elif x == 0: int(data[i - w])
+          else:
+            let a = int(data[i - 1]); let b = int(data[i - w])
+            let c = int(data[i - w - 1])
+            min(max(a + b - c, 0), 255)
+        data[i] = uint8((pred + int(data[i])) and 0xFF)
+
+proc decodeAlph*(payload: openArray[uint8], w, h: int): ImageResult[seq[uint8]] =
+  ## ALPH chunk payload (after the 8-byte chunk header): 1 preamble byte +
+  ## bitstream. Returns w*h alpha bytes in scan order.
+  ## Preamble: bits 0-1 compression (0 raw, 1 VP8L), 2-3 filter, 4-5
+  ## preprocessing (informative, ignored), 6-7 reserved (ignored).
+  if w <= 0 or h <= 0 or w > 16384 or h > 16384:
+    return err[seq[uint8]](decodingError("webp: bad ALPH dimensions"))
+  if payload.len < 1:
+    return err[seq[uint8]](decodingError("webp: truncated ALPH"))
+  let pre = payload[0]
+  let comp = int(pre and 3)
+  let filter = int((pre shr 2) and 3)
+  let n = w * h
+  var alpha = newSeq[uint8](n)
+  if comp == 0:
+    if payload.len - 1 != n:
+      return err[seq[uint8]](decodingError("webp: bad ALPH raw size"))
+    for i in 0..<n: alpha[i] = payload[1 + i]
+  elif comp == 1:
+    if payload.len < 2:
+      return err[seq[uint8]](decodingError("webp: truncated ALPH"))
+    let body = decodeVp8lHeaderless(payload.toOpenArray(1, payload.len - 1),
+      w, h)
+    if not body.ok: return err[seq[uint8]](body.err)
+    # Spec: transparency lives in the green channel of the decoded ARGB.
+    for i in 0..<n: alpha[i] = body.value.pixels[i].data[1]
+  else:
+    return err[seq[uint8]](decodingError("webp: bad ALPH compression"))
+  unfilterAlpha(filter, alpha, w, h)
+  ok(alpha)
+
 # ---------- RIFF container ----------
 
 proc decodeWebp*(data: openArray[uint8]): ImageResult[DynamicImage] =
@@ -723,8 +814,9 @@ proc decodeWebp*(data: openArray[uint8]): ImageResult[DynamicImage] =
   var vp8lPos = -1; var vp8lLen = 0
   var vp8Pos = -1; var vp8Len = 0
   var hasVp8 = false
-  var hasAlph = false
+  var alphPos = -1; var alphLen = 0
   var hasAnim = false
+  var vp8xW = 0; var vp8xH = 0
   while pos + 8 <= data.len:
     let t0 = data[pos]; let t1 = data[pos+1]
     let t2 = data[pos+2]; let t3 = data[pos+3]
@@ -741,9 +833,18 @@ proc decodeWebp*(data: openArray[uint8]): ImageResult[DynamicImage] =
       if vp8Pos < 0:
         vp8Pos = pos; vp8Len = size
     elif t0 == uint8('A') and t1 == uint8('L') and t2 == uint8('P') and t3 == uint8('H'):
-      hasAlph = true
+      if alphPos < 0:
+        alphPos = pos; alphLen = size
     elif t0 == uint8('V') and t1 == uint8('P') and t2 == uint8('8') and t3 == uint8('X'):
-      discard # canvas info; VP8/VP8L chunks follow inline
+      # Canvas info: flags + 24-bit (width-1) + 24-bit (height-1).
+      # First VP8X wins; VP8/VP8L pixels follow inline.
+      if vp8xW == 0 and vp8xH == 0:
+        if size < 10:
+          return err[DynamicImage](decodingError("webp: bad VP8X"))
+        vp8xW = int(uint32(data[pos+4]) or (uint32(data[pos+5]) shl 8) or
+          (uint32(data[pos+6]) shl 16)) + 1
+        vp8xH = int(uint32(data[pos+7]) or (uint32(data[pos+8]) shl 8) or
+          (uint32(data[pos+9]) shl 16)) + 1
     elif t0 == uint8('A') and t1 == uint8('N') and t2 == uint8('I') and
         t3 == uint8('M') or
         t0 == uint8('A') and t1 == uint8('N') and t2 == uint8('M') and
@@ -767,18 +868,42 @@ proc decodeWebp*(data: openArray[uint8]): ImageResult[DynamicImage] =
     return ok(DynamicImage(kind: dkRgb8, rgb8:
       RgbImage(width: r.value.width, height: r.value.height, pixels: move(rgb))))
   if hasVp8 and vp8Pos >= 0 and vp8Len > 0:
-    if hasAlph:
-      return err[DynamicImage](unsupportedError(ukGenericFeature,
-        "webp: alpha with lossy VP8"))
     let fr = decodeVp8Frame(data.toOpenArray(vp8Pos, vp8Pos + vp8Len - 1))
     if not fr.ok: return err[DynamicImage](fr.err)
+    if vp8xW > 0 and (vp8xW != fr.value.width or vp8xH != fr.value.height):
+      return err[DynamicImage](decodingError("webp: VP8X/VP8 size mismatch"))
     let rgb = vp8ToRgb(fr.value)
-    var px = newSeq[Rgb[uint8]](fr.value.width * fr.value.height)
-    for i in 0..<px.len:
-      px[i] = Rgb[uint8](data: [rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]])
-    return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(
+    if alphPos < 0 or alphLen == 0:
+      # Opaque lossy (a set VP8X alpha flag without an ALPH chunk also
+      # lands here: lenient, decode the pixels we have).
+      var px = newSeq[Rgb[uint8]](fr.value.width * fr.value.height)
+      for i in 0..<px.len:
+        px[i] = Rgb[uint8](data: [rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]])
+      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(
+        width: uint32(fr.value.width), height: uint32(fr.value.height),
+        pixels: move(px))))
+    # VP8X lossy + transparency: RGB from VP8, alpha from ALPH.
+    # (An ALPH chunk next to VP8L is ignored above: spec SHOULD NOT.)
+    let al = decodeAlph(data.toOpenArray(alphPos, alphPos + alphLen - 1),
+      fr.value.width, fr.value.height)
+    if not al.ok: return err[DynamicImage](al.err)
+    var hasAlpha = false
+    for a in al.value:
+      if a != 255: hasAlpha = true; break
+    if not hasAlpha:
+      var px = newSeq[Rgb[uint8]](fr.value.width * fr.value.height)
+      for i in 0..<px.len:
+        px[i] = Rgb[uint8](data: [rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]])
+      return ok(DynamicImage(kind: dkRgb8, rgb8: RgbImage(
+        width: uint32(fr.value.width), height: uint32(fr.value.height),
+        pixels: move(px))))
+    var pxa = newSeq[Rgba[uint8]](fr.value.width * fr.value.height)
+    for i in 0..<pxa.len:
+      pxa[i] = Rgba[uint8](data: [rgb[3 * i], rgb[3 * i + 1],
+        rgb[3 * i + 2], al.value[i]])
+    return ok(DynamicImage(kind: dkRgba8, rgba8: RgbaImage(
       width: uint32(fr.value.width), height: uint32(fr.value.height),
-      pixels: move(px))))
+      pixels: move(pxa))))
   if hasVp8:
     return err[DynamicImage](decodingError("webp: missing VP8 data"))
   err[DynamicImage](decodingError("webp: no image chunk"))
@@ -2112,6 +2237,61 @@ proc wrapWebp(payload: seq[uint8]): seq[uint8] =
   for k in 0..3: output.add(uint8((n shr (8*k)) and 0xFF))
   for b in payload: output.add(b)
   if pad == 1: output.add(0)
+  output
+
+proc encodeAlph*(alpha: openArray[uint8], w, h: int): seq[uint8] =
+  ## ALPH chunk payload (preamble + bitstream) for a w*h alpha plane.
+  ## Tries raw (C=0, F=0) vs headerless VP8L (C=1, F=0) and keeps the
+  ## smaller payload. The VP8L candidate reuses the full lossless encoder
+  ## on a gray image (alpha in every channel; the decoder reads green)
+  ## minus its 5-byte signature/dimension header, which is byte-aligned
+  ## (8 + 14 + 14 + 1 + 3 bits) with the stream starting fresh after it.
+  let n = w * h
+  var raw = newSeq[uint8](n + 1)
+  raw[0] = 0x00 # C=0 raw, F=0 none
+  for i in 0..<n: raw[i + 1] = alpha[i]
+  if w <= 0 or h <= 0: return raw
+  var gray = newSeq[Rgba[uint8]](n)
+  for i in 0..<n:
+    gray[i] = Rgba[uint8](data: [alpha[i], alpha[i], alpha[i], alpha[i]])
+  let full = encodeVp8l(RgbaImage(width: uint32(w), height: uint32(h),
+    pixels: move(gray)))
+  if full.len <= 5: return raw
+  var comp = newSeq[uint8](full.len - 5 + 1)
+  comp[0] = 0x01 # C=1 VP8L, F=0 none
+  for i in 5..<full.len: comp[i - 5 + 1] = full[i]
+  if comp.len < raw.len: comp else: raw
+
+proc wrapWebpLossyAlpha*(vp8frame, alphPayload: openArray[uint8],
+    w, h: int): seq[uint8] =
+  ## RIFF/WEBP/VP8X/ALPH/VP8 container for lossy + transparency.
+  ## VP8X carries the alpha flag (0x10) and the canvas size; every chunk
+  ## is even-padded per RIFF.
+  var output = @[uint8('R'),uint8('I'),uint8('F'),uint8('F')]
+  let padA = alphPayload.len and 1
+  let padV = vp8frame.len and 1
+  let total = 4 + (8 + 10) + (8 + alphPayload.len + padA) +
+    (8 + vp8frame.len + padV)
+  for k in 0..3: output.add(uint8((total shr (8*k)) and 0xFF))
+  output.add([uint8('W'),uint8('E'),uint8('B'),uint8('P')])
+  output.add([uint8('V'),uint8('P'),uint8('8'),uint8('X')])
+  let nx = uint32(10)
+  for k in 0..3: output.add(uint8((nx shr (8*k)) and 0xFF))
+  output.add(0x10'u8) # alpha flag
+  output.add([0'u8, 0, 0]) # reserved
+  let cw = uint32(w - 1); let ch = uint32(h - 1)
+  for k in 0..2: output.add(uint8((cw shr (8*k)) and 0xFF))
+  for k in 0..2: output.add(uint8((ch shr (8*k)) and 0xFF))
+  output.add([uint8('A'),uint8('L'),uint8('P'),uint8('H')])
+  let na = uint32(alphPayload.len)
+  for k in 0..3: output.add(uint8((na shr (8*k)) and 0xFF))
+  for b in alphPayload: output.add(b)
+  if padA == 1: output.add(0)
+  output.add([uint8('V'),uint8('P'),uint8('8'),uint8(' ')])
+  let nv = uint32(vp8frame.len)
+  for k in 0..3: output.add(uint8((nv shr (8*k)) and 0xFF))
+  for b in vp8frame: output.add(b)
+  if padV == 1: output.add(0)
   output
 
 proc encodeWebp*(img: DynamicImage): ImageResult[seq[uint8]] =

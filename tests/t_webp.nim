@@ -78,14 +78,80 @@ test "webp lossy truncated":
   for c in [0, 1, 2, raw.len div 2, raw.len - 1]:
     check decodeWebp(raw[0..<c]).ok == false
 
-test "webp lossy alpha unsupported":
-  # VP8X + ALPH needs alpha compositing (follow-up); must fail cleanly
+test "webp lossy alpha":
+  # VP8X + ALPH + VP8 (cwebp default for RGBA): RGB from VP8, alpha overlaid.
+  # Sums oracled against dwebp 1.6.0 (fancy upsampling: raw VP8 RGB + ALPH).
   let p = fixturesDir / "webp" / "extended_images" / "lossy_alpha.webp"
   var f = open(p, fmRead)
   var raw = newSeq[uint8](getFileSize(f))
   discard readBytes(f, raw, 0, raw.len)
   close(f)
-  check decodeWebp(raw).ok == false
+  let dec = decodeWebp(raw)
+  check dec.ok
+  check dec.value.kind == dkRgba8
+  check dec.value.dimensions() == (100'u32, 100'u32)
+  var s = 0'u64; var a = 0'u64
+  for px in dec.value.rgba8.pixels:
+    s += uint64(px.data[0]) + uint64(px.data[1]) + uint64(px.data[2])
+    a += uint64(px.data[3])
+  check s == 2407062'u64
+  check a == 953271'u64
+  # Any truncation must fail cleanly (ALPH + VP8 cuts), never raise.
+  for c in [0, 1, 2, 30, 40, 100, 276, 278, 300, raw.len div 2, raw.len - 1]:
+    check decodeWebp(raw[0..<c]).ok == false
+
+test "webp alph filter round-trips":
+  # decodeAlph unit cover for every filter on a 3x2 plane (encoded by hand:
+  # stored X = (alpha - predictor) mod 256 per the spec edge rules).
+  let orig = @[10'u8, 20, 30, 40, 50, 60]
+  check decodeAlph(@[0x00'u8, 10, 20, 30, 40, 50, 60], 3, 2).value == orig
+  check decodeAlph(@[0x04'u8, 10, 10, 10, 30, 10, 10], 3, 2).value == orig
+  check decodeAlph(@[0x08'u8, 10, 10, 10, 30, 30, 30], 3, 2).value == orig
+  check decodeAlph(@[0x0C'u8, 10, 10, 10, 30, 0, 0], 3, 2).value == orig
+  # Bad compression method and size mismatches fail cleanly.
+  check decodeAlph(@[0x02'u8, 10, 20, 30, 40, 50, 60], 3, 2).ok == false
+  check decodeAlph(@[0x00'u8, 10, 20, 30], 3, 2).ok == false
+  check decodeAlph(@[], 3, 2).ok == false
+  check decodeAlph(@[0x01'u8], 3, 2).ok == false
+
+test "webp lossy alpha round-trip":
+  # Alpha plane survives exactly (raw or VP8L ALPH, whichever is smaller);
+  # RGB is lossy. Opaque input keeps the simple VP8 container (no VP8X).
+  proc hasFourcc(buf: seq[uint8], s: string): bool =
+    if buf.len < 4: return false
+    for i in 0..buf.len - 4:
+      if buf[i] == uint8(s[0]) and buf[i+1] == uint8(s[1]) and
+          buf[i+2] == uint8(s[2]) and buf[i+3] == uint8(s[3]):
+        return true
+    false
+  var px = newSeq[Rgba[uint8]](64 * 64)
+  for y in 0..<64:
+    for x in 0..<64:
+      px[y * 64 + x] = Rgba[uint8](data: [uint8(x * 4), uint8(y * 4),
+        uint8((x + y) * 2), uint8((x * 4 + y * 2) mod 256)])
+  let img = RgbaImage(width: 64, height: 64, pixels: px)
+  let enc = encodeWebpLossy(img, 90)
+  check enc.ok
+  check hasFourcc(enc.value, "VP8X")
+  check hasFourcc(enc.value, "ALPH")
+  let dec = decodeWebp(enc.value)
+  check dec.ok
+  check dec.value.kind == dkRgba8
+  check dec.value.dimensions() == (64'u32, 64'u32)
+  for i, p in dec.value.rgba8.pixels:
+    check p.data[3] == px[i].data[3] # alpha is lossless
+  var opaque = newSeq[Rgba[uint8]](8 * 8)
+  for i in 0..<opaque.len:
+    opaque[i] = Rgba[uint8](data: [uint8(i), uint8(255 - i), 128, 255])
+  let encO = encodeWebpLossy(RgbaImage(width: 8, height: 8,
+    pixels: opaque), 75)
+  check encO.ok
+  check not hasFourcc(encO.value, "VP8X")
+  check not hasFourcc(encO.value, "ALPH")
+  let decO = decodeWebp(encO.value)
+  check decO.ok
+  check decO.value.kind == dkRgb8
+  check decO.value.dimensions() == (8'u32, 8'u32)
 
 test "webp vp8l leading repeat run":
   # Regression: channels whose code lengths open with a run of >=3 equal

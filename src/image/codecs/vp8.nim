@@ -2,8 +2,9 @@
 ## Port of references/image-webp src/vp8.rs (+ vp8_arithmetic_decoder.rs,
 ## loop_filter.rs, transform.rs, yuv.rs fancy path) at v0.2.4, which itself
 ## follows RFC 6386 and libwebp (see references/libwebp).
-## Scope: still keyframes only. Interframes, animation and ALPH compositing
-## stay `Unsupported` at the container layer (vp8l.nim).
+## Scope: still keyframes only. Interframes and animation stay
+## `Unsupported` at the container layer (vp8l.nim); ALPH transparency
+## is composited there over the RGB from `vp8ToRgb`.
 ## Error model: corrupt input raises Vp8DecodeError internally, converted to
 ## `ImageResult.err` at decodeVp8Frame. Never panics on truncated input:
 ## the bit reader returns defaults past EOF and each section checks.
