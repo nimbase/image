@@ -47,7 +47,7 @@ Codec support (`o` = decode, `w` = encode):
 - QOI: o+w — full op-index/run/diff/luma/rgb/rgba codec
 - TGA: o+w — raw/RLE, colormaps, 15-bit, orientation
 - TIFF: o+w — strips/tiles, chunky/planar, None/LZW/Deflate/PackBits, YCbCr/CMYK/palette
-- WebP: o+w — lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green, per-block color and meta-Huffman transforms) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100); animation / VP8X alpha unsupported
+- WebP: o+w — lossless VP8L (LZ77 + color-cache encoder with predictor, subtract-green, per-block color and meta-Huffman transforms) + lossy VP8 keyframe decode (bit-exact vs dwebp, fancy upsampling) and encode (quality 1–100) + VP8X lossy transparency (ALPH raw/VP8L, exact alpha); animation unsupported
 - AVIF: color math only (BT.601/709/2020 YCbCr, YCgCo-Re); AV1 bitstream unsupported
 - HEIF/HEIC: o+w — ISOBMFF container + uncompressed (`unci` v0/v1, 8/16-bit, incl. tiled tile-component) + JPEG-in-HEIF + `iden`/`grid`/`iovl` (8/16-bit mono/RGB/RGBA) + `irot`/`imir`/`clap`/`iscl` + thumbnails/aux/groups/Exif/mime + tiled `iloc` construction-1/2 + timed `pict` sequences (`unci` v0/v1 / `jpeg`, incl. fragmented `moof`) + EVC brand passthrough; HEVC/VVC/AVC/EVC/JPEG2000 pixels unsupported (extractors only)
 

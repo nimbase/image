@@ -9,6 +9,7 @@ import std/algorithm
 import buffalo
 import ./vp8
 import ./vp8tables
+import ./vp8l
 import ../error
 import ../buffer
 
@@ -1663,18 +1664,29 @@ proc encodeVp8Lossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
   ok(frame)
 
 proc encodeWebpLossy*(img: RgbaImage, quality: int): ImageResult[seq[uint8]] =
-  ## Lossy WebP (VP8 keyframe in a `VP8 ` RIFF chunk).
+  ## Lossy WebP: `VP8 ` RIFF chunk when opaque (as before), extended
+  ## `VP8X + ALPH + VP8 ` container when the image has transparency.
+  ## The VP8 pixels ignore alpha (as before); the ALPH chunk carries the
+  ## exact alpha plane (raw or VP8L, whichever is smaller).
   let f = encodeVp8Lossy(img, quality)
   if not f.ok: return err[seq[uint8]](f.err)
   let payload = f.value
-  var output = @[uint8('R'), uint8('I'), uint8('F'), uint8('F')]
-  let total = 4 + 8 + payload.len
-  let pad = payload.len and 1
-  for k in 0..3: output.add(uint8(((total + pad) shr (8 * k)) and 0xFF))
-  output.add([uint8('W'), uint8('E'), uint8('B'), uint8('P')])
-  output.add([uint8('V'), uint8('P'), uint8('8'), uint8(' ')])
-  let n = uint32(payload.len)
-  for k in 0..3: output.add(uint8((n shr (8 * k)) and 0xFF))
-  for b in payload: output.add(b)
-  if pad == 1: output.add(0)
-  ok(output)
+  var hasAlpha = false
+  for p in img.pixels:
+    if p.data[3] != 255: hasAlpha = true; break
+  if not hasAlpha:
+    var output = @[uint8('R'), uint8('I'), uint8('F'), uint8('F')]
+    let total = 4 + 8 + payload.len
+    let pad = payload.len and 1
+    for k in 0..3: output.add(uint8(((total + pad) shr (8 * k)) and 0xFF))
+    output.add([uint8('W'), uint8('E'), uint8('B'), uint8('P')])
+    output.add([uint8('V'), uint8('P'), uint8('8'), uint8(' ')])
+    let n = uint32(payload.len)
+    for k in 0..3: output.add(uint8((n shr (8 * k)) and 0xFF))
+    for b in payload: output.add(b)
+    if pad == 1: output.add(0)
+    return ok(output)
+  let w = int(img.width); let h = int(img.height)
+  var alpha = newSeq[uint8](w * h)
+  for i in 0..<w*h: alpha[i] = img.pixels[i].data[3]
+  ok(wrapWebpLossyAlpha(payload, encodeAlph(alpha, w, h), w, h))
