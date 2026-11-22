@@ -27,6 +27,7 @@ import ./image/codecs/openexr as openexrApi
 import ./image/codecs/webp as webpApi
 import ./image/codecs/avif as avifApi
 import ./image/codecs/heif/heif as heifApi
+import ./image/codecs/j2k as j2kApi
 
 export colorApi
 export errorApi
@@ -56,3 +57,4 @@ export openexrApi
 export webpApi
 export avifApi
 export heifApi
+export j2kApi

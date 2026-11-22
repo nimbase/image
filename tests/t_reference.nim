@@ -10,7 +10,7 @@ import unittest
 import std/os
 import std/strutils
 import image
-import image/codecs/[jpeg, openexr, webp]
+import image/codecs/[jpeg, openexr, webp, j2k]
 import image/codecs/heif/heif
 
 let fixturesDir = currentSourcePath().parentDir() / "fixtures"
@@ -53,7 +53,13 @@ test "reference fixtures decode":
       else:
         check dec.ok
         check dec.value.dimensions()[0] > 0 and dec.value.dimensions()[1] > 0
+    of ".j2k", ".jp2":
+      let dec = decodeJp2(readRaw(p))
+      if expectFail: check dec.ok == false
+      else:
+        check dec.ok
+        check dec.value.dimensions()[0] > 0 and dec.value.dimensions()[1] > 0
     else:
       check false # stray fixture: triage it into the suite
     inc(count)
-  check count == 90 # bump when fixtures are added/removed
+  check count == 104 # bump when fixtures are added/removed
