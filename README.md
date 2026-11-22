@@ -123,6 +123,14 @@ let opt = img.compress(90).subsampled(false).optimized().encode()
 let c = cropImage(img, 0, 0, 20, 20)  # strict, variant-preserving; 8-bit inputs only for JPEG
 ```
 
+### JPEG 2000
+
+```nim
+let raw = decodeJ2kRaw(bytes)  # raw codestream (.j2k)
+let jp2 = decodeJp2(bytes)      # JP2 container; both -> DynamicImage
+```
+Decode-only (lossless 5/3 + RCT and lossy 9/7, legacy + HTJ2K); no encoder.
+
 ### PNG
 
 ```nim
@@ -240,7 +248,9 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [ ] AVIF bitstream (requires an AV1 decoder)
 - [x] HEIF/HEIC stills: container + uncompressed + JPEG-in-HEIF + grids/overlays/iden + thumbnails/aux/groups/Exif/mime + writer (HEVC/VVC/AVC/EVC/JPEG2000 passthrough only — no pure-Nim video/wavelet decoders)
 - [ ] JPEG XL (jxl)
-- [ ] JPEG 2000 (jp2)
+- [x] JPEG 2000 (jp2): decoder codec only
+  - raw codestream + JP2 container → `DynamicImage` (lossless 5/3 + RCT and lossy 9/7; legacy + HTJ2K code-blocks)
+  - no encoder; no subsampling/palettes/packed headers (clean `Unsupported`)
 - [x] HEIF sequences/timed pict tracks (`unci` v0/v1 / `jpeg`, incl. fragmented `moof`), tiled `iloc` construction-1/2 + tiled `uncC` (clean-room TL profile), EVC brand
 - [ ] RAW (a family of formats, not one codec; often requires camera-specific metadata and processing)
 - [x] SIMD: PNG unfilter rows (all 5 filters — Up parallel, Sub doubling-prefix, Average/Paeth frontier rounds; bpp 1/2 Average/Paeth + bpp-3 Paeth stay scalar where measured slower), JPEG IDCT/FDCT, YCbCr row batch via nimsimd (runtime auto-dispatch SSE2/AVX2/NEON, bit-identical scalar fallback; `-ffp-contract=off`)
