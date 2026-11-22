@@ -1,6 +1,9 @@
-## JPEG 2000: framing + lossless decode (5/3 + RCT, 8/16-bit).
-## Fixtures generated with opj_compress v2.5.4 (`-n 3`, default lossless);
-## oracle sums via opj_decompress PGX planes.
+## JPEG 2000: lossless 5/3 + RCT and HTJ2K decode (8/16-bit).
+## Legacy fixtures generated with opj_compress v2.5.4 (`-n 3`, default
+## lossless); HT fixtures with ojph_compress/ojph_expand. Oracle sums via
+## opj_decompress PGX planes (legacy, exact) and ojph_expand (HT: lossless
+## fixtures pixel-exact; lossy fixtures pinned with sums, differing from
+## ojph output by float-vs-fixed rounding noise of at most 1 per sample).
 import unittest
 import std/os
 import image
@@ -33,6 +36,82 @@ proc rgbaSum8(img: DynamicImage): uint64 =
   for p in img.rgba8.pixels:
     result += uint64(p.data[0]) + uint64(p.data[1]) + uint64(p.data[2]) +
       uint64(p.data[3])
+
+test "j2k ht lossless color":
+  # HTJ2K reversible 5/3 via ojph (`-reversible true -num_decomps 2`).
+  # Pixel-exact vs ojph_expand.
+  let raw = readRaw(fixturesDir / "j2k" / "ht32.j2k")
+  let dec = decodeJ2kRaw(raw)
+  check dec.ok
+  check dec.value.kind == dkRgb8
+  check dec.value.dimensions() == (32'u32, 32'u32)
+  check rgbSum8(dec.value) == 380928'u64
+
+test "j2k ht lossy color":
+  # HTJ2K irreversible 9/7 via ojph (default lossy, 5 decompositions).
+  # Fixed-point IDWT matches ojph float output up to +-1 rounding noise.
+  let raw = readRaw(fixturesDir / "j2k" / "h32.j2k")
+  let dec = decodeJ2kRaw(raw)
+  check dec.ok
+  check dec.value.kind == dkRgb8
+  check dec.value.dimensions() == (32'u32, 32'u32)
+  check rgbSum8(dec.value) == 380933'u64
+
+test "j2k ht lossless 16-bit gray":
+  let raw = readRaw(fixturesDir / "j2k" / "ht16.j2k")
+  let dec = decodeJ2kRaw(raw)
+  check dec.ok
+  check dec.value.kind == dkLuma16
+  check dec.value.dimensions() == (32'u32, 32'u32)
+  check lumSum16(dec.value) == 33521664'u64
+
+test "j2k ht lossy 16-bit gray":
+  let raw = readRaw(fixturesDir / "j2k" / "h16.j2k")
+  let dec = decodeJ2kRaw(raw)
+  check dec.ok
+  check dec.value.kind == dkLuma16
+  check dec.value.dimensions() == (32'u32, 32'u32)
+  check lumSum16(dec.value) == 33521674'u64
+
+test "j2k ht multi-tile":
+  # 2x2 tiles: reversible lossless (exact) and irreversible lossy
+  # (ojph float-vs-fixed noise sums).
+  for (name, want) in [("htt4l.j2k", 380928'u64), ("htl4.j2k", 380963'u64)]:
+    let raw = readRaw(fixturesDir / "j2k" / name)
+    let dec = decodeJ2kRaw(raw)
+    check dec.ok
+    check dec.value.kind == dkRgb8
+    check dec.value.dimensions() == (32'u32, 32'u32)
+    check rgbSum8(dec.value) == want
+
+test "j2k ht lossy jp2 container":
+  let raw = readRaw(fixturesDir / "j2k" / "hc32.jp2")
+  let dec = decodeJp2(raw)
+  check dec.ok
+  check dec.value.kind == dkRgb8
+  check dec.value.dimensions() == (32'u32, 32'u32)
+  check rgbSum8(dec.value) == 380981'u64
+
+test "j2k ht user precincts":
+  # Explicit precincts with HT code-blocks (per-precinct tag trees +
+  # opj-compatible block clamping). Lossless, pixel-exact vs ojph_expand.
+  let raw = readRaw(fixturesDir / "j2k" / "htprec.j2k")
+  let dec = decodeJ2kRaw(raw)
+  check dec.ok
+  check dec.value.kind == dkRgb8
+  check dec.value.dimensions() == (32'u32, 32'u32)
+  check rgbSum8(dec.value) == 380928'u64
+
+test "j2k ht tiny blocks":
+  # 8x8 single-block edge cases incl. all-zero input (z8), impulse (o8).
+  for (name, want) in [("z8.j2k", 0'u64), ("o8.j2k", 200'u64),
+      ("h8.j2k", 4480'u64)]:
+    let raw = readRaw(fixturesDir / "j2k" / name)
+    let dec = decodeJ2kRaw(raw)
+    check dec.ok
+    check dec.value.kind == dkLuma8
+    check dec.value.dimensions() == (8'u32, 8'u32)
+    check lumSum8(dec.value) == want
 
 test "j2k lossless gray":
   let raw = readRaw(fixturesDir / "j2k" / "g32.j2k")
@@ -142,15 +221,19 @@ test "j2k soc/siz required":
 test "j2k truncated fixtures fail cleanly":
   for name in ["g32.j2k", "c32.j2k", "g16.j2k", "t4.j2k", "pocl.j2k",
       "sopeph.j2k", "byp.j2k", "a4.j2k", "pocw.j2k", "ml.j2k",
-      "prec.j2k"]:
+      "prec.j2k", "ht32.j2k", "h32.j2k", "ht16.j2k", "h16.j2k",
+      "htt4l.j2k", "htl4.j2k", "htprec.j2k", "z8.j2k", "o8.j2k",
+      "h8.j2k"]:
     let full = readRaw(fixturesDir / "j2k" / name)
-    check full.len > 64
+    check full.len > 20
     for c in [0, 1, 2, 4, 10, 40, 47, 60, full.len div 2, full.len - 1]:
-      check decodeJ2kRaw(full[0..<c]).ok == false
-  for name in ["g32.jp2", "c32.jp2", "a4.jp2"]:
+      if c < full.len:
+        check decodeJ2kRaw(full[0..<c]).ok == false
+  for name in ["g32.jp2", "c32.jp2", "a4.jp2", "hc32.jp2"]:
     let full = readRaw(fixturesDir / "j2k" / name)
     for c in [0, 1, 2, 12, 85, full.len div 2, full.len - 1]:
-      check decodeJp2(full[0..<c]).ok == false
+      if c < full.len:
+        check decodeJp2(full[0..<c]).ok == false
 
 test "jp2 box framing":
   check decodeJp2(@[]).ok == false

@@ -126,7 +126,10 @@ test "truncate heif":
 test "truncate j2k":
   # no encoder in v1: cut real fixtures (lossless raw + JP2 container)
   for name in ["g32.j2k", "c32.j2k", "t4.j2k", "pocl.j2k", "sopeph.j2k",
-      "byp.j2k", "pocw.j2k", "ml.j2k", "prec.j2k"]:
+      "byp.j2k", "pocw.j2k", "ml.j2k", "prec.j2k", "ht32.j2k", "h32.j2k",
+      "ht16.j2k", "h16.j2k", "htt4l.j2k", "htl4.j2k", "htprec.j2k",
+      "z8.j2k", "o8.j2k",
+      "h8.j2k"]:
     let p = currentSourcePath().parentDir() / "fixtures" / "j2k" / name
     var f = open(p, fmRead)
     var full = newSeq[uint8](getFileSize(f))
@@ -134,9 +137,10 @@ test "truncate j2k":
     close(f)
     check decodeJ2kRaw(full).ok
     for c in [0, 1, 2, 10, 40, full.len div 2]:
-      check decodeJ2kRaw(full[0..<c]).ok == false
+      if c < full.len:
+        check decodeJ2kRaw(full[0..<c]).ok == false
     check decodeJ2kRaw(full[0..^2]).ok == false
-  for name in ["g32.jp2", "c32.jp2", "a4.jp2"]:
+  for name in ["g32.jp2", "c32.jp2", "a4.jp2", "hc32.jp2"]:
     let p = currentSourcePath().parentDir() / "fixtures" / "j2k" / name
     var f = open(p, fmRead)
     var full = newSeq[uint8](getFileSize(f))

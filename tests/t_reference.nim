@@ -62,4 +62,4 @@ test "reference fixtures decode":
     else:
       check false # stray fixture: triage it into the suite
     inc(count)
-  check count == 104 # bump when fixtures are added/removed
+  check count == 115 # bump when fixtures are added/removed

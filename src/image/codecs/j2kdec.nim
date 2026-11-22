@@ -3,19 +3,24 @@
 ## src/codestream/* (markers/layout/quantization/tiles), src/packet/*,
 ## src/tier1/*, src/transform/*, src/jp2/*. No standards text or test
 ## vectors are reproduced; only coding semantics re-expressed.
-## HT VLC tables (when added) derive from OpenJPEG t1_ht_luts.h and retain
+## HT VLC tables derive from OpenJPEG t1_ht_luts.h and retain
 ## their BSD-2 notices (see references THIRD_PARTY_NOTICES) alongside MIT.
-## Scope v1: raw codestream (.j2k: SOC..EOC, single/multi tile, POC) + JP2
+## Scope: raw codestream (.j2k: SOC..EOC, single/multi tile, POC) + JP2
 ## container (.jp2: signature/ftyp/jp2h/jp2c first-codestream) stills to
-## DynamicImage. Lossless 5/3 + RCT first; 9/7 + HT follow in later phases.
-## Out of v1 scope (clean Unsupported): JPX/JPH/JPIP, Part-2 general MCT/
-## MCO/NLT/CBD/decomposition selectors, HT/mixed routing (phase-gated),
-## palette execution beyond gray/RGB/RGBA mapping, animation, encode.
+## DynamicImage. Reversible 5/3 + RCT and irreversible 9/7 (fixed-point);
+## legacy and HTJ2K code-blocks incl. mixed routing; Part-15 CAP marker
+## parsed and validated. Lossless output is pixel-exact vs opj/ojph;
+## lossy matches ojph float output within +-1 per sample (fixed-point 9/7).
+## Out of scope (clean Unsupported): JPX/JPH/JPIP, Part-2 general MCT/
+## MCO/NLT/CBD/decomposition selectors, subsampling, palettes, packed
+## headers, tile-part coding overrides, palette execution beyond
+## gray/RGB/RGBA mapping, animation, encode.
 import ../error
 import ../buffer
 import ../dynamic
 import ../color
 import ../limits
+import ./j2khttables
 
 # ---------- markers ----------
 
@@ -40,6 +45,7 @@ const
   MkTlm* = 0xFF55u16
   MkPlm* = 0xFF57u16
   MkPlt* = 0xFF58u16
+  MkCap* = 0xFF50u16   # Part-15 extended capabilities (HTJ2K files carry it)
 
 type
   J2kProg* = enum
@@ -112,7 +118,16 @@ type
     ppt*: seq[seq[uint8]]  # packed packet headers, main header (concatenated use later)
     ppm*: seq[uint8]
     tlm*: seq[tuple[itile, psot: int]]
+    hasCap*: bool     # Part-15 extended capabilities seen
+    pcap*: uint32     # Pcap word (0x00020000 = HTJ2K capability)
     parts*: seq[J2kTilePart]
+
+func popCount32(v: uint32): int =
+  var x = v; var n = 0
+  while x != 0:
+    n += int(x and 1)
+    x = x shr 1
+  n
 
 func u16be(d: openArray[uint8], off: int): uint16 =
   (uint16(d[off]) shl 8) or uint16(d[off+1])
@@ -455,6 +470,21 @@ proc parseMainHeader(data: openArray[uint8], pos: var int,
       h.ppm.add(pay)
     of MkPpt:
       h.ppt.add(pay)
+    of MkCap:
+      # Part-15 extended capabilities (ref profile.rs:254 parse_cap):
+      # Pcap(u32) != 0, payload length 4 + 2 words per set Pcap bit.
+      if h.hasCap:
+        return err[bool](decodingError("j2k: duplicate CAP"))
+      if pay.len < 4:
+        return err[bool](decodingError("j2k: bad CAP length"))
+      let pc = (uint32(pay[0]) shl 24) or (uint32(pay[1]) shl 16) or
+        (uint32(pay[2]) shl 8) or uint32(pay[3])
+      if pc == 0:
+        return err[bool](decodingError("j2k: bad CAP Pcap"))
+      if pay.len != 4 + 2 * popCount32(pc):
+        return err[bool](decodingError("j2k: bad CAP length"))
+      h.hasCap = true
+      h.pcap = pc
     of MkTlm, MkPlm, MkPlt, MkCrg, MkCom:
       discard # parsed-and-skipped in M1; enforced in packet phase
     else:
@@ -1228,8 +1258,18 @@ proc buildRes(tx0, ty0, tx1, ty1, d, r: int, quant: J2kQuant,
     prec: int, roi: int): ResGeom =
   let rb = resBounds(tx0, ty0, tx1, ty1, d, r)
   var g = ResGeom(r: r, x0: rb.x0, y0: rb.y0, x1: rb.x1, y1: rb.y1)
+  # Per-band quantization step: expounded/none read the band table;
+  # derived (style 1) reuses the single base step with a saturated
+  # per-resolution exponent (ref quantization_step_at_index).
+  proc bandStep(idx: int): J2kQStep =
+    if quant.style == 1:
+      let b = quant.steps[0]
+      let sub = max(r - 1, 0)
+      J2kQStep(exp: max(b.exp - sub, 0), mant: b.mant)
+    else:
+      quant.steps[idx]
   if r == 0:
-    let st = quant.steps[0]
+    let st = bandStep(0)
     g.bands.add(SbBand(orient: orLL, res: 0, x0: rb.x0, y0: rb.y0,
       x1: rb.x1, y1: rb.y1, sigBp: quant.guard + st.exp - 1 + roi,
       qExp: st.exp, qMant: st.mant, dyn: prec))
@@ -1245,7 +1285,7 @@ proc buildRes(tx0, ty0, tx1, ty1, d, r: int, quant: J2kQuant,
     let bbs = [(hx0, ly0, hx1, ly1), (lx0, hy0, lx1, hy1), (hx0, hy0, hx1, hy1)]
     let gains = [1, 1, 2]
     for k in 0..2:
-      let st = quant.steps[base + k]
+      let st = bandStep(base + k)
       g.bands.add(SbBand(orient: ors[k], res: r,
         x0: bbs[k][0], y0: bbs[k][1], x1: bbs[k][2], y1: bbs[k][3],
         sigBp: quant.guard + st.exp - 1 + roi,
@@ -1365,6 +1405,29 @@ proc iterPacketsPoc(windows: seq[tuple[rS, cS, lE, rE, cE: int, pr: J2kProg]],
 
 # ---------- tile decode state ----------
 
+# ---------- HTJ2K: block work state (early: referenced by CbPktState) ----------
+
+type HtWork = object
+  bw*, bh*: int
+  orient*: J2kOrient
+  sigBp*: int        # significant bitplanes (guard + exp - 1 + roi)
+  maxPasses*: int    # (sigBp-1-zero)*3+1, same as legacy topBp formula
+  nextPass*: int
+  zero*: int
+  plane*: CbPlane        # current output plane
+  cleanup*: CbPlane      # retained cleanup plane (refinement replays from it)
+  hasCleanup*: bool
+  decodedBp*: int        # ht_decoded_bitplanes from cleanup time
+  refData*: seq[uint8]   # accumulated refinement bytes
+  refPasses*: int        # accumulated refinement passes
+  setsSeen*: int
+
+func htSegPasses(phase, remaining: int): int =
+  ## HT per-segment pass split (ref tier1.rs:378 ht_segment_passes).
+  if phase == 0: 1
+  elif remaining < 3 - phase: remaining
+  else: 3 - phase
+
 type CbPktState = object
   included: bool
   zero: int
@@ -1372,10 +1435,13 @@ type CbPktState = object
   totalPasses: int
   work: CbWork
   hasWork: bool
+  htRoute: int  # -2 unknown, -1 mixed undecided, 0 legacy, 1 HT
+  ht: HtWork
+  hasHt: bool
 
 proc newCbPktState(): CbPktState =
   CbPktState(included: false, zero: -1, lblock: 3, totalPasses: 0,
-    hasWork: false)
+    hasWork: false, htRoute: -2, hasHt: false)
 
 type PrecSub = object
   ## One subband's blocks within one precinct, with its own tag trees
@@ -1512,22 +1578,60 @@ proc parseBlockContrib(st: var CbPktState, inclT, zeroT: var TagTree,
     inc st.lblock
     inc guard
     if st.lblock > 31 or guard > 32: return (false, false, segs)
-  # HT-selected blocks are a clean Unsupported in this phase; legacy only.
-  if style.ht or style.mixed:
-    return (false, false, segs)
+  # HT routing per block (ref header_segments_new :118 + read_header_
+  # segment_length :162): pure HT decodes via ht_segment_passes; pure
+  # legacy via segment_passes; mixed starts undecided and the first
+  # segment's length probe selects the route.
+  var ht = st.htRoute
+  if ht == -2:
+    ht = if style.ht: 1 elif style.mixed: -1 else: 0
   var accounted = 0
   while accounted < np.n:
     let fp = firstPassTotal + accounted
     let rem = np.n - accounted
-    let ps = segPassesLegacy(fp, rem, style.selBypass, style.termAll)
+    var ps: int
+    if ht != 0:
+      ps = htSegPasses(fp mod 3, rem)
+    else:
+      ps = segPassesLegacy(fp, rem, style.selBypass, style.termAll)
     if ps <= 0 or ps > rem: return (false, false, segs)
     let lb = st.lblock + floorLog2(ps)
     if lb > 32: return (false, false, segs)
+    let saved = r
     let ln = pktBits(r, lb)
     if not ln.ok: return (false, false, segs)
-    let raw = style.selBypass and fp >= 10 and passKind(fp) != 2
-    segs.add((passes: ps, length: int(ln.v), useRaw: raw))
-    accounted += ps
+    var segLen = int(ln.v)
+    var actual = ps
+    if ht == -1:
+      # Mixed first segment: re-read as a legacy length and select.
+      let legBits = st.lblock + floorLog2(rem)
+      if legBits > 32: return (false, false, segs)
+      var probe = saved
+      let lleg = pktBits(probe, legBits)
+      if not lleg.ok: return (false, false, segs)
+      let legacyLen = int(lleg.v)
+      let leadingZero = segLen != 0 and lb > 0 and
+        uint64(segLen) < (1'u64 shl (lb - 1))
+      let cleanupPhase = (fp mod 3) == 0
+      let selectsLegacy = (segLen == 0 and legacyLen != 0) or
+        (segLen != 0 and not (cleanupPhase and st.lblock > 3 and
+          leadingZero))
+      if selectsLegacy:
+        if accounted != 0: return (false, false, segs)
+        ht = 0
+        actual = rem
+        segLen = legacyLen
+        r = probe
+      elif segLen != 0:
+        ht = 1
+    if ht == 0 and segLen == 0 and firstPassTotal == 0:
+      # ref contributions.rs:445 initial-empty legacy segment is invalid.
+      return (false, false, segs)
+    let raw = ht == 0 and style.selBypass and fp >= 10 and
+      passKind(fp) != 2
+    segs.add((passes: actual, length: segLen, useRaw: raw))
+    accounted += actual
+  st.htRoute = ht
   (true, true, segs)
 
 type PktFeed = tuple[blk, sb: int, segs: seq[CbSeg]]
@@ -1634,12 +1738,15 @@ proc buildTileState(h: J2kHeaders, tx, ty: int): tuple[ok: bool,
   for c in 0..<nc:
     let st = compStyle(h, c)
     let q = compQuant(h, c)
-    if q.style != 0:
+    if q.style < 0 or q.style > 2:
+      return (false, decodingError("j2k: bad quantization style"), tile)
+    if q.style == 0 and st.trans != 1:
       return (false, unsupportedError(ukGenericFeature,
-        "j2k: only no-quantization (reversible) in this phase"), tile)
+        "j2k: no-quantization needs reversible 5/3"), tile)
     if st.dlevels < 0 or st.dlevels > 32:
       return (false, decodingError("j2k: bad levels"), tile)
-    if 1 + 3 * st.dlevels != q.steps.len:
+    let wantSteps = if q.style == 1: 1 else: 1 + 3 * st.dlevels
+    if wantSteps != q.steps.len:
       return (false, decodingError("j2k: quant steps mismatch"), tile)
     let b = compTileBounds(h.siz, tx, ty, c)
     if b.x1 < b.x0 or b.y1 < b.y0:
@@ -1733,17 +1840,53 @@ proc bandRow(b: BandBuf, y: int): seq[int64] =
   for i in 0..<b.w: result[i] = b.d[base + i]
 
 proc coeffOf(st: CbPktState, blk: CbGeom, xx, yy, roi: int): int64 =
+  # HT blocks store final centered magnitudes in the HT work plane
+  # (legBp is always -1 there, so no midpoint is added).
+  if st.htRoute == 1:
+    if not st.hasHt: return 0
+    let cc = st.ht.plane.c[(yy - blk.y0) * st.ht.plane.w + (xx - blk.x0)]
+    if not cc.sig: return 0
+    var v = cc.mag
+    if cc.neg: v = -v
+    if roi > 0:
+      let a = abs(v)
+      if roi < 63 and a >= (1'i64 shl roi):
+        v = (if v < 0: -1'i64 else: 1'i64) * (a shr roi)
+    return v
   if not st.hasWork: return 0
   let cc = st.work.plane.c[(yy - blk.y0) * st.work.plane.w + (xx - blk.x0)]
   if not cc.sig: return 0
-  let mid = if cc.legBp >= 1: 1'i64 shl (cc.legBp - 1) else: 0'i64
+  let mid = if cc.legBp >= 1 and cc.legBp < 63: 1'i64 shl (cc.legBp - 1)
+    else: 0'i64
   var v = cc.mag + mid
   if cc.neg: v = -v
   if roi > 0:
     let a = abs(v)
-    if a >= (1'i64 shl roi):
+    if roi < 63 and a >= (1'i64 shl roi):
       v = (if v < 0: -1'i64 else: 1'i64) * (a shr roi)
   v
+
+proc coeffRaw(st: CbPktState, blk: CbGeom, xx, yy: int): tuple[v: int64,
+    sig: bool] =
+  ## Tier-1 reconstructed integer (legacy midpoint applied, HT centered),
+  ## WITHOUT ROI shift (the Q path applies ROI inside dequantization).
+  if st.htRoute == 1:
+    if not st.hasHt: return (0, false)
+    let cc = st.ht.plane.c[(yy - blk.y0) * st.ht.plane.w + (xx - blk.x0)]
+    if not cc.sig: return (0, false)
+    return ((if cc.neg: -cc.mag else: cc.mag), true)
+  if not st.hasWork: return (0, false)
+  let cc = st.work.plane.c[(yy - blk.y0) * st.work.plane.w + (xx - blk.x0)]
+  if not cc.sig: return (0, false)
+  let mid = if cc.legBp >= 1 and cc.legBp < 63: 1'i64 shl (cc.legBp - 1)
+    else: 0'i64
+  # midpoint add cannot overflow: mag < 2^63 and mid < 2^62 in practice;
+  # guard anyway (fail-closed via clamped caller? no—return raw, guard here)
+  if mid > 0 and cc.mag > high(int64) - mid:
+    # saturate: dequant will fail closed on absurd magnitudes downstream
+    return (high(int64), true)
+  let v = cc.mag + mid
+  ((if cc.neg: -v else: v), true)
 
 proc fillBandBuf(tc: TileCompState, resIdx, subIdx: int): BandBuf =
   let sb = tc.res[resIdx].subs[subIdx].geom
@@ -1758,6 +1901,99 @@ proc fillBandBuf(tc: TileCompState, resIdx, subIdx: int): BandBuf =
         bb.d[(yy - sb.y0) * bb.w + (xx - sb.x0)] =
           coeffOf(st, blk, xx, yy, tc.roi)
   bb
+
+proc fillBandBufRaw(tc: TileCompState, resIdx,
+    subIdx: int): tuple[ok: bool, bb: BandBuf] =
+  ## Raw Tier-1 integers without ROI shift (Q path dequantizes with ROI).
+  let sb = tc.res[resIdx].subs[subIdx].geom
+  var bb = BandBuf(x0: sb.x0, y0: sb.y0, w: sb.x1 - sb.x0,
+    h: sb.y1 - sb.y0,
+    d: newSeq[int64](max(0, (sb.x1 - sb.x0) * (sb.y1 - sb.y0))))
+  for bi in 0..<tc.res[resIdx].subs[subIdx].blocks.len:
+    let blk = tc.res[resIdx].subs[subIdx].blocks[bi]
+    let st = tc.res[resIdx].subs[subIdx].pkt[bi]
+    for yy in blk.y0..<blk.y1:
+      for xx in blk.x0..<blk.x1:
+        let c = coeffRaw(st, blk, xx, yy)
+        if c.v == high(int64) and c.sig:
+          return (false, BandBuf()) # saturated absurd magnitude
+        bb.d[(yy - sb.y0) * bb.w + (xx - sb.x0)] = c.v
+  (true, bb)
+
+# ---------- irreversible dequantization (Q16) ----------
+
+proc htQStepQ16(exp, mant, dyn: int): tuple[ok: bool, step: int64] =
+  ## quantization_step_q16: base = (2048+mant)*32, scaled by 2^(dyn-exp).
+  if mant < 0 or mant > 0x07FF: return (false, 0)
+  if exp < 0 or exp > 31: return (false, 0)
+  if dyn < 1 or dyn > 38: return (false, 0)
+  var base = int64(2048 + mant) * 32
+  if dyn >= exp:
+    let sh = dyn - exp
+    if sh > 38: return (false, 0)
+    if base > high(int64) shr sh: return (false, 0)
+    (true, base shl sh)
+  else:
+    let sh = exp - dyn
+    if sh > 62: return (false, 0)
+    (true, base div (1'i64 shl sh))
+
+proc htDequant(v: int64, neg: bool, roi, exp, mant, dyn: int,
+    reversible: bool): tuple[ok: bool, q: int64] =
+  ## Inverse quantize one coefficient (ref inverse_quantize_plane).
+  ## Returns Q16 fixed-point for irreversible, integer for reversible.
+  var m = if neg: -v else: v
+  if m == low(int64): return (false, 0)
+  var a = abs(m)
+  # undo ROI maxshift (ref undo_maxshift_magnitude)
+  if a != 0 and roi > 0:
+    if roi >= 63:
+      discard # threshold exceeds any int64 magnitude: keep as-is
+    elif a >= (1'i64 shl roi):
+      a = a shr roi
+  if reversible or a == 0:
+    return (true, if neg: -a else: a)
+  # irreversible: value = ((2*a+1) * step) div 2
+  let st = htQStepQ16(exp, mant, dyn)
+  if not st.ok: return (false, 0)
+  if a > (high(int64) - 1) div 2: return (false, 0)
+  let centered = 2 * a + 1
+  if st.step != 0 and centered > high(int64) div st.step:
+    return (false, 0)
+  let scaled = (centered * st.step) div 2
+  (true, if neg: -scaled else: scaled)
+
+proc htRoundQ16(v: int64): tuple[ok: bool, r: int64] =
+  ## Round Q16 to integer, half up (ref round_fixed with fraction_bits 16).
+  ## Only the positive side can overflow the +32768 bias.
+  if v > high(int64) - 32768: return (false, 0)
+  (true, (v + 32768) shr 16)
+
+proc dequantBandBuf(bb: BandBuf, exp, mant, dyn, roi: int,
+    reversible: bool): tuple[ok: bool, ob: BandBuf] =
+  ## Inverse quantize a subband buffer in place.
+  ## Reversible: integers unchanged. Irreversible: Q16 fixed-point out.
+  var ob = BandBuf(x0: bb.x0, y0: bb.y0, w: bb.w, h: bb.h,
+    d: newSeq[int64](bb.d.len))
+  for i, v in bb.d:
+    if v == 0:
+      ob.d[i] = 0
+      continue
+    let neg = v < 0
+    if v == low(int64): return (false, BandBuf())
+    var a = abs(v)
+    if roi > 0:
+      if roi >= 63:
+        discard # threshold exceeds int64 range: keep as-is
+      elif a >= (1'i64 shl roi):
+        a = a shr roi
+    if reversible:
+      ob.d[i] = if neg: -a else: a
+      continue
+    let dq = htDequant(a, neg, 0, exp, mant, dyn, false)
+    if not dq.ok: return (false, BandBuf())
+    ob.d[i] = dq.q
+  (true, ob)
 
 # ---------- 5/3 reversible inverse DWT (dense level buffers) ----------
 
@@ -1844,6 +2080,179 @@ proc idwt53Tile(D: int, ll: BandBuf, bands: seq[seq[BandBuf]],
     cw = W; ch = H
   (true, cur)
 
+# ---------- 9/7 irreversible inverse DWT (Q16 fixed point) ----------
+
+const
+  J2k97ScaleLo* = 80621'i64
+  J2k97ScaleHi* = 53274'i64
+  J2k97Lift* = [29066'i64, 57862'i64, -3472'i64, -103949'i64]
+
+func htFixedMul(v, f: int64): tuple[ok: bool, r: int64] =
+  ## Q16 multiply with round-half-up (ref fixed_mul). Exact fail-closed
+  ## parity with the reference checked arithmetic.
+  if v >= int64(low(int32)) and v <= int64(high(int32)) and
+      f >= int64(low(int32)) and f <= int64(high(int32)):
+    # |product| <= 2^62: exact, bias add cannot overflow.
+    return (true, (v * f + 32768) shr 16)
+  let negRes = (v < 0) != (f < 0)
+  let av: uint64 =
+    if v == low(int64): 9223372036854775808'u64
+    elif v < 0: uint64(-v) else: uint64(v)
+  let af: uint64 =
+    if f == low(int64): 9223372036854775808'u64
+    elif f < 0: uint64(-f) else: uint64(f)
+  if av != 0 and af > high(uint64) div av:
+    return (false, 0) # true product exceeds uint64: int64 overflow
+  let p = av * af
+  # ref checked_mul fails on int64 overflow of the signed product
+  if not negRes and p > uint64(high(int64)): return (false, 0)
+  if negRes and p > 9223372036854775808'u64: return (false, 0)
+  # ref checked_add of the +32768 bias fails on int64 overflow
+  if not negRes and p > uint64(high(int64) - 32768): return (false, 0)
+  let s: int64 =
+    if negRes:
+      if p == 9223372036854775808'u64: low(int64)
+      else: -int64(p)
+    else: int64(p)
+  (true, (s + 32768) shr 16)
+
+proc inv97Lift(t: var seq[int64], targetEven: bool, coeff: int64): bool =
+  ## One inverse lifting stage over the interleaved line (ref inverse_lift).
+  let n = t.len
+  for i in 0..<n:
+    if (i mod 2 == 0) != targetEven or n <= 1: continue
+    let l = if i == 0: t[1] else: t[i-1]
+    let r = if i + 1 < n: t[i+1] else: t[i-1]
+    if (l > 0 and r > high(int64) - l) or (l < 0 and r < low(int64) - l):
+      return false
+    let s = l + r
+    let (ok, adj) = htFixedMul(s, coeff)
+    if not ok: return false
+    if adj > 0 and t[i] < low(int64) + adj: return false
+    if adj < 0 and t[i] > high(int64) + adj: return false
+    t[i] -= adj
+  true
+
+proc inv97(low, high: openArray[int64], first: bool): tuple[ok: bool,
+    t: seq[int64]] =
+  ## Inverse 9/7 line transform (ref inverse_9_7). Inputs are Q16.
+  let nl = low.len; let nh = high.len
+  let n = nl + nh
+  var t = newSeq[int64](n)
+  if n == 0: return (true, t)
+  if n == 1 and not first:
+    t[0] = (if nl == 1: low[0] else: high[0]) shr 1
+    return (true, t)
+  if n == 1:
+    t[0] = if nl == 1: low[0] else: high[0]
+    return (true, t)
+  if first:
+    for i in 0..<nl:
+      t[2*i] = low[i]
+      if 2*i+1 < n: t[2*i+1] = high[i]
+  else:
+    for i in 0..<nh:
+      t[2*i] = high[i]
+      if 2*i+1 < n: t[2*i+1] = low[i]
+  for i in 0..<n:
+    if ((i mod 2 == 0) == first):
+      let (ok, v) = htFixedMul(t[i], J2k97ScaleLo)
+      if not ok: return (false, @[])
+      t[i] = v
+  for i in 0..<n:
+    if ((i mod 2 == 0) != first):
+      let (ok, v) = htFixedMul(t[i], J2k97ScaleHi)
+      if not ok: return (false, @[])
+      t[i] = v
+  for stage in 0..3:
+    let tgtEven = if stage == 0 or stage == 2: first else: not first
+    if not inv97Lift(t, tgtEven, J2k97Lift[stage]):
+      return (false, @[])
+  (true, t)
+
+proc idwt97Tile(D: int, ll: BandBuf, bands: seq[seq[BandBuf]],
+    nx0, ny0, nx1, ny1: openArray[int]): tuple[ok: bool, buf: seq[int64]] =
+  ## Inverse 9/7 DWT over D levels with dense per-level buffers (Q16).
+  ## Same geometry/phase conventions as idwt53Tile.
+  if ll.w != nx1[D] - nx0[D] or ll.h != ny1[D] - ny0[D] or ll.w < 0 or
+      ll.h < 0:
+    return (false, @[])
+  var cur = ll.d
+  var cw = ll.w; var ch = ll.h
+  for l in countdown(D, 1):
+    let r = D - l + 1
+    let W = nx1[l-1] - nx0[l-1]; let H = ny1[l-1] - ny0[l-1]
+    if W <= 0 or H <= 0 or W > 1 shl 24 or H > 1 shl 24:
+      return (false, @[])
+    if cw != nx1[l] - nx0[l] or ch != ny1[l] - ny0[l]:
+      return (false, @[])
+    if r >= bands.len or bands[r].len != 3:
+      return (false, @[])
+    let hl = bands[r][0]; let lh = bands[r][1]; let hh = bands[r][2]
+    if hl.h != ch or lh.w != cw or hh.w != W - cw or hh.h != H - ch:
+      return (false, @[])
+    if hl.w != W - cw or lh.h != H - ch:
+      return (false, @[])
+    let fx = (nx0[l-1] mod 2) == 0
+    let fy = (ny0[l-1] mod 2) == 0
+    var tmp = newSeq[int64](W * H)
+    for j in 0..<H:
+      var row: seq[int64]
+      if j < ch:
+        var lo = newSeq[int64](cw)
+        let base = j * cw
+        for i in 0..<cw: lo[i] = cur[base + i]
+        let rc = inv97(lo, bandRow(hl, hl.y0 + j), fx)
+        if not rc.ok: return (false, @[])
+        row = rc.t
+      else:
+        let bj = j - ch
+        let rc = inv97(bandRow(lh, lh.y0 + bj),
+          bandRow(hh, hh.y0 + bj), fx)
+        if not rc.ok: return (false, @[])
+        row = rc.t
+      if row.len != W: return (false, @[])
+      for i in 0..<W: tmp[j * W + i] = row[i]
+    var outp = newSeq[int64](W * H)
+    for i in 0..<W:
+      var lo = newSeq[int64](ch)
+      var hi = newSeq[int64](H - ch)
+      for j in 0..<ch: lo[j] = tmp[j * W + i]
+      for j in ch..<H: hi[j - ch] = tmp[j * W + i]
+      let rc = inv97(lo, hi, fy)
+      if not rc.ok: return (false, @[])
+      if rc.t.len != H: return (false, @[])
+      for j in 0..<H: outp[j * W + i] = rc.t[j]
+    cur = move(outp)
+    cw = W; ch = H
+  (true, cur)
+
+proc htIct(y, cb, cr: int64): tuple[ok: bool, r, g, b: int64] =
+  ## Inverse ICT (Y Cb Cr -> R G B), Q16 in/out (ref inverse_component_values).
+  ## Guards are sign-split so the guard arithmetic itself cannot overflow.
+  let (ok1, fr) = htFixedMul(cr, 91881'i64)
+  let (ok2, fcb) = htFixedMul(cb, 22553'i64)
+  let (ok3, fcr) = htFixedMul(cr, 46797'i64)
+  let (ok4, fcb2) = htFixedMul(cb, 116130'i64)
+  if not (ok1 and ok2 and ok3 and ok4): return (false, 0, 0, 0)
+  if (fr > 0 and y > high(int64) - fr) or
+      (fr < 0 and y < low(int64) - fr):
+    return (false, 0, 0, 0)
+  let rr = y + fr
+  if (fcb > 0 and y > high(int64) - fcb) or
+      (fcb < 0 and y < low(int64) - fcb):
+    return (false, 0, 0, 0)
+  let g1 = y - fcb
+  if (fcr > 0 and g1 > high(int64) - fcr) or
+      (fcr < 0 and g1 < low(int64) - fcr):
+    return (false, 0, 0, 0)
+  let gg = g1 - fcr
+  if (fcb2 > 0 and y > high(int64) - fcb2) or
+      (fcb2 < 0 and y < low(int64) - fcb2):
+    return (false, 0, 0, 0)
+  let bb = y + fcb2
+  (true, rr, gg, bb)
+
 func clipU8(v: int64, prec: int, signed: bool): uint8 =
   var x = v
   if not signed: x += 1'i64 shl (prec - 1)
@@ -1861,6 +2270,1036 @@ func clipU16(v: int64, prec: int, signed: bool): uint16 =
 type TilePlane = object
   x0, y0, w, h: int
   d: seq[int64]
+  q16*: bool   # samples are Q16 fixed-point (irreversible path)
+
+# ---------- HTJ2K: helpers (refinement/tier1.rs, headers.rs) ----------
+
+func htScup(penult, last: int): int =
+  ## SCUP from the last two cleanup bytes (ref tier1.rs:419).
+  last * 16 + penult mod 16
+
+func htMelExp(st: int): int =
+  if st <= 2: 0
+  elif st <= 5: 1
+  elif st <= 8: 2
+  elif st <= 10: 3
+  elif st == 11: 4
+  else: 5
+
+func htMelNext(st: int, run: bool): int =
+  if run:
+    if st < 12: st + 1 else: 12
+  elif st > 0: st - 1
+  else: 0
+
+func htVlcIndex(ctx, look: int): int = ctx * 128 + look
+
+func htVlcValid(word: uint16, ln: int): bool =
+  ln <= 7 and (word == 0 or ln > 0)
+
+func htUvlcVal(base, suffix, bias: int): int = base + suffix + bias
+
+func htKappaComplete(ubase: int, gamma: bool, exp: int): int =
+  ubase + (if gamma and exp > 2: exp - 2 else: 0)
+
+func htNonInitCtx(west, nw, n, ne: int): int =
+  let w = if (west and 2) != 0: 2 else: 0
+  let l = if (nw and 8) != 0 or (n and 2) != 0: 1 else: 0
+  let r = if (n and 8) != 0 or (ne and 2) != 0: 4 else: 0
+  w + l + r
+
+func htFwdStuffOk(stuffed: bool, v: int): bool = (not stuffed) or v < 128
+func htFwdDataBits(stuffed: bool): int =
+  if stuffed: 7 else: 8
+func htMelStuffOk(prevFF: bool, v: int): bool = (not prevFF) or v <= 0x8F
+func htRevDataBits(needsUnstuff: bool, v: int): int =
+  if needsUnstuff and v mod 128 == 127: 7 else: 8
+
+func htCleanupClaimOk(melByte, vlcByte, termByte: int,
+    v: int): bool =
+  ## MEL/VLC byte-claim overlap rule (ref tier1.rs:495).
+  melByte <= termByte and vlcByte <= termByte and
+    (melByte < vlcByte or
+      (melByte == vlcByte and melByte < termByte and v != 0xFF))
+
+# ---------- HTJ2K: forward MagSgn reader (LSB-first) ----------
+
+type HtMagSgn = object
+  data: seq[uint8]
+  bi: int
+  value: uint8
+  nextBit, lastBit: int
+  hasByte, curPhys, prevFF: bool
+
+proc htMagSgnInit(data: openArray[uint8]): HtMagSgn =
+  var d: seq[uint8] = @[]
+  if data.len > 0: d = @(data.toOpenArray(0, data.len - 1))
+  HtMagSgn(data: d, bi: 0, value: 0, nextBit: 0, lastBit: 0,
+    hasByte: false, curPhys: false, prevFF: false)
+
+proc htMagSgnLoad(r: var HtMagSgn): bool =
+  let stuffed = r.prevFF
+  if r.bi < r.data.len:
+    let v = r.data[r.bi]; inc r.bi
+    if not htFwdStuffOk(stuffed, int(v)): return false
+    r.value = v
+    r.curPhys = true
+  else:
+    r.value = 0xFF
+    r.curPhys = false
+  r.nextBit = 0
+  r.lastBit = htFwdDataBits(stuffed) - 1
+  r.hasByte = true
+  r.prevFF = r.value == 0xFF
+  true
+
+proc htMagSgnBit(r: var HtMagSgn): tuple[ok: bool, bit: bool] =
+  if not r.hasByte or r.nextBit > r.lastBit:
+    if not htMagSgnLoad(r): return (false, false)
+  if not r.hasByte or r.nextBit > r.lastBit or r.nextBit >= 8:
+    return (false, false)
+  let b = ((r.value shr r.nextBit) and 1) != 0
+  inc r.nextBit
+  (true, b)
+
+proc htMagSgnWord(r: var HtMagSgn, count: int): tuple[ok: bool, v: uint64,
+    neg: bool, exp: int] =
+  ## LSB-first word + sign tracking (ref ht_cleanup.rs:63).
+  if count < 0 or count > 64: return (false, 0, false, 0)
+  var w = 0'u64; var neg = false; var exp = 0
+  for bit in 0..<count:
+    let b = htMagSgnBit(r)
+    if not b.ok: return (false, 0, false, 0)
+    if b.bit:
+      w = w or (1'u64 shl bit)
+      # ht_magnitude_sign(bit, decoded): negative iff bit==0 and set
+      if bit == 0: neg = true
+      exp = bit + 1
+  (true, w, neg, exp)
+
+proc htMagSgnFinish(r: var HtMagSgn): bool =
+  ## Drain pending physical bits; the padding must be all ones
+  ## (ref :139 `if !read_bit -> Err`). Fill bytes past EOF are not
+  ## physical and are not drained (ref has_pending_physical_bits).
+  while (r.hasByte and r.curPhys and r.nextBit <= r.lastBit) or
+      r.bi < r.data.len:
+    let b = htMagSgnBit(r)
+    if not b.ok: return false
+    if not b.bit: return false
+  true
+
+# ---------- HTJ2K: forward MEL reader (MSB-first) ----------
+
+type HtMel = object
+  data: seq[uint8]
+  bi: int
+  value: uint8
+  nextBit: int   # -1 = need load
+  prevFF: bool
+
+proc htMelLoad(r: var HtMel): bool =
+  if r.bi >= r.data.len:
+    r.nextBit = -1
+    return true # exhausted: reads fail, callers treat as needed
+  var v = r.data[r.bi]
+  if r.bi + 1 == r.data.len: v = v or 0x0F
+  if not htMelStuffOk(r.prevFF, int(v)): return false
+  r.value = v
+  r.nextBit = if r.prevFF: 6 else: 7
+  r.prevFF = v == 0xFF
+  inc r.bi
+  true
+
+proc htMelBit(r: var HtMel): tuple[ok: bool, bit: bool] =
+  if r.nextBit < 0:
+    if not htMelLoad(r): return (false, false)
+  if r.nextBit < 0 or r.nextBit >= 8: return (false, false)
+  let b = ((r.value shr r.nextBit) and 1) != 0
+  dec r.nextBit
+  (true, b)
+
+proc htMelInit(data: openArray[uint8]): tuple[ok: bool, r: HtMel] =
+  var d: seq[uint8] = @[]
+  if data.len > 0: d = @(data.toOpenArray(0, data.len - 1))
+  if d.len == 0: return (false, HtMel())
+  var r = HtMel(data: d, bi: 0, value: 0, nextBit: -1, prevFF: false)
+  if not htMelLoad(r): return (false, r)
+  (true, r)
+
+# ---------- HTJ2K: reverse VLC reader ----------
+
+type HtVlc = object
+  data: seq[uint8]
+  cur: int       # current byte index (moves downward)
+  value: uint8
+  nextBit: int
+  lastBit: int
+  hasByte: bool
+  laterUnstuff: bool  # next (higher) byte needs unstuffing check
+
+proc htVlcInit(data: openArray[uint8]): tuple[ok: bool, r: HtVlc] =
+  var d: seq[uint8] = @[]
+  if data.len > 0: d = @(data.toOpenArray(0, data.len - 1))
+  if d.len < 2: return (false, HtVlc())
+  let cb = d.len - 2
+  let v = d[cb]
+  let nib = int(v shr 4)
+  var r = HtVlc(data: d, cur: cb, value: v, nextBit: 4,
+    lastBit: (if (nib and 0x07) == 0x07: 6 else: 7),
+    hasByte: true, laterUnstuff: (int(v) or 0x0F) > 0x8F)
+  (true, r)
+
+proc htVlcLoadPrev(r: var HtVlc): bool =
+  if r.cur == 0:
+    r.hasByte = false
+    return true
+  dec r.cur
+  r.value = r.data[r.cur]
+  r.nextBit = 0
+  r.lastBit = htRevDataBits(r.laterUnstuff, int(r.value)) - 1
+  r.laterUnstuff = int(r.value) > 0x8F
+  true
+
+proc htVlcBit(r: var HtVlc): tuple[ok: bool, bit: bool] =
+  if not r.hasByte or r.nextBit >= 8: return (false, false)
+  let b = ((r.value shr r.nextBit) and 1) != 0
+  inc r.nextBit
+  if r.nextBit > r.lastBit:
+    if not htVlcLoadPrev(r): return (false, false)
+  (true, b)
+
+proc htVlcPeek(r: HtVlc, count: int, termByte: int,
+    melLast: int): tuple[ok: bool, v: int] =
+  ## Non-consuming LSB-first peek of up to `count` bits (ref :626 peek_vlc).
+  ## Per iteration: claim-check the current position, then read (loading
+  ## the previous byte first when exhausted, exactly like read_bit).
+  var cp = r
+  var v = 0
+  for bit in 0..<count:
+    if bit >= 16: break
+    if not cp.hasByte: break
+    # claim check on the current position (before any load)
+    let cb = cp.cur
+    if cb < 0 or cb >= cp.data.len: break
+    let vv = cp.data[cb]
+    var claimOk = false
+    if melLast >= 0:
+      claimOk = melLast <= cb and cb <= termByte and
+        (melLast < cb or
+          (melLast == cb and cb < termByte and int(vv) != 0xFF))
+    else:
+      claimOk = cb <= termByte
+    if not claimOk: break
+    # read_bit with load (no post-load claim re-check, like the reference)
+    if cp.nextBit > cp.lastBit or cp.nextBit >= 8:
+      if cp.cur == 0: break
+      dec cp.cur
+      cp.value = cp.data[cp.cur]
+      cp.nextBit = 0
+      cp.lastBit = htRevDataBits(cp.laterUnstuff, int(cp.value)) - 1
+      cp.laterUnstuff = int(cp.value) > 0x8F
+      if cp.nextBit > cp.lastBit or cp.nextBit >= 8: break
+    let b = ((cp.value shr cp.nextBit) and 1) != 0
+    if b: v = v or (1 shl bit)
+    inc cp.nextBit
+  (true, v)
+
+# ---------- HTJ2K: cleanup readers (MEL + VLC with claim tracking) ----------
+
+type HtCleanupRd = object
+  mel: HtMel
+  vlc: HtVlc
+  melLast: int     # last claimed MEL byte, -1 none
+  vlcLast: int     # last claimed VLC byte, -1 none
+  termByte: int    # vlc input len - 2
+  melState: int
+  melZero: int
+  melTermOne: bool
+
+proc htCleanupRdInit(melData, vlcData: openArray[uint8]): tuple[ok: bool,
+    r: HtCleanupRd] =
+  let (mok, m) = htMelInit(melData)
+  if not mok: return (false, HtCleanupRd())
+  let (vok, v) = htVlcInit(vlcData)
+  if not vok: return (false, HtCleanupRd())
+  var r = HtCleanupRd(mel: m, vlc: v, melLast: -1, vlcLast: -1,
+    termByte: vlcData.len - 2, melState: 0, melZero: 0, melTermOne: false)
+  (true, r)
+
+proc htCanClaimFwd(r: HtCleanupRd, byte: int): bool =
+  ## Forward (MEL) claim check (ref :554 can_claim_byte Forward).
+  let v =
+    if byte < 0 or byte >= r.vlc.data.len: return false
+    else: r.vlc.data[byte]
+  if r.vlcLast >= 0:
+    # ht_cleanup_byte_claims_valid(byte, vlcLast, term, value)
+    return byte <= r.vlcLast and r.vlcLast <= r.termByte and
+      (byte < r.vlcLast or
+        (byte == r.vlcLast and r.vlcLast < r.termByte and int(v) != 0xFF))
+  byte <= r.termByte
+
+proc htCanClaimRev(r: HtCleanupRd, byte: int): bool =
+  ## Reverse (VLC) claim check.
+  let v =
+    if byte < 0 or byte >= r.vlc.data.len: return false
+    else: r.vlc.data[byte]
+  if r.melLast >= 0:
+    return r.melLast <= byte and byte <= r.termByte and
+      (r.melLast < byte or
+        (r.melLast == byte and byte < r.termByte and int(v) != 0xFF))
+  byte <= r.termByte
+
+proc htReadMel(r: var HtCleanupRd): tuple[ok: bool, bit: bool] =
+  # MEL next position must exist; claim the byte forward, then read.
+  if r.mel.nextBit < 0:
+    if not htMelLoad(r.mel): return (false, false)
+  if r.mel.nextBit < 0: return (false, false)
+  let curByte = r.mel.bi - 1
+  if not htCanClaimFwd(r, curByte): return (false, false)
+  let b = htMelBit(r.mel)
+  if not b.ok: return (false, false)
+  r.melLast = curByte
+  (true, b.bit)
+
+proc htReadVlc(r: var HtCleanupRd): tuple[ok: bool, bit: bool] =
+  if not r.vlc.hasByte: return (false, false)
+  let curByte = r.vlc.cur
+  if not htCanClaimRev(r, curByte): return (false, false)
+  let b = htVlcBit(r.vlc)
+  if not b.ok: return (false, false)
+  r.vlcLast = curByte
+  (true, b.bit)
+
+proc htMelEvent(r: var HtCleanupRd): tuple[ok: bool, run: bool] =
+  ## MEL run-length event (ref :731). Returns run=true for a 1-run
+  ## (terminating or zero-count), false for a 0-run continuation... exactly:
+  ## true = event is a one (emit), false = zero (skip). Mirrors ref logic.
+  if r.melZero > 0:
+    dec r.melZero
+    return (true, false)
+  if r.melTermOne:
+    r.melTermOne = false
+    return (true, true)
+  if r.melState > 12: return (false, false)
+  let e = htMelExp(r.melState)
+  let b = htReadMel(r)
+  if not b.ok: return (false, false)
+  if b.bit:
+    r.melZero = 1 shl e
+    r.melState = htMelNext(r.melState, true)
+  else:
+    var suffix = 0
+    for _ in 0..<e:
+      let sb = htReadMel(r)
+      if not sb.ok: return (false, false)
+      suffix = (suffix shl 1) or (if sb.bit: 1 else: 0)
+    r.melZero = suffix
+    r.melTermOne = true
+    r.melState = htMelNext(r.melState, false)
+  if r.melZero > 0:
+    dec r.melZero
+    return (true, false)
+  r.melTermOne = false
+  (true, true)
+
+proc htReadPrefix(r: var HtCleanupRd): tuple[ok: bool, base, suffixLen,
+    prefixLen: int] =
+  let b0 = htReadVlc(r)
+  if not b0.ok: return (false, 0, 0, 0)
+  if b0.bit: return (true, 1, 0, 1)
+  let b1 = htReadVlc(r)
+  if not b1.ok: return (false, 0, 0, 0)
+  if b1.bit: return (true, 2, 0, 2)
+  let b2 = htReadVlc(r)
+  if not b2.ok: return (false, 0, 0, 0)
+  if b2.bit: (true, 3, 1, 3)
+  else: (true, 5, 5, 3)
+
+proc htReadSuffix(r: var HtCleanupRd, length: int): tuple[ok: bool, v: int] =
+  var v = 0
+  for bit in 0..<length:
+    if bit >= 8: return (false, 0)
+    let b = htReadVlc(r)
+    if not b.ok: return (false, 0)
+    if b.bit: v = v or (1 shl bit)
+  (true, v)
+
+proc htQuadWord(r: var HtCleanupRd, initial: bool,
+    context: int): tuple[ok: bool, word: uint16] =
+  ## VLC quad word lookup (ref :831).
+  if context < 0 or context > 7: return (false, 0)
+  let pk = htVlcPeek(r.vlc, 7, r.termByte, r.melLast)
+  if not pk.ok: return (false, 0)
+  let look = pk.v and 0x7F
+  let idx = htVlcIndex(context, look)
+  if idx < 0 or idx >= 1024: return (false, 0)
+  var word = if initial: HT_VLC_INITIAL[idx] else: HT_VLC_NON_INITIAL[idx]
+  if context == 0:
+    let ev = htMelEvent(r)
+    if not ev.ok: return (false, 0)
+    if not ev.run: word = 0
+  let ln = int(word and 0x07)
+  if not htVlcValid(word, ln): return (false, 0)
+  # advance by length (consuming reads, which claim bytes)
+  for _ in 0..<ln:
+    let b = htReadVlc(r)
+    if not b.ok: return (false, 0)
+  (true, word)
+
+proc htUvlcByte(base, suffix, bias: int): tuple[ok: bool, v: int] =
+  let v = htUvlcVal(base, suffix, bias)
+  if v < 0 or v > 255: return (false, 0)
+  (true, v)
+
+proc htPrefixValue(r: var HtCleanupRd): tuple[ok: bool, value,
+    prefixLen: int] =
+  let p = htReadPrefix(r)
+  if not p.ok: return (false, 0, 0)
+  let s = htReadSuffix(r, p.suffixLen)
+  if not s.ok: return (false, 0, 0)
+  (true, p.base + s.v, p.prefixLen)
+
+proc htDecodeInitU(r: var HtCleanupRd,
+    mode: int): tuple[ok: bool, u0, u1: int] =
+  ## Initial-row U values for a quad pair (ref :953).
+  var vs = [1, 1]
+  case mode
+  of 0: discard
+  of 1, 2:
+    let pv = htPrefixValue(r)
+    if not pv.ok: return (false, 0, 0)
+    vs[if mode == 1: 0 else: 1] = pv.value + 1
+  of 3:
+    let p0 = htReadPrefix(r)
+    if not p0.ok: return (false, 0, 0)
+    if p0.prefixLen > 2:
+      let b = htReadVlc(r)
+      if not b.ok: return (false, 0, 0)
+      let s0 = htReadSuffix(r, p0.suffixLen)
+      if not s0.ok: return (false, 0, 0)
+      vs[1] = (if b.bit: 1 else: 0) + 2
+      vs[0] = p0.base + s0.v + 1
+    else:
+      let s0 = htReadSuffix(r, p0.suffixLen)
+      if not s0.ok: return (false, 0, 0)
+      let p1 = htReadPrefix(r)
+      if not p1.ok: return (false, 0, 0)
+      let s1 = htReadSuffix(r, p1.suffixLen)
+      if not s1.ok: return (false, 0, 0)
+      vs[0] = p0.base + s0.v + 1
+      vs[1] = p1.base + s1.v + 1
+  of 4:
+    let p0 = htReadPrefix(r)
+    if not p0.ok: return (false, 0, 0)
+    let p1 = htReadPrefix(r)
+    if not p1.ok: return (false, 0, 0)
+    let s0 = htReadSuffix(r, p0.suffixLen)
+    if not s0.ok: return (false, 0, 0)
+    let s1 = htReadSuffix(r, p1.suffixLen)
+    if not s1.ok: return (false, 0, 0)
+    let u0 = htUvlcByte(p0.base, s0.v, 3)
+    if not u0.ok: return (false, 0, 0)
+    let u1 = htUvlcByte(p1.base, s1.v, 3)
+    if not u1.ok: return (false, 0, 0)
+    vs[0] = u0.v; vs[1] = u1.v
+  else: return (false, 0, 0)
+  (true, vs[0], vs[1])
+
+proc htDecodeNonInitU(r: var HtCleanupRd,
+    mode: int): tuple[ok: bool, u0, u1: int] =
+  ## Non-initial-row U values (ref :1021).
+  var vs = [1, 1]
+  case mode
+  of 0: discard
+  of 1, 2:
+    let pv = htPrefixValue(r)
+    if not pv.ok: return (false, 0, 0)
+    vs[if mode == 1: 0 else: 1] = pv.value + 1
+  of 3:
+    let p0 = htReadPrefix(r)
+    if not p0.ok: return (false, 0, 0)
+    let p1 = htReadPrefix(r)
+    if not p1.ok: return (false, 0, 0)
+    let s0 = htReadSuffix(r, p0.suffixLen)
+    if not s0.ok: return (false, 0, 0)
+    let s1 = htReadSuffix(r, p1.suffixLen)
+    if not s1.ok: return (false, 0, 0)
+    let u0 = htUvlcByte(p0.base, s0.v, 1)
+    if not u0.ok: return (false, 0, 0)
+    let u1 = htUvlcByte(p1.base, s1.v, 1)
+    if not u1.ok: return (false, 0, 0)
+    vs[0] = u0.v; vs[1] = u1.v
+  else: return (false, 0, 0)
+  (true, vs[0], vs[1])
+
+proc htCleanupFinish(r: HtCleanupRd): bool =
+  ## Final MEL/VLC overlap validation (ref :1063).
+  if r.melLast >= 0 and r.vlcLast >= 0:
+    let v =
+      if r.melLast < 0 or r.melLast >= r.vlc.data.len: return false
+      else: r.vlc.data[r.melLast]
+    return htCleanupClaimOk(r.melLast, r.vlcLast, r.termByte, int(v))
+  true
+
+# ---------- HTJ2K: cleanup metadata (quad list) ----------
+
+type HtQuad = object
+  x*, y*: int
+  ctx*: int
+  initialRow*: bool
+  sig*: int       # significance nibble
+  embMag*: int    # embedded_magnitude nibble
+  embMask*: int   # embedded_bit_mask nibble
+  uOff*: bool
+  uBase*: int
+  codeBits*: int
+
+proc htDecodeWords(rd: var HtCleanupRd, curPat: var seq[int],
+    leftCtx: var int, prevPat: openArray[int], quadsPerRow, pair: int,
+    initial: bool): tuple[ok: bool, words: array[2, uint16],
+    ctxs: array[2, int]] =
+  ## Decode two VLC words + contexts for a quad pair (ref :69).
+  var words = [0'u16, 0'u16]
+  var ctxs = [0, 0]
+  var member = 0
+  while member < 2:
+    let qi = pair + member
+    if qi >= quadsPerRow: break
+    var context: int
+    if initial:
+      context = leftCtx
+    else:
+      let n = prevPat[qi]
+      let nw = if qi > 0: prevPat[qi - 1] else: 0
+      let ne = if qi + 1 < prevPat.len: prevPat[qi + 1] else: 0
+      context = htNonInitCtx(leftCtx, nw, n, ne)
+    let w = htQuadWord(rd, initial, context)
+    if not w.ok: return (false, words, ctxs)
+    let sig = int((w.word shr 4) and 0x0F)
+    words[member] = w.word
+    ctxs[member] = context
+    curPat[qi] = sig
+    if initial:
+      leftCtx = (sig and 0x01) or ((sig and 0x0E) shr 1)
+    elif (sig and 0x0C) != 0:
+      leftCtx = 2
+    else:
+      leftCtx = 0
+    inc member
+  (true, words, ctxs)
+
+proc htEmitQuad(rd: var HtCleanupRd, quads: var seq[HtQuad],
+    sigCount: var int, quadIdx, quadRow, w, h, maxU: int,
+    word: uint16, context, sig, uVal: int,
+    initial: bool): bool =
+  ## Validate + append one quad's metadata (ref :150).
+  if uVal < 1 or uVal > maxU: return false
+  let x = quadIdx * 2; let y = quadRow * 2
+  if x >= w or y >= h or (x mod 2) != 0 or (y mod 2) != 0:
+    return false
+  for s in 0..<4:
+    if (sig and (1 shl s)) != 0:
+      let sx = x + (s shr 1); let sy = y + (s and 1)
+      if not (s < 4 and sx < w and sy < h): return false
+      inc sigCount
+      if sigCount < 0 or sigCount > 65535: return false
+  quads.add(HtQuad(x: x, y: y, ctx: context, initialRow: initial,
+    sig: sig and 0x0F, embMag: int((word shr 8) and 0x0F),
+    embMask: int((word shr 12) and 0x0F), uOff: (word and 0x08) != 0,
+    uBase: uVal, codeBits: int(word and 0x07)))
+  true
+
+proc htDecodePair(rd: var HtCleanupRd, quads: var seq[HtQuad],
+    curPat: var seq[int], sigCount: var int, leftCtx: var int,
+    prevPat: openArray[int], quadsPerRow, pair, quadRow, w, h,
+    maxU: int, initial: bool): bool =
+  ## Decode one quad pair: words, mode, U values, emit (ref :270).
+  var words: array[2, uint16]
+  var ctxs: array[2, int]
+  let wr = htDecodeWords(rd, curPat, leftCtx, prevPat, quadsPerRow, pair,
+    initial)
+  if not wr.ok: return false
+  words = wr.words; ctxs = wr.ctxs
+  var mode = 0
+  if (words[0] and 0x08) != 0: mode = mode or 1
+  if (words[1] and 0x08) != 0: mode = mode or 2
+  if initial and mode == 3:
+    let ev = htMelEvent(rd)
+    if not ev.ok: return false
+    if ev.run: mode = 4
+  var u0, u1: int
+  if initial:
+    let ur = htDecodeInitU(rd, mode)
+    if not ur.ok: return false
+    u0 = ur.u0; u1 = ur.u1
+  else:
+    let ur = htDecodeNonInitU(rd, mode)
+    if not ur.ok: return false
+    u0 = ur.u0; u1 = ur.u1
+  let uvals = [u0, u1]
+  var member = 0
+  while member < 2:
+    let qi = pair + member
+    if qi >= quadsPerRow: break
+    if not htEmitQuad(rd, quads, sigCount, qi, quadRow, w, h, maxU,
+        words[member], ctxs[member], curPat[qi], uvals[member], initial):
+      return false
+    inc member
+  true
+
+proc htDecodeMetadata(rd: var HtCleanupRd, w, h, maxU: int): tuple[ok: bool,
+    quads: seq[HtQuad]] =
+  ## Full cleanup metadata: rows of quad pairs (ref :392+).
+  ## maximum_u is bounded by part15_cleanup_u_bound: 1..75
+  ## (missing+skipped+2 capped by magnitude bound 74 + 1).
+  if w <= 0 or h <= 0 or w > 4096 or h > 4096 or w * h > 4096:
+    return (false, @[])
+  if maxU < 1 or maxU > 75: return (false, @[])
+  let qpr = (w + 1) div 2
+  if qpr <= 0 or qpr > 32768: return (false, @[])
+  let qrows = (h + 1) div 2
+  var quads: seq[HtQuad] = @[]
+  var prevPat = newSeq[int](qpr)
+  var sigCount = 0
+  for qr in 0..<qrows:
+    let initial = qr == 0
+    var curPat = newSeq[int](qpr)
+    var leftCtx = 0
+    var pair = 0
+    while pair < qpr:
+      if not htDecodePair(rd, quads, curPat, sigCount, leftCtx, prevPat,
+          qpr, pair, qr, w, h, maxU, initial):
+        return (false, @[])
+      pair += 2
+    prevPat = curPat
+  # MEL/VLC overlap validation (ref ht_metadata.rs:700 readers.finish()).
+  if not htCleanupFinish(rd): return (false, @[])
+  (true, quads)
+
+# ---------- HTJ2K: cleanup plane reconstruction ----------
+
+proc htCenterMag(bin: uint64, neg: bool, exp0, magBits,
+    decodedBp: int, embedded: bool): tuple[ok: bool, mag: int64, neg: bool,
+    exp: int] =
+  ## Center a decoded magnitude bin (ref try_center_ht_word :139).
+  ## Returns int64; fails cleanly on overflow or zero result.
+  if magBits < 0 or magBits > 74: return (false, 0, false, 0)
+  if decodedBp < 1 or decodedBp > 292: return (false, 0, false, 0)
+  var w = bin
+  var e = exp0
+  if embedded:
+    if magBits >= 64: return (false, 0, false, 0)
+    let add = 1'u64 shl magBits
+    if w > high(uint64) - add: return (false, 0, false, 0)
+    w += add
+    e = magBits + 1
+  if (w and 1) == 0:
+    if w == high(uint64): return (false, 0, false, 0)
+    w += 1
+    e = max(e, 1)
+  if w > high(uint64) - 2: return (false, 0, false, 0)
+  let centered = w + 2
+  let shift = decodedBp - 1
+  var value: uint64
+  if shift <= 0:
+    value = centered shr 1
+  else:
+    if shift - 1 > 62: return (false, 0, false, 0)
+    if centered > (high(uint64) shr (shift - 1)):
+      return (false, 0, false, 0)
+    value = centered shl (shift - 1)
+  if value == 0 or value > uint64(high(int64)):
+    return (false, 0, false, 0)
+  (true, int64(value), neg, e)
+
+proc htReconstructMag(rd: var HtMagSgn, completedU: int, embeddedBit,
+    embeddedVal: bool, decodedBp: int): tuple[ok: bool, mag: int64,
+    neg: bool, exp: int] =
+  ## Reconstruct one coefficient magnitude (ref :276).
+  if completedU < 1 or completedU > 75: return (false, 0, false, 0)
+  if decodedBp < 1 or decodedBp > 292: return (false, 0, false, 0)
+  let magBits = completedU - (if embeddedBit: 1 else: 0)
+  if magBits < 0 or magBits > 75: return (false, 0, false, 0)
+  let (ok, word, neg, exp0) = htMagSgnWord(rd, magBits)
+  if not ok: return (false, 0, false, 0)
+  htCenterMag(word, neg, exp0, magBits, decodedBp, embeddedVal)
+
+proc htCleanupPlane(w, h, maxU, decodedBp: int, quads: openArray[HtQuad],
+    magSgnBytes: openArray[uint8]): tuple[ok: bool, plane: CbPlane] =
+  ## Full HT cleanup: MagSgn reads per significant sample + centering.
+  ## Returns the reconstructed plane (ref :603).
+  if w <= 0 or h <= 0 or w * h > 4096: return (false, CbPlane())
+  if maxU < 1 or maxU > 75: return (false, CbPlane())
+  if decodedBp < 1 or decodedBp > 292: return (false, CbPlane())
+  var plane = CbPlane(w: w, h: h, c: newSeq[CbCoeff](w * h))
+  for i in 0..<plane.c.len:
+    plane.c[i] = CbCoeff(mag: 0, neg: false, sig: false, refined: false,
+      legBp: -1)
+  var rd = htMagSgnInit(magSgnBytes)
+  let qpr = (w + 1) div 2
+  if qpr <= 0: return (false, CbPlane())
+  var prevExp = newSeq[int](qpr + 1)
+  var curExp = newSeq[int](qpr + 1)
+  for qi in 0..<quads.len:
+    let q = quads[qi]
+    let col = qi mod qpr
+    let ncol = col + 1
+    if col == 0:
+      for i in 0..<curExp.len: curExp[i] = 0
+    var completed: int
+    if q.initialRow:
+      if q.uBase > maxU: return (false, CbPlane())
+      completed = q.uBase
+    else:
+      # ref complete_ht_kappa: u_base==0 and maximum_u bounds enforced.
+      if q.uBase == 0: return (false, CbPlane())
+      if col >= prevExp.len or ncol >= prevExp.len:
+        return (false, CbPlane())
+      let gamma = (q.sig and (q.sig - 1)) != 0
+      let e = max(prevExp[col], prevExp[ncol])
+      completed = htKappaComplete(q.uBase, gamma, e)
+      if completed > maxU: return (false, CbPlane())
+    for s in 0..<4:
+      if (q.sig and (1 shl s)) == 0: continue
+      let sx = q.x + (s shr 1); let sy = q.y + (s and 1)
+      if sx >= w or sy >= h: return (false, CbPlane())
+      let embBit = (q.embMask and (1 shl s)) != 0
+      let embVal = (q.embMag and (1 shl s)) != 0
+      let rc = htReconstructMag(rd, completed, embBit, embVal,
+        decodedBp)
+      if not rc.ok: return (false, CbPlane())
+      let idx = sy * w + sx
+      if plane.c[idx].sig: return (false, CbPlane())
+      plane.c[idx].mag = rc.mag
+      plane.c[idx].neg = rc.neg
+      plane.c[idx].sig = true
+      plane.c[idx].refined = false
+      plane.c[idx].legBp = -1
+      if s == 1:
+        if col < curExp.len: curExp[col] = max(curExp[col], rc.exp)
+      elif s == 3:
+        if ncol < curExp.len: curExp[ncol] = rc.exp
+    if ncol == qpr:
+      let tmp = prevExp; prevExp = curExp; curExp = tmp
+  if not htMagSgnFinish(rd): return (false, CbPlane())
+  (true, plane)
+
+# ---------- HTJ2K: refinement readers + passes ----------
+
+type HtRefFwd = object
+  data: seq[uint8]
+  bi: int
+  value: uint8
+  nextBit, lastBit: int
+  hasByte, prevFF: bool
+  curByte: int       # index of loaded byte, -1 for zero fill
+  claimed: seq[uint8]  # per-byte consumed-physical-bit mask
+
+proc htRefFwdInit(data: openArray[uint8]): HtRefFwd =
+  var d: seq[uint8] = @[]
+  if data.len > 0: d = @(data.toOpenArray(0, data.len - 1))
+  HtRefFwd(data: d, bi: 0, value: 0, nextBit: 0, lastBit: 0,
+    hasByte: false, prevFF: false, curByte: -1, claimed: newSeq[uint8](d.len))
+
+proc htRefFwdLoad(r: var HtRefFwd): bool =
+  let stuffed = r.prevFF
+  if r.bi < r.data.len:
+    let v = r.data[r.bi]
+    r.curByte = r.bi
+    inc r.bi
+    if stuffed and (int(v) and 0x80) != 0: return false
+    r.value = v
+  else:
+    # past EOF: zero fill, non-physical (ref :152-156)
+    r.value = 0
+    r.curByte = -1
+  r.nextBit = 0
+  r.lastBit = if stuffed: 6 else: 7
+  r.hasByte = true
+  r.prevFF = r.value == 0xFF
+  true
+
+proc htRefFwdBit(r: var HtRefFwd): tuple[ok: bool, bit: bool] =
+  if not r.hasByte or r.nextBit > r.lastBit:
+    if not htRefFwdLoad(r): return (false, false)
+  if not r.hasByte or r.nextBit > r.lastBit or r.nextBit >= 8:
+    return (false, false)
+  let b = ((r.value shr r.nextBit) and 1) != 0
+  if r.curByte >= 0 and r.curByte < r.claimed.len:
+    r.claimed[r.curByte] = r.claimed[r.curByte] or (1'u8 shl r.nextBit)
+  inc r.nextBit
+  (true, b)
+
+type HtRefRev = object
+  data: seq[uint8]
+  cur: int
+  value: uint8
+  nextBit, lastBit: int
+  hasByte: bool
+  laterUnstuff: bool
+  claimed: seq[uint8]  # per-byte consumed-physical-bit mask
+  stuffed: seq[uint8]  # per-byte unstuffing-trimmed bit mask (0x80)
+
+proc htRefRevLoad(r: var HtRefRev): bool =
+  if r.cur == 0:
+    r.hasByte = false
+    r.value = 0
+    r.nextBit = 0
+    r.lastBit = 7
+    return true
+  dec r.cur
+  r.value = r.data[r.cur]
+  r.nextBit = 0
+  r.lastBit =
+    if r.laterUnstuff and (int(r.value) and 0x7F) == 0x7F: 6 else: 7
+  if r.lastBit == 6 and r.cur < r.stuffed.len:
+    # unstuffing-trimmed MSB excluded from coverage (ref read_reverse).
+    r.stuffed[r.cur] = r.stuffed[r.cur] or 0x80'u8
+  r.laterUnstuff = int(r.value) > 0x8F
+  r.hasByte = true
+  true
+
+proc htRefRevBit(r: var HtRefRev): tuple[ok: bool, bit: bool] =
+  if not r.hasByte or r.nextBit > r.lastBit:
+    if not htRefRevLoad(r): return (false, false)
+  # past start: zero fill (ref :248-252)
+  if not r.hasByte:
+    return (true, false)
+  if r.nextBit >= 8: return (false, false)
+  let b = ((r.value shr r.nextBit) and 1) != 0
+  if r.cur >= 0 and r.cur < r.claimed.len:
+    r.claimed[r.cur] = r.claimed[r.cur] or (1'u8 shl r.nextBit)
+  inc r.nextBit
+  (true, b)
+
+proc htRefRevInit(data: openArray[uint8]): HtRefRev =
+  var d: seq[uint8] = @[]
+  if data.len > 0: d = @(data.toOpenArray(0, data.len - 1))
+  var r = HtRefRev(data: d, cur: d.len, value: 0, nextBit: 0, lastBit: 7,
+    hasByte: false, laterUnstuff: true, claimed: newSeq[uint8](d.len),
+    stuffed: newSeq[uint8](d.len))
+  # init loads the last byte (ref :191)
+  discard htRefRevLoad(r)
+  r
+
+proc htRefFinish(fwd: HtRefFwd, rev: HtRefRev,
+    data: openArray[uint8]): bool =
+  ## Refinement coverage validation (ref readers finish :457): every SET
+  ## bit of the segment is consumed exactly once; stuffing-trimmed MSBs
+  ## are excluded. Fail-closed on overlap or trailing garbage.
+  if fwd.claimed.len != data.len or rev.claimed.len != data.len or
+      rev.stuffed.len != data.len:
+    return false
+  for i in 0..<data.len:
+    if (fwd.claimed[i] and rev.claimed[i]) != 0: return false
+    if (int(data[i]) and
+        not int(fwd.claimed[i] or rev.claimed[i] or rev.stuffed[i])) != 0:
+      return false
+  true
+
+proc htRefMagPass(plane: var CbPlane, cleanupSig: openArray[bool],
+    rd: var HtRefRev, decodedBp: int): bool =
+  ## HT magnitude refinement (ref ht_refinement.rs:116). Refines every
+  ## coefficient significant at cleanup time.
+  if decodedBp < 2 or decodedBp > 62: return false
+  let delta: int64 =
+    if decodedBp == 2: 1 else: 1'i64 shl (decodedBp - 3)
+  var y0 = 0
+  while y0 < plane.h:
+    let rows = min(4, plane.h - y0)
+    for x in 0..<plane.w:
+      for rr in 0..<rows:
+        let y = y0 + rr
+        let i = y * plane.w + x
+        if not cleanupSig[i]: continue
+        let b = htRefRevBit(rd)
+        if not b.ok: return false
+        let adj =
+          if decodedBp == 2 and b.bit: 0'i64 else: delta
+        if not plane.c[i].sig: return false
+        if b.bit:
+          if plane.c[i].mag > high(int64) - adj: return false
+          plane.c[i].mag += adj
+        else:
+          if plane.c[i].mag < adj: return false
+          plane.c[i].mag -= adj
+          if plane.c[i].mag == 0: return false
+        plane.c[i].refined = true
+    y0 += rows
+  true
+
+proc htRefSigPass(plane: var CbPlane, disc: var CbPlane,
+    pending: var seq[tuple[x, y: int]], rd: var HtRefFwd,
+    orient: J2kOrient, vcausal: bool, decodedBp: int): bool =
+  ## HT significance propagation (ref :339). Discovery on a copy,
+  ## signs applied in pending order. Stripe loops with 4-wide patches.
+  let mag: int64 =
+    if decodedBp < 2 or decodedBp > 32: return false
+    else: int64((3 shl (decodedBp - 2)) shr 1)
+  var y0 = 0
+  while y0 < plane.h:
+    let rows = min(4, plane.h - y0)
+    var x0 = 0
+    while x0 < plane.w:
+      let x1 = min(x0 + 4, plane.w)
+      pending.setLen(0)
+      # discovery
+      for x in x0..<x1:
+        for rr in 0..<rows:
+          let y = y0 + rr
+          let i = y * plane.w + x
+          if disc.c[i].sig: continue
+          var hs, vs, ds, hb, vb: int
+          cbNeigh(disc, x, y, vcausal, hs, vs, ds, hb, vb)
+          if hs + vs + ds == 0: continue
+          let b = htRefFwdBit(rd)
+          if not b.ok: return false
+          if b.bit:
+            disc.c[i].mag = mag
+            disc.c[i].neg = false
+            disc.c[i].sig = true
+            disc.c[i].refined = false
+            disc.c[i].legBp = -1
+            pending.add((x, y))
+      # signs in pending order
+      for (x, y) in pending:
+        let b = htRefFwdBit(rd)
+        if not b.ok: return false
+        let i = y * plane.w + x
+        plane.c[i].mag = mag
+        plane.c[i].neg = b.bit
+        plane.c[i].sig = true
+        plane.c[i].refined = false
+        plane.c[i].legBp = -1
+      x0 = x1
+    y0 += rows
+  true
+
+# ---------- HTJ2K: block segment routing ----------
+
+proc htSkipSeg(w: var HtWork, passes: int): bool =
+  ## Consume symbol-less HT passes (ref skip_high_throughput_segment).
+  if passes <= 0 or passes > 2: return false
+  let phase = w.nextPass mod 3
+  if phase == 0 and passes != 1: return false
+  if phase != 0 and passes > 3 - phase: return false
+  if w.nextPass + passes > w.maxPasses: return false
+  if phase == 0:
+    # Empty cleanup slot: allowed once (no multiple HT sets in v1).
+    if w.setsSeen > 0: return false
+    w.hasCleanup = false
+    w.refData = @[]
+    w.refPasses = 0
+  else:
+    if w.hasCleanup: return false
+  w.nextPass += passes
+  true
+
+proc htSplitCleanup(seg: openArray[uint8]): tuple[ok: bool, magEnd, scup: int] =
+  ## Split an HT cleanup segment: SCUP from last two bytes
+  ## (ref parse_ht_block_segments :163).
+  if seg.len < 2 or seg.len > 65534: return (false, 0, 0)
+  let scup = htScup(int(seg[seg.len - 2]), int(seg[seg.len - 1]))
+  if scup < 2 or scup > 4079 or scup > seg.len: return (false, 0, 0)
+  (true, seg.len - scup, scup)
+
+proc htDecodeCleanupSeg(w: var HtWork, seg: openArray[uint8]): bool =
+  ## Decode one HT cleanup segment (ref decode_high_throughput_segments
+  ## with cleanup_passes=1, refinement_passes=0).
+  if w.setsSeen > 0: return false
+  if w.nextPass + 1 > w.maxPasses: return false
+  let sp = htSplitCleanup(seg)
+  if not sp.ok: return false
+  let magEnd = sp.magEnd
+  var mel: seq[uint8] = @[]
+  var vlc: seq[uint8] = @[]
+  var mag: seq[uint8] = @[]
+  for i in magEnd..<seg.len - 1: mel.add(seg[i])
+  for i in magEnd..<seg.len: vlc.add(seg[i])
+  for i in 0..<magEnd: mag.add(seg[i])
+  let (rok, mutRd) = htCleanupRdInit(mel, vlc)
+  if not rok: return false
+  var rd = mutRd
+  let skipped = w.nextPass div 3
+  let maxU = min(w.zero + skipped + 2, 75)
+  let sigEff = w.sigBp - w.zero
+  let decodedBp = sigEff - skipped
+  if decodedBp < 1 or decodedBp > 292: return false
+  let md = htDecodeMetadata(rd, w.bw, w.bh, maxU)
+  if not md.ok: return false
+  let pl = htCleanupPlane(w.bw, w.bh, maxU, decodedBp, md.quads, mag)
+  if not pl.ok: return false
+  w.plane = pl.plane
+  w.cleanup = CbPlane(w: pl.plane.w, h: pl.plane.h, c: @(pl.plane.c))
+  w.decodedBp = decodedBp
+  w.hasCleanup = true
+  w.setsSeen += 1
+  w.nextPass += 1
+  w.refData = @[]
+  w.refPasses = 0
+  true
+
+proc htDecodeRefineSeg(w: var HtWork, seg: openArray[uint8], passes: int,
+    vcausal: bool): bool =
+  ## Decode one HT refinement segment by replay from the retained cleanup
+  ## plane over accumulated refinement bytes
+  ## (ref decode_high_throughput_refinement).
+  if passes <= 0 or passes > 2: return false
+  if w.nextPass == 0 or not w.hasCleanup or w.nextPass mod 3 == 0:
+    return false
+  if w.refPasses + passes > 2: return false
+  if w.refData.len + seg.len > 2046: return false
+  let total = w.refPasses + passes
+  for b in seg: w.refData.add(b)
+  if w.refData.len == 0:
+    # No refinement bytes yet: just advance (buffered-segment finish).
+    w.refPasses = total
+    w.nextPass += passes
+    return true
+  let sigEff = w.sigBp - w.zero
+  if sigEff < 2: return false
+  if w.decodedBp < 2 or w.decodedBp > 292: return false
+  # replay: output starts as a copy of the cleanup plane
+  var output = CbPlane(w: w.bw, h: w.bh, c: @(w.cleanup.c))
+  var csig = newSeq[bool](w.cleanup.c.len)
+  for i, cc in w.cleanup.c: csig[i] = cc.sig
+  var fwd = htRefFwdInit(w.refData)
+  if total == 2:
+    var rev = htRefRevInit(w.refData)
+    if not htRefMagPass(output, csig, rev, w.decodedBp): return false
+    var disc = CbPlane(w: output.w, h: output.h, c: @(output.c))
+    var pending: seq[tuple[x, y: int]] = @[]
+    if not htRefSigPass(output, disc, pending, fwd, w.orient, vcausal,
+        w.decodedBp):
+      return false
+    if not htRefFinish(fwd, rev, w.refData): return false
+  else:
+    var disc = CbPlane(w: output.w, h: output.h, c: @(output.c))
+    var pending: seq[tuple[x, y: int]] = @[]
+    if not htRefSigPass(output, disc, pending, fwd, w.orient, vcausal,
+        w.decodedBp):
+      return false
+    let rev = htRefRevInit(w.refData)
+    if not htRefFinish(fwd, rev, w.refData): return false
+  w.plane = move(output)
+  w.refPasses = total
+  w.nextPass += passes
+  true
+
+proc htFeedSeg(w: var HtWork, seg: openArray[uint8], passes: int,
+    vcausal: bool): bool =
+  ## Route one HT packet segment (ref decode_ht_segment_route).
+  if w.nextPass mod 3 == 0:
+    if passes != 1: return false
+    if seg.len == 0:
+      return htSkipSeg(w, 1)
+    if not htDecodeCleanupSeg(w, seg): return false
+    return true
+  if w.hasCleanup:
+    if not htDecodeRefineSeg(w, seg, passes, vcausal): return false
+    return true
+  if seg.len != 0: return false
+  htSkipSeg(w, passes)
 
 proc decodeTile(data: openArray[uint8], h: J2kHeaders, tx, ty: int):
     ImageResult[seq[TilePlane]] =
@@ -1925,11 +3364,33 @@ proc decodeTile(data: openArray[uint8], h: J2kHeaders, tx, ty: int):
     for f in pr.feeds:
       var st = tile.comps[coord.comp].res[coord.res].subs[f.sb].pkt[f.blk]
       let blk = tile.comps[coord.comp].res[coord.res].subs[f.sb].blocks[f.blk]
-      if not st.hasWork:
-        let bw = blk.x1 - blk.x0; let bh = blk.y1 - blk.y0
-        if bw <= 0 or bh <= 0 or bw * bh > 4096:
-          return err[seq[TilePlane]](decodingError("j2k: bad block dims"))
-        let topBp = tile.comps[coord.comp].res[coord.res].subs[f.sb].geom.sigBp - 1 - st.zero
+      let bw = blk.x1 - blk.x0; let bh = blk.y1 - blk.y0
+      if bw <= 0 or bh <= 0 or bw * bh > 4096:
+        return err[seq[TilePlane]](decodingError("j2k: bad block dims"))
+      let sBp = tile.comps[coord.comp].res[coord.res].subs[f.sb].geom.sigBp
+      var feedPasses = 0
+      for s in f.segs: feedPasses += s.passes
+      if st.htRoute == 1 and not st.hasHt:
+        # HT work: maxPasses uses the same top-bitplane formula
+        # (ref set_zero_bitplanes recomputes legacy_maximum_passes for
+        # both routes once zero bitplanes are known). nextPass starts at
+        # the already-consumed pass count: earlier mixed-undecided
+        # contributions may have advanced totalPasses via legacy skips.
+        let topBp = sBp - 1 - st.zero
+        if topBp < 0 or topBp > 64:
+          return err[seq[TilePlane]](decodingError("j2k: bad top bitplane"))
+        let startPass = st.totalPasses - feedPasses
+        if startPass < 0:
+          return err[seq[TilePlane]](decodingError("j2k: bad pass cursor"))
+        st.ht = HtWork(bw: bw, bh: bh,
+          orient: tile.comps[coord.comp].res[coord.res].subs[f.sb].geom.orient,
+          sigBp: sBp, maxPasses: topBp * 3 + 1, nextPass: startPass,
+          zero: st.zero,
+          hasCleanup: false, decodedBp: 0, refData: @[], refPasses: 0,
+          setsSeen: 0)
+        st.hasHt = true
+      if st.htRoute != 1 and not st.hasWork:
+        let topBp = sBp - 1 - st.zero
         if topBp < 0 or topBp > 64:
           return err[seq[TilePlane]](decodingError("j2k: bad top bitplane"))
         st.work = CbWork(
@@ -1937,6 +3398,25 @@ proc decodeTile(data: openArray[uint8], h: J2kHeaders, tx, ty: int):
           orient: tile.comps[coord.comp].res[coord.res].subs[f.sb].geom.orient,
           topBp: topBp, maxPasses: topBp * 3 + 1, nextPass: 0, curBp: -2)
         st.hasWork = true
+      if st.htRoute == 1:
+        for s in f.segs:
+          if st.ht.nextPass + s.passes > st.ht.maxPasses:
+            return err[seq[TilePlane]](decodingError("j2k: too many passes"))
+          if cur + s.length > bodyStart + pr.bodyLen or
+              cur + s.length > tileBuf.len:
+            return err[seq[TilePlane]](decodingError("j2k: body overrun"))
+          if s.length == 0:
+            var noBytes: array[0, uint8]
+            if not htFeedSeg(st.ht, noBytes, s.passes, style.vcausal):
+              return err[seq[TilePlane]](decodingError("j2k: HT Tier-1"))
+          else:
+            if not htFeedSeg(st.ht,
+                tileBuf.toOpenArray(cur, cur + s.length - 1), s.passes,
+                style.vcausal):
+              return err[seq[TilePlane]](decodingError("j2k: HT Tier-1"))
+            cur += s.length
+        tile.comps[coord.comp].res[coord.res].subs[f.sb].pkt[f.blk] = st
+        continue
       for s in f.segs:
         if st.work.nextPass + s.passes > st.work.maxPasses:
           return err[seq[TilePlane]](decodingError("j2k: too many passes"))
@@ -1978,52 +3458,109 @@ proc decodeTile(data: openArray[uint8], h: J2kHeaders, tx, ty: int):
     for k in 0..<D:
       ax0[k+1] = ceilDiv(ax0[k], 2); ay0[k+1] = ceilDiv(ay0[k], 2)
       ax1[k+1] = ceilDiv(ax1[k], 2); ay1[k+1] = ceilDiv(ay1[k], 2)
-    let llb = fillBandBuf(tc2, 0, 0)
-    var bands: seq[seq[BandBuf]] = @[]
-    bands.add(@[])  # index 0 unused
-    for r in 1..<tc2.res.len:
-      if tc2.res[r].subs.len != 3:
-        return err[seq[TilePlane]](decodingError("j2k: bad subbands"))
-      bands.add(@[fillBandBuf(tc2, r, 0), fillBandBuf(tc2, r, 1),
-        fillBandBuf(tc2, r, 2)])
-    let rec = idwt53Tile(D, llb, bands, ax0, ay0, ax1, ay1)
-    if not rec.ok:
-      return err[seq[TilePlane]](decodingError("j2k: IDWT"))
-    var buf = rec.buf
+    let lossless53 = tc2.style.trans == 1 and tc2.quant.style == 0
+    var buf: seq[int64]
+    if lossless53:
+      # Integer 5/3 path (unchanged lossless behavior).
+      let llb = fillBandBuf(tc2, 0, 0)
+      var bands: seq[seq[BandBuf]] = @[]
+      bands.add(@[])  # index 0 unused
+      for r in 1..<tc2.res.len:
+        if tc2.res[r].subs.len != 3:
+          return err[seq[TilePlane]](decodingError("j2k: bad subbands"))
+        bands.add(@[fillBandBuf(tc2, r, 0), fillBandBuf(tc2, r, 1),
+          fillBandBuf(tc2, r, 2)])
+      let rec = idwt53Tile(D, llb, bands, ax0, ay0, ax1, ay1)
+      if not rec.ok:
+        return err[seq[TilePlane]](decodingError("j2k: IDWT"))
+      buf = rec.buf
+    else:
+      # Quantized path: dequantize each subband (ROI inside dequant),
+      # then 5/3 (reversible) or 9/7 (irreversible) inverse DWT.
+      let rev = tc2.style.trans == 1
+      let rf = fillBandBufRaw(tc2, 0, 0)
+      if not rf.ok:
+        return err[seq[TilePlane]](decodingError("j2k: bad coefficients"))
+      let llq = dequantBandBuf(rf.bb, tc2.res[0].subs[0].geom.qExp,
+        tc2.res[0].subs[0].geom.qMant, tc2.res[0].subs[0].geom.dyn,
+        tc2.roi, rev)
+      if not llq.ok:
+        return err[seq[TilePlane]](decodingError("j2k: dequant"))
+      var bands: seq[seq[BandBuf]] = @[]
+      bands.add(@[])  # index 0 unused
+      for r in 1..<tc2.res.len:
+        if tc2.res[r].subs.len != 3:
+          return err[seq[TilePlane]](decodingError("j2k: bad subbands"))
+        var bl: seq[BandBuf] = @[]
+        for si in 0..2:
+          let gsb = tc2.res[r].subs[si].geom
+          let rb = fillBandBufRaw(tc2, r, si)
+          if not rb.ok:
+            return err[seq[TilePlane]](decodingError("j2k: bad coefficients"))
+          let qb = dequantBandBuf(rb.bb, gsb.qExp, gsb.qMant, gsb.dyn,
+            tc2.roi, rev)
+          if not qb.ok:
+            return err[seq[TilePlane]](decodingError("j2k: dequant"))
+          bl.add(qb.ob)
+        bands.add(bl)
+      if rev:
+        let rec = idwt53Tile(D, llq.ob, bands, ax0, ay0, ax1, ay1)
+        if not rec.ok:
+          return err[seq[TilePlane]](decodingError("j2k: IDWT"))
+        buf = rec.buf
+      else:
+        let rec = idwt97Tile(D, llq.ob, bands, ax0, ay0, ax1, ay1)
+        if not rec.ok:
+          return err[seq[TilePlane]](decodingError("j2k: IDWT"))
+        buf = rec.buf
     if buf.len != Wc * Hc:
       return err[seq[TilePlane]](decodingError("j2k: IDWT size"))
+    let isQ = not (tc2.style.trans == 1 and tc2.quant.style == 0)
     planes.add(TilePlane(x0: tc2.geom.tx0, y0: tc2.geom.ty0, w: Wc, h: Hc,
-      d: move(buf)))
-  # inverse MCT (RCT) on first three components
+      d: move(buf), q16: isQ and tc2.style.trans == 0))
+  # inverse MCT on first three components (RCT reversible, ICT Q16)
+  var mctIrr = false
   if h.cod.mct and nc >= 3:
     let Wc = planes[0].w; let Hc = planes[0].h
     if planes[1].w != Wc or planes[2].w != Wc or planes[1].h != Hc or
         planes[2].h != Hc:
       return err[seq[TilePlane]](unsupportedError(ukGenericFeature,
         "j2k: MCT size mismatch"))
-    for i in 0..<Wc*Hc:
-      let y = planes[0].d[i]; let cb = planes[1].d[i]; let cr = planes[2].d[i]
-      let g = y - ((cb + cr) shr 2)
-      planes[0].d[i] = cr + g
-      planes[1].d[i] = g
-      planes[2].d[i] = cb + g
+    var tr0 = -1
+    for c in 0..2:
+      let t = tile.comps[c].style.trans
+      if tr0 < 0: tr0 = t
+      elif tr0 != t:
+        return err[seq[TilePlane]](unsupportedError(ukGenericFeature,
+          "j2k: mixed MCT transform"))
+    mctIrr = tr0 == 0
+    if not mctIrr:
+      for i in 0..<Wc*Hc:
+        let y = planes[0].d[i]; let cb = planes[1].d[i]; let cr = planes[2].d[i]
+        let g = y - ((cb + cr) shr 2)
+        planes[0].d[i] = cr + g
+        planes[1].d[i] = g
+        planes[2].d[i] = cb + g
+    else:
+      for i in 0..<Wc*Hc:
+        let ic = htIct(planes[0].d[i], planes[1].d[i], planes[2].d[i])
+        if not ic.ok:
+          return err[seq[TilePlane]](decodingError("j2k: ICT"))
+        planes[0].d[i] = ic.r
+        planes[1].d[i] = ic.g
+        planes[2].d[i] = ic.b
   ok(planes)
 
 proc decodeJ2kRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
-  ## Raw codestream decode: lossless 5/3 + RCT, 1-4 comps, 8/16-bit,
-  ## single/multi tile, all 5 progressions + POC (main or tile-part
-  ## headers), SOP/EPH, bypass. 9/7, HT/mixed, subsampling, palettes,
-  ## packed headers and tile-part coding overrides are clean Unsupported
-  ## (follow-up phases).
+  ## Raw codestream decode: 5/3 reversible + RCT and 9/7 irreversible
+  ## (legacy and HTJ2K code-blocks, including mixed legacy/HT), 1-4 comps,
+  ## 8/16-bit, single/multi tile, all 5 progressions + POC (main or
+  ## tile-part headers), SOP/EPH, bypass, RCT/ICT, JP2 color. Subsampling,
+  ## palettes, packed headers and tile-part coding overrides are clean
+  ## Unsupported (follow-up phases).
   let h0 = parseCodestream(data)
   if not h0.ok: return err[DynamicImage](h0.err)
   var h = h0.value
-  if h.cod.ht or h.cod.mixed:
-    return err[DynamicImage](unsupportedError(ukGenericFeature,
-      "j2k: HT codeblocks (next phase)"))
-  if h.cod.trans != 1:
-    return err[DynamicImage](unsupportedError(ukGenericFeature,
-      "j2k: irreversible 9/7 (next phase)"))
   if h.ppm.len > 0 or h.ppt.len > 0:
     return err[DynamicImage](unsupportedError(ukGenericFeature,
       "j2k: packed packet headers"))
@@ -2070,6 +3607,15 @@ proc decodeJ2kRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
           for dx in 0..<tp.w:
             canvas[c][(tp.y0 + dy) * cw + (tp.x0 + dx)] =
               tp.d[dy * tp.w + dx]
+  # Q16 canvases (irreversible path) round to integer before shift+clip.
+  # Per-component transform comes from the effective style (COC-aware).
+  for c in 0..<nc:
+    if compStyle(h, c).trans == 0:
+      for i in 0..<canvas[c].len:
+        let rr = htRoundQ16(canvas[c][i])
+        if not rr.ok:
+          return err[DynamicImage](decodingError("j2k: output range"))
+        canvas[c][i] = rr.r
   # shift + clip + map to DynamicImage
   let big = p0 > 8
   if nc == 1:
