@@ -210,9 +210,9 @@ let raw = extractJ2kCodestream(bytes)  # raw codestream for external decoders
 let enc = encodeHeif(img).value          # uncompressed still
 let encJ = encodeHeifJpeg(img, 90).value # JPEG-in-HEIF
 let coll = writeCollection(myCollection).value # thumbs/aux/grid/iovl/groups/tiling/idat/EVC
-let seq = writeHeifSequence(frames, hikUnc).value # timed pict sequence
-let mv = heifMovieInfo(seq).value        # tracks/samples
-let fr0 = decodeHeifSequenceSample(seq, 0, 0).value
+let heifSeq = writeHeifSequence(frames, hikUnc).value # timed pict sequence
+let mv = heifMovieInfo(heifSeq).value        # tracks/samples
+let fr0 = decodeHeifSequenceSample(heifSeq, 0, 0).value
 ```
 
 ### Format detection
