@@ -1,0 +1,25 @@
+nimTitle	isobmff	image/codecs/heif/isobmff.html	module image/codecs/heif/isobmff		0
+nim	HeifDecodeError	image/codecs/heif/isobmff.html#HeifDecodeError	object HeifDecodeError		11
+nim	heifErr	image/codecs/heif/isobmff.html#heifErr,string	proc heifErr(msg: string): ref HeifDecodeError		13
+nim	Box	image/codecs/heif/isobmff.html#Box	object Box		17
+nim	typStr	image/codecs/heif/isobmff.html#typStr,Box	proc typStr(b: Box): string		26
+nim	isType	image/codecs/heif/isobmff.html#isType,Box,char,char,char,char	proc isType(b: Box; a, c, d, e: char): bool		30
+nim	isTypeStr	image/codecs/heif/isobmff.html#isTypeStr,Box,string	proc isTypeStr(b: Box; s: string): bool		34
+nim	checkRange	image/codecs/heif/isobmff.html#checkRange,seq[uint8],int,int,string	proc checkRange(data: seq[uint8]; off, n: int; what: string)		38
+nim	readU16BE	image/codecs/heif/isobmff.html#readU16BE,seq[uint8],int,string	proc readU16BE(data: seq[uint8]; off: int; what = "u16"): uint16		42
+nim	readU32BE	image/codecs/heif/isobmff.html#readU32BE,seq[uint8],int,string	proc readU32BE(data: seq[uint8]; off: int; what = "u32"): uint32		46
+nim	readU64BE	image/codecs/heif/isobmff.html#readU64BE,seq[uint8],int,string	proc readU64BE(data: seq[uint8]; off: int; what = "u64"): uint64		51
+nim	readBoxAt	image/codecs/heif/isobmff.html#readBoxAt,seq[uint8],int	proc readBoxAt(data: seq[uint8]; off: int): Box		58
+nim	topLevelBoxes	image/codecs/heif/isobmff.html#topLevelBoxes,seq[uint8]	proc topLevelBoxes(data: seq[uint8]): seq[Box]		82
+nim	childBoxes	image/codecs/heif/isobmff.html#childBoxes,seq[uint8],Box,int	proc childBoxes(data: seq[uint8]; parent: Box; fullBoxSkip = 0): seq[Box]		91
+nim	findChild	image/codecs/heif/isobmff.html#findChild,seq[uint8],Box,string,int	proc findChild(data: seq[uint8]; parent: Box; t: string; fullBoxSkip = 0): tuple[\n    found: bool, b: Box]		107
+nim	boxVersion	image/codecs/heif/isobmff.html#boxVersion,seq[uint8],Box	proc boxVersion(data: seq[uint8]; b: Box): uint8		114
+nim	boxFlags	image/codecs/heif/isobmff.html#boxFlags,seq[uint8],Box	proc boxFlags(data: seq[uint8]; b: Box): uint32		118
+nim	putU16BE	image/codecs/heif/isobmff.html#putU16BE,seq[uint8],uint16	proc putU16BE(dst: var seq[uint8]; v: uint16)		128
+nim	putU32BE	image/codecs/heif/isobmff.html#putU32BE,seq[uint8],uint32	proc putU32BE(dst: var seq[uint8]; v: uint32)		132
+nim	putU64BE	image/codecs/heif/isobmff.html#putU64BE,seq[uint8],uint64	proc putU64BE(dst: var seq[uint8]; v: uint64)		138
+nim	put4CC	image/codecs/heif/isobmff.html#put4CC,seq[uint8],string	proc put4CC(dst: var seq[uint8]; s: string)		142
+nim	putBytes	image/codecs/heif/isobmff.html#putBytes,seq[uint8],openArray[uint8]	proc putBytes(dst: var seq[uint8]; b: openArray[uint8])		146
+nim	putFullHeader	image/codecs/heif/isobmff.html#putFullHeader,seq[uint8],uint8,uint32	proc putFullHeader(dst: var seq[uint8]; version: uint8; flags: uint32)		149
+nim	makeBox	image/codecs/heif/isobmff.html#makeBox,string,openArray[uint8]	proc makeBox(typ: string; payload: openArray[uint8]): seq[uint8]		155
+nim	makeFullBox	image/codecs/heif/isobmff.html#makeFullBox,string,uint8,uint32,openArray[uint8]	proc makeFullBox(typ: string; version: uint8; flags: uint32;\n            payload: openArray[uint8]): seq[uint8]		167

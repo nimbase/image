@@ -14,5 +14,5 @@ nim	yuv420ToRgb	image/codecs/avif.html#yuv420ToRgb,seq[uint8],seq[uint8],seq[uin
 nim	yuv422ToRgb	image/codecs/avif.html#yuv422ToRgb,seq[uint8],seq[uint8],seq[uint8],int,int,YuvMatrix,YuvRange	proc yuv422ToRgb(y: seq[uint8]; u, v: seq[uint8]; width, height: int; m: YuvMatrix;\n            r: YuvRange): RgbImage		88
 nim	ycgcoReForward	image/codecs/avif.html#ycgcoReForward,int,int,int	proc ycgcoReForward(r, g, b: int): tuple[y, cg, co: int]		101
 nim	ycgcoReInverse	image/codecs/avif.html#ycgcoReInverse,int,int,int	proc ycgcoReInverse(y, cg, co: int): tuple[r, g, b: int]		108
-nim	decodeAvif	image/codecs/avif.html#decodeAvif,seq[uint8]	proc decodeAvif(data: seq[uint8]): ImageResult[DynamicImage]		114
+nim	decodeAvif	image/codecs/avif.html#decodeAvif,openArray[uint8]	proc decodeAvif(data: openArray[uint8]): ImageResult[DynamicImage]		114
 nim	encodeAvif	image/codecs/avif.html#encodeAvif,DynamicImage	proc encodeAvif(img: DynamicImage): ImageResult[seq[uint8]]		121

@@ -1,0 +1,12 @@
+nimTitle	items	image/codecs/heif/items.html	module image/codecs/heif/items		0
+nim	HeifItem	image/codecs/heif/items.html#HeifItem	object HeifItem		9
+nim	ItemExtent	image/codecs/heif/items.html#ItemExtent	object ItemExtent		17
+nim	RawProperty	image/codecs/heif/items.html#RawProperty	object RawProperty		26
+nim	HeifRef	image/codecs/heif/items.html#HeifRef	object HeifRef		31
+nim	HeifMeta	image/codecs/heif/items.html#HeifMeta	object HeifMeta		36
+nim	payload	image/codecs/heif/items.html#payload,seq[uint8],Box	proc payload(data: seq[uint8]; b: Box): seq[uint8]		49
+nim	isHeifBrand	image/codecs/heif/items.html#isHeifBrand,string	proc isHeifBrand(s: string): bool		71
+nim	parseMeta	image/codecs/heif/items.html#parseMeta,seq[uint8]	proc parseMeta(data: seq[uint8]): HeifMeta		355
+nim	findItem	image/codecs/heif/items.html#findItem,HeifMeta,uint32	proc findItem(meta: HeifMeta; id: uint32): tuple[found: bool, item: HeifItem]		394
+nim	itemBytes	image/codecs/heif/items.html#itemBytes,seq[uint8],HeifMeta,uint32	proc itemBytes(data: seq[uint8]; meta: HeifMeta; id: uint32): seq[uint8]		446
+nim	itemProps	image/codecs/heif/items.html#itemProps,HeifMeta,uint32	proc itemProps(meta: HeifMeta; id: uint32): seq[RawProperty]		453

@@ -13,10 +13,12 @@ nim	fmtOpenExr	image/format.html#fmtOpenExr	ImageFormat.fmtOpenExr		7
 nim	fmtFarbfeld	image/format.html#fmtFarbfeld	ImageFormat.fmtFarbfeld		7
 nim	fmtAvif	image/format.html#fmtAvif	ImageFormat.fmtAvif		7
 nim	fmtQoi	image/format.html#fmtQoi	ImageFormat.fmtQoi		7
+nim	fmtHeif	image/format.html#fmtHeif	ImageFormat.fmtHeif		7
+nim	fmtJp2	image/format.html#fmtJp2	ImageFormat.fmtJp2		7
 nim	ImageFormat	image/format.html#ImageFormat	enum ImageFormat		7
-nim	fromExtension	image/format.html#fromExtension,string	proc fromExtension(ext: string): tuple[found: bool, f: ImageFormat]		23
-nim	fromPath	image/format.html#fromPath,string	proc fromPath(path: string): ImageResult[ImageFormat]		42
-nim	fromMimeType	image/format.html#fromMimeType,string	proc fromMimeType(mime: string): tuple[found: bool, f: ImageFormat]		50
-nim	toMimeType	image/format.html#toMimeType,ImageFormat	proc toMimeType(f: ImageFormat): string		69
-nim	extensionsStr	image/format.html#extensionsStr,ImageFormat	proc extensionsStr(f: ImageFormat): seq[string]		86
-nim	allFormats	image/format.html#allFormats	proc allFormats(): seq[ImageFormat]		103
+nim	fromExtension	image/format.html#fromExtension,string	proc fromExtension(ext: string): tuple[found: bool, f: ImageFormat]		25
+nim	fromPath	image/format.html#fromPath,string	proc fromPath(path: string): ImageResult[ImageFormat]		46
+nim	fromMimeType	image/format.html#fromMimeType,string	proc fromMimeType(mime: string): tuple[found: bool, f: ImageFormat]		54
+nim	toMimeType	image/format.html#toMimeType,ImageFormat	proc toMimeType(f: ImageFormat): string		78
+nim	extensionsStr	image/format.html#extensionsStr,ImageFormat	proc extensionsStr(f: ImageFormat): seq[string]		97
+nim	allFormats	image/format.html#allFormats	proc allFormats(): seq[ImageFormat]		116

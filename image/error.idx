@@ -29,13 +29,13 @@ nim	fhUnknown	image/error.html#fhUnknown	FormatHintKind.fhUnknown		32
 nim	FormatHintKind	image/error.html#FormatHintKind	enum FormatHintKind		32
 nim	ImageError	image/error.html#ImageError	object ImageError		38
 nim	ImageResult	image/error.html#ImageResult	object ImageResult		47
-nim	ok	image/error.html#ok,T	proc ok[T](v: T): ImageResult[T]		54
-nim	err	image/error.html#err,ImageError	proc err[T](e: ImageError): ImageResult[T]		57
-nim	decodingError	image/error.html#decodingError,string	proc decodingError(msg: string): ImageError		60
-nim	encodingError	image/error.html#encodingError,string	proc encodingError(msg: string): ImageError		63
-nim	paramError	image/error.html#paramError,ParamKind,string	proc paramError(k: ParamKind; msg = ""): ImageError		66
-nim	limitError	image/error.html#limitError,LimitKind,string	proc limitError(k: LimitKind; msg = ""): ImageError		69
-nim	unsupportedError	image/error.html#unsupportedError,UnsupportedKind,string	proc unsupportedError(k: UnsupportedKind; msg = ""): ImageError		72
-nim	ioError	image/error.html#ioError,string	proc ioError(msg: string): ImageError		75
-nim	isOk	image/error.html#isOk,ImageResult[T]	proc isOk[T](r: ImageResult[T]): bool		78
-nim	unwrap	image/error.html#unwrap,ImageResult[T]	proc unwrap[T](r: ImageResult[T]): T		80
+nim	ok	image/error.html#ok,sinkT	proc ok[T](v: sink T): ImageResult[T]		54
+nim	err	image/error.html#err,ImageError	proc err[T](e: ImageError): ImageResult[T]		62
+nim	decodingError	image/error.html#decodingError,string	proc decodingError(msg: string): ImageError		65
+nim	encodingError	image/error.html#encodingError,string	proc encodingError(msg: string): ImageError		68
+nim	paramError	image/error.html#paramError,ParamKind,string	proc paramError(k: ParamKind; msg = ""): ImageError		71
+nim	limitError	image/error.html#limitError,LimitKind,string	proc limitError(k: LimitKind; msg = ""): ImageError		74
+nim	unsupportedError	image/error.html#unsupportedError,UnsupportedKind,string	proc unsupportedError(k: UnsupportedKind; msg = ""): ImageError		77
+nim	ioError	image/error.html#ioError,string	proc ioError(msg: string): ImageError		80
+nim	isOk	image/error.html#isOk,ImageResult[T]	proc isOk[T](r: ImageResult[T]): bool		83
+nim	unwrap	image/error.html#unwrap,ImageResult[T]	proc unwrap[T](r: ImageResult[T]): T		85

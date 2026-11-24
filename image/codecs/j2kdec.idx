@@ -1,0 +1,44 @@
+nimTitle	j2kdec	image/codecs/j2kdec.html	module image/codecs/j2kdec		0
+nim	MkSoc	image/codecs/j2kdec.html#MkSoc	const MkSoc		28
+nim	MkSiz	image/codecs/j2kdec.html#MkSiz	const MkSiz		29
+nim	MkCod	image/codecs/j2kdec.html#MkCod	const MkCod		30
+nim	MkCoc	image/codecs/j2kdec.html#MkCoc	const MkCoc		31
+nim	MkQcd	image/codecs/j2kdec.html#MkQcd	const MkQcd		32
+nim	MkQcc	image/codecs/j2kdec.html#MkQcc	const MkQcc		33
+nim	MkRgn	image/codecs/j2kdec.html#MkRgn	const MkRgn		34
+nim	MkPoc	image/codecs/j2kdec.html#MkPoc	const MkPoc		35
+nim	MkPpm	image/codecs/j2kdec.html#MkPpm	const MkPpm		36
+nim	MkPpt	image/codecs/j2kdec.html#MkPpt	const MkPpt		37
+nim	MkCrg	image/codecs/j2kdec.html#MkCrg	const MkCrg		38
+nim	MkCom	image/codecs/j2kdec.html#MkCom	const MkCom		39
+nim	MkSot	image/codecs/j2kdec.html#MkSot	const MkSot		40
+nim	MkSop	image/codecs/j2kdec.html#MkSop	const MkSop		41
+nim	MkEph	image/codecs/j2kdec.html#MkEph	const MkEph		42
+nim	MkSod	image/codecs/j2kdec.html#MkSod	const MkSod		43
+nim	MkEoc	image/codecs/j2kdec.html#MkEoc	const MkEoc		44
+nim	MkTlm	image/codecs/j2kdec.html#MkTlm	const MkTlm		45
+nim	MkPlm	image/codecs/j2kdec.html#MkPlm	const MkPlm		46
+nim	MkPlt	image/codecs/j2kdec.html#MkPlt	const MkPlt		47
+nim	MkCap	image/codecs/j2kdec.html#MkCap	const MkCap		48
+nim	prLrcp	image/codecs/j2kdec.html#prLrcp	J2kProg.prLrcp		51
+nim	prRlcp	image/codecs/j2kdec.html#prRlcp	J2kProg.prRlcp		51
+nim	prRpcl	image/codecs/j2kdec.html#prRpcl	J2kProg.prRpcl		51
+nim	prPcrl	image/codecs/j2kdec.html#prPcrl	J2kProg.prPcrl		51
+nim	prCprl	image/codecs/j2kdec.html#prCprl	J2kProg.prCprl		51
+nim	J2kProg	image/codecs/j2kdec.html#J2kProg	enum J2kProg		51
+nim	J2kCompInfo	image/codecs/j2kdec.html#J2kCompInfo	object J2kCompInfo		54
+nim	J2kSiz	image/codecs/j2kdec.html#J2kSiz	object J2kSiz		59
+nim	J2kCodingStyle	image/codecs/j2kdec.html#J2kCodingStyle	object J2kCodingStyle		67
+nim	J2kQStep	image/codecs/j2kdec.html#J2kQStep	object J2kQStep		87
+nim	J2kQuant	image/codecs/j2kdec.html#J2kQuant	object J2kQuant		91
+nim	J2kTilePart	image/codecs/j2kdec.html#J2kTilePart	object J2kTilePart		96
+nim	J2kHeaders	image/codecs/j2kdec.html#J2kHeaders	object J2kHeaders		108
+nim	tileGrid	image/codecs/j2kdec.html#tileGrid,J2kSiz	proc tileGrid(s: J2kSiz): tuple[nx, ny: int]		142
+nim	frameSize	image/codecs/j2kdec.html#frameSize,J2kSiz	proc frameSize(s: J2kSiz): tuple[w, h: int]		146
+nim	parseCodestream	image/codecs/j2kdec.html#parseCodestream,openArray[uint8]	proc parseCodestream(data: openArray[uint8]): ImageResult[J2kHeaders]		602
+nim	MqStates	image/codecs/j2kdec.html#MqStates	const MqStates		624
+nim	J2k97ScaleLo	image/codecs/j2kdec.html#J2k97ScaleLo	const J2k97ScaleLo		2086
+nim	J2k97ScaleHi	image/codecs/j2kdec.html#J2k97ScaleHi	const J2k97ScaleHi		2087
+nim	J2k97Lift	image/codecs/j2kdec.html#J2k97Lift	const J2k97Lift		2088
+nim	decodeJ2kRaw	image/codecs/j2kdec.html#decodeJ2kRaw,openArray[uint8]	proc decodeJ2kRaw(data: openArray[uint8]): ImageResult[DynamicImage]		3554
+nim	decodeJp2	image/codecs/j2kdec.html#decodeJp2,openArray[uint8]	proc decodeJp2(data: openArray[uint8]): ImageResult[DynamicImage]		3953

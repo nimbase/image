@@ -1,7 +1,9 @@
 nimTitle	x86_sse2	image/simd/x86_sse2.html	module image/simd/x86_sse2		0
 nim	upRowSse2	image/simd/x86_sse2.html#upRowSse2,ptr.uint8,ptr.uint8,int	proc upRowSse2(curP, prevP: ptr uint8; n16: int)		10
-nim	ycbcrRowSse2	image/simd/x86_sse2.html#ycbcrRowSse2,ptr.uint8,ptr.uint8,ptr.uint8,ptr.uint8,int	proc ycbcrRowSse2(yP, cbP, crP, rgbP: ptr uint8; n2: int)		23
-nim	idctPass1Sse2	image/simd/x86_sse2.html#idctPass1Sse2,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc idctPass1Sse2(tmpP, midP, cosP, cfacP: ptr float64)		57
-nim	idctPass2Sse2	image/simd/x86_sse2.html#idctPass2Sse2,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc idctPass2Sse2(midP, outP, cosP, cfacP: ptr float64)		69
-nim	fdctPass1Sse2	image/simd/x86_sse2.html#fdctPass1Sse2,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc fdctPass1Sse2(pxP, midP, cosP, cfacP: ptr float64)		83
-nim	fdctPass2Sse2	image/simd/x86_sse2.html#fdctPass2Sse2,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc fdctPass2Sse2(midP, resP, cosP, cfacP: ptr float64)		101
+nim	subRowSse2	image/simd/x86_sse2.html#subRowSse2,ptr.uint8,int,int	proc subRowSse2(curP: ptr uint8; n: int; bpp: int)		65
+nim	avgRowSse2	image/simd/x86_sse2.html#avgRowSse2,ptr.uint8,ptr.uint8,int,int	proc avgRowSse2(curP, prevP: ptr uint8; n: int; bpp: int)		100
+nim	paethRowSse2	image/simd/x86_sse2.html#paethRowSse2,ptr.uint8,ptr.uint8,int,int	proc paethRowSse2(curP, prevP: ptr uint8; n: int; bpp: int)		175
+nim	ycbcrRowSse2	image/simd/x86_sse2.html#ycbcrRowSse2,ptr.uint8,ptr.uint8,ptr.uint8,ptr.uint8,int	proc ycbcrRowSse2(yP, cbP, crP, rgbP: ptr uint8; n2: int)		251
+nim	ycbcrRowRgbaSse2	image/simd/x86_sse2.html#ycbcrRowRgbaSse2,ptr.uint8,ptr.uint8,ptr.uint8,ptr.uint8,int	proc ycbcrRowRgbaSse2(yP, cbP, crP, rgbaP: ptr uint8; n2: int)		285
+nim	fdctPass1Sse2	image/simd/x86_sse2.html#fdctPass1Sse2,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc fdctPass1Sse2(pxP, midP, cosP, cfacP: ptr float64)		321
+nim	fdctPass2Sse2	image/simd/x86_sse2.html#fdctPass2Sse2,ptr.float64,ptr.float64,ptr.float64,ptr.float64	proc fdctPass2Sse2(midP, resP, cosP, cfacP: ptr float64)		339

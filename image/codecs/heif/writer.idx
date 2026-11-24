@@ -1,0 +1,33 @@
+nimTitle	writer	image/codecs/heif/writer.html	module image/codecs/heif/writer		0
+nim	hikUnc	image/codecs/heif/writer.html#hikUnc	HeifItemKind.hikUnc		19
+nim	hikJpeg	image/codecs/heif/writer.html#hikJpeg	HeifItemKind.hikJpeg		19
+nim	hikGrid	image/codecs/heif/writer.html#hikGrid	HeifItemKind.hikGrid		19
+nim	hikOverlay	image/codecs/heif/writer.html#hikOverlay	HeifItemKind.hikOverlay		19
+nim	hikIden	image/codecs/heif/writer.html#hikIden	HeifItemKind.hikIden		19
+nim	hikExif	image/codecs/heif/writer.html#hikExif	HeifItemKind.hikExif		19
+nim	hikMime	image/codecs/heif/writer.html#hikMime	HeifItemKind.hikMime		19
+nim	hikUri	image/codecs/heif/writer.html#hikUri	HeifItemKind.hikUri		19
+nim	hikPass	image/codecs/heif/writer.html#hikPass	HeifItemKind.hikPass		19
+nim	HeifItemKind	image/codecs/heif/writer.html#HeifItemKind	enum HeifItemKind		19
+nim	HeifItemSpec	image/codecs/heif/writer.html#HeifItemSpec	object HeifItemSpec		30
+nim	HeifCollection	image/codecs/heif/writer.html#HeifCollection	object HeifCollection		61
+nim	defaultItemSpec	image/codecs/heif/writer.html#defaultItemSpec,DynamicImage	proc defaultItemSpec(img: DynamicImage): HeifItemSpec		67
+nim	encodeUncFrame	image/codecs/heif/writer.html#encodeUncFrame,DynamicImage	proc encodeUncFrame(img: DynamicImage): tuple[bytes: seq[uint8], uncC: seq[uint8],\n    cmpd: seq[uint8], pixi: seq[int], w, h: uint32]		73
+nim	encodeUncTiled	image/codecs/heif/writer.html#encodeUncTiled,DynamicImage,int,int	proc encodeUncTiled(img: DynamicImage; cols, rows: int): tuple[bytes: seq[uint8],\n    uncC: seq[uint8], cmpd: seq[uint8], pixi: seq[int], w, h: uint32]		126
+nim	buildFtyp	image/codecs/heif/writer.html#buildFtyp,string,seq[string]	proc buildFtyp(major: string; compat: seq[string]): seq[uint8]		185
+nim	buildHdlr	image/codecs/heif/writer.html#buildHdlr	proc buildHdlr(): seq[uint8]		192
+nim	buildPitm	image/codecs/heif/writer.html#buildPitm,uint32	proc buildPitm(id: uint32): seq[uint8]		200
+nim	buildInfe	image/codecs/heif/writer.html#buildInfe,uint32,string,bool,string,string	proc buildInfe(id: uint32; typ: string; hidden: bool; name = ""; contentType = ""): seq[\n    uint8]		210
+nim	buildIinf	image/codecs/heif/writer.html#buildIinf,seq[tuple[uint32,string,bool,string,string]]	proc buildIinf(items: seq[tuple[id: uint32, typ: string, hidden: bool, name: string,\n                           ctype: string]]): seq[uint8]		232
+nim	buildIloc	image/codecs/heif/writer.html#buildIloc,seq[tuple[uint32,int,int]]	proc buildIloc(entries: seq[tuple[id: uint32, offset, length: int]]): seq[uint8]		256
+nim	IlocEntry	image/codecs/heif/writer.html#IlocEntry	object IlocEntry		271
+nim	buildIlocEx	image/codecs/heif/writer.html#buildIlocEx,seq[IlocEntry]	proc buildIlocEx(entries: seq[IlocEntry]): seq[uint8]		276
+nim	buildIdat	image/codecs/heif/writer.html#buildIdat,seq[uint8]	proc buildIdat(payload: seq[uint8]): seq[uint8]		295
+nim	buildIref	image/codecs/heif/writer.html#buildIref,seq[tuple[uint32,string,seq[uint32]]]	proc buildIref(refs: seq[tuple[fromId: uint32, typ: string, toIds: seq[uint32]]]): seq[\n    uint8]		298
+nim	buildIprp	image/codecs/heif/writer.html#buildIprp,seq[tuple[string,seq[uint8]]],seq[seq[tuple[int,bool]]]	proc buildIprp(propPayloads: seq[tuple[kind: string, payload: seq[uint8]]];\n          assocs: seq[seq[tuple[idx: int, essential: bool]]]): seq[uint8]		316
+nim	sKindIsEmpty	image/codecs/heif/writer.html#sKindIsEmpty,HeifItemSpec	proc sKindIsEmpty(s: HeifItemSpec): bool		338
+nim	itemTypeOf	image/codecs/heif/writer.html#itemTypeOf,HeifItemSpec	proc itemTypeOf(s: HeifItemSpec): string		342
+nim	writeCollection	image/codecs/heif/writer.html#writeCollection,HeifCollection	proc writeCollection(coll: HeifCollection): ImageResult[seq[uint8]]		356
+nim	encodeHeif	image/codecs/heif/writer.html#encodeHeif,DynamicImage	proc encodeHeif(img: DynamicImage): ImageResult[seq[uint8]]		677
+nim	encodeHeifJpeg	image/codecs/heif/writer.html#encodeHeifJpeg,DynamicImage,int	proc encodeHeifJpeg(img: DynamicImage; quality = 90): ImageResult[seq[uint8]]		682
+nim	writeHeifSequence	image/codecs/heif/writer.html#writeHeifSequence,seq[DynamicImage],HeifItemKind,int,uint32,uint32,int,int	proc writeHeifSequence(frames: seq[DynamicImage]; kind: HeifItemKind = hikUnc;\n                  jpegQuality = 90; timescale: uint32 = 1;\n                  frameDuration: uint32 = 1; tileCols = 0; tileRows = 0): ImageResult[\n    seq[uint8]]		692

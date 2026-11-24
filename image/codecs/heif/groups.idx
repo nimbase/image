@@ -1,0 +1,5 @@
+nimTitle	groups	image/codecs/heif/groups.html	module image/codecs/heif/groups		0
+nim	EntityGroup	image/codecs/heif/groups.html#EntityGroup	object EntityGroup		11
+nim	parseEntityGroups	image/codecs/heif/groups.html#parseEntityGroups,seq[uint8],Box	proc parseEntityGroups(data: seq[uint8]; meta: Box): seq[EntityGroup]		16
+nim	buildEntityGroup	image/codecs/heif/groups.html#buildEntityGroup,EntityGroup	proc buildEntityGroup(g: EntityGroup): seq[uint8]		44
+nim	buildGroupsBox	image/codecs/heif/groups.html#buildGroupsBox,seq[EntityGroup]	proc buildGroupsBox(groups: seq[EntityGroup]): seq[uint8]		51

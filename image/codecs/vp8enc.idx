@@ -1,0 +1,34 @@
+nimTitle	vp8enc	image/codecs/vp8enc.html	module image/codecs/vp8enc		0
+nim	BoolEnc	image/codecs/vp8enc.html#BoolEnc	object BoolEnc		18
+nim	initBoolEnc	image/codecs/vp8enc.html#initBoolEnc	proc initBoolEnc(): BoolEnc		24
+nim	putBit	image/codecs/vp8enc.html#putBit,BoolEnc,bool,uint8	proc putBit(e: var BoolEnc; bit: bool; prob: uint8)		48
+nim	putFlag	image/codecs/vp8enc.html#putFlag,BoolEnc,bool	proc putFlag(e: var BoolEnc; bit: bool)		57
+nim	putLiteral	image/codecs/vp8enc.html#putLiteral,BoolEnc,uint8,int	proc putLiteral(e: var BoolEnc; v: uint8; n: int)		60
+nim	putSigned	image/codecs/vp8enc.html#putSigned,BoolEnc,int32,int	proc putSigned(e: var BoolEnc; v: int32; n: int)		64
+nim	flush	image/codecs/vp8enc.html#flush,BoolEnc	proc flush(e: var BoolEnc)		73
+nim	vp8QualityToQi	image/codecs/vp8enc.html#vp8QualityToQi,int	proc vp8QualityToQi(quality: int): int		83
+nim	vp8QualityToFilter	image/codecs/vp8enc.html#vp8QualityToFilter,int	proc vp8QualityToFilter(quality: int): uint8		86
+nim	rgbToYuv601	image/codecs/vp8enc.html#rgbToYuv601,uint8,uint8,uint8	proc rgbToYuv601(r, g, b: uint8): tuple[y, u, v: uint8]		91
+nim	fdct4x4	image/codecs/vp8enc.html#fdct4x4,array[,float64]	proc fdct4x4(blk: array[16, float64]): array[16, float64]		116
+nim	fwht4x4	image/codecs/vp8enc.html#fwht4x4,array[,float64]	proc fwht4x4(blk: array[16, float64]): array[16, float64]		134
+nim	quantizeCoeff	image/codecs/vp8enc.html#quantizeCoeff,float64,int16	proc quantizeCoeff(v: float64; q: int16): int32		157
+nim	TokPaths	image/codecs/vp8enc.html#TokPaths	let TokPaths		211
+nim	bitCost	image/codecs/vp8enc.html#bitCost,uint8,bool	proc bitCost(prob: uint8; bit: bool): float64		220
+nim	TokCostTable	image/codecs/vp8enc.html#TokCostTable	type TokCostTable		231
+nim	TokCosts	image/codecs/vp8enc.html#TokCosts	let TokCosts		233
+nim	CurTokCosts	image/codecs/vp8enc.html#CurTokCosts	var CurTokCosts		248
+nim	treeCost	image/codecs/vp8enc.html#treeCost,seq[TreeNode],int	proc treeCost(nodes: seq[TreeNode]; v: int): float64		260
+nim	vp8LastNumUpdates	image/codecs/vp8enc.html#vp8LastNumUpdates	var vp8LastNumUpdates		316
+nim	writeToken	image/codecs/vp8enc.html#writeToken,BoolEnc,int,int,int,int,int	proc writeToken(e: var BoolEnc; startIdx, plane, band, cx, tok: int)		411
+nim	writeExtra	image/codecs/vp8enc.html#writeExtra,BoolEnc,int,int	proc writeExtra(e: var BoolEnc; ci, extra: int)		431
+nim	extraRate	image/codecs/vp8enc.html#extraRate,int,int	proc extraRate(ci, extra: int): float64		451
+nim	coeffBlockRate	image/codecs/vp8enc.html#coeffBlockRate,array[,int32],int,int,int	proc coeffBlockRate(qblk: array[16, int32]; plane, cx, first: int): tuple[\n    rate: float64, hasNz: bool]		461
+nim	ssd16	image/codecs/vp8enc.html#ssd16,array[,uint8],array[,uint8]	proc ssd16(a, b: array[256, uint8]): float64		492
+nim	ssd8	image/codecs/vp8enc.html#ssd8,array[,uint8],array[,uint8]	proc ssd8(a, b: array[64, uint8]): float64		497
+nim	vp8RdoLambda	image/codecs/vp8enc.html#vp8RdoLambda,int16	proc vp8RdoLambda(qac: int16): float64		508
+nim	fillBorderLuma	image/codecs/vp8enc.html#fillBorderLuma,seq[uint8],int,int,int,seq[uint8],seq[uint8]	proc fillBorderLuma(dst: var seq[uint8]; mbx, mby, mbw: int; top, left: seq[uint8])		562
+nim	fillBorderChroma	image/codecs/vp8enc.html#fillBorderChroma,seq[uint8],int,int,seq[uint8],seq[uint8]	proc fillBorderChroma(dst: var seq[uint8]; mbx, mby: int; top, left: seq[uint8])		592
+nim	trellisLambda	image/codecs/vp8enc.html#trellisLambda,float64	proc trellisLambda(lambda: float64): float64		953
+nim	trellisBlk	image/codecs/vp8enc.html#trellisBlk,array[,float64],int16,int16,int,int,int,float64	proc trellisBlk(F: array[16, float64]; qdc, qac: int16; plane, cx, first: int;\n           lambdaT: float64): tuple[q: array[16, int32], hasNz: bool]		955
+nim	encodeVp8Lossy	image/codecs/vp8enc.html#encodeVp8Lossy,RgbaImage,int	proc encodeVp8Lossy(img: RgbaImage; quality: int): ImageResult[seq[uint8]]		1594
+nim	encodeWebpLossy	image/codecs/vp8enc.html#encodeWebpLossy,RgbaImage,int	proc encodeWebpLossy(img: RgbaImage; quality: int): ImageResult[seq[uint8]]		1666

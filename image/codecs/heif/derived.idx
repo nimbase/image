@@ -1,0 +1,19 @@
+nimTitle	derived	image/codecs/heif/derived.html	module image/codecs/heif/derived		0
+nim	GridInfo	image/codecs/heif/derived.html#GridInfo	object GridInfo		12
+nim	OverlayInfo	image/codecs/heif/derived.html#OverlayInfo	object OverlayInfo		15
+nim	parseGrid	image/codecs/heif/derived.html#parseGrid,seq[uint8]	proc parseGrid(payload: seq[uint8]): GridInfo		20
+nim	parseOverlay	image/codecs/heif/derived.html#parseOverlay,seq[uint8],int	proc parseOverlay(payload: seq[uint8]; refCount: int): OverlayInfo		41
+nim	buildGrid	image/codecs/heif/derived.html#buildGrid,int,int,int,int	proc buildGrid(rows, cols, outW, outH: int): seq[uint8]		75
+nim	buildOverlay	image/codecs/heif/derived.html#buildOverlay,int,int,seq[tuple[int,int]]	proc buildOverlay(outW, outH: int; offs: seq[tuple[x, y: int]]): seq[uint8]		87
+nim	compositeGridLuma8	image/codecs/heif/derived.html#compositeGridLuma8,seq[GrayImage],GridInfo	proc compositeGridLuma8(tiles: seq[GrayImage]; g: GridInfo): GrayImage		108
+nim	compositeGridRgb8	image/codecs/heif/derived.html#compositeGridRgb8,seq[RgbImage],GridInfo	proc compositeGridRgb8(tiles: seq[RgbImage]; g: GridInfo): RgbImage		127
+nim	compositeGridRgba8	image/codecs/heif/derived.html#compositeGridRgba8,seq[RgbaImage],GridInfo	proc compositeGridRgba8(tiles: seq[RgbaImage]; g: GridInfo): RgbaImage		146
+nim	compositeOverlayRgb8	image/codecs/heif/derived.html#compositeOverlayRgb8,seq[RgbImage],OverlayInfo	proc compositeOverlayRgb8(layers: seq[RgbImage]; o: OverlayInfo): RgbImage		163
+nim	compositeGridRgb16	image/codecs/heif/derived.html#compositeGridRgb16,seq[Rgb16Image],GridInfo	proc compositeGridRgb16(tiles: seq[Rgb16Image]; g: GridInfo): Rgb16Image		182
+nim	compositeGridRgba16	image/codecs/heif/derived.html#compositeGridRgba16,seq[Rgba16Image],GridInfo	proc compositeGridRgba16(tiles: seq[Rgba16Image]; g: GridInfo): Rgba16Image		201
+nim	compositeGridLuma16	image/codecs/heif/derived.html#compositeGridLuma16,seq[Gray16Image],GridInfo	proc compositeGridLuma16(tiles: seq[Gray16Image]; g: GridInfo): Gray16Image		220
+nim	compositeOverlayRgba8	image/codecs/heif/derived.html#compositeOverlayRgba8,seq[RgbaImage],OverlayInfo	proc compositeOverlayRgba8(layers: seq[RgbaImage]; o: OverlayInfo): RgbaImage		239
+nim	compositeOverlayLuma8	image/codecs/heif/derived.html#compositeOverlayLuma8,seq[GrayImage],OverlayInfo	proc compositeOverlayLuma8(layers: seq[GrayImage]; o: OverlayInfo): GrayImage		263
+nim	compositeOverlayRgb16	image/codecs/heif/derived.html#compositeOverlayRgb16,seq[Rgb16Image],OverlayInfo	proc compositeOverlayRgb16(layers: seq[Rgb16Image]; o: OverlayInfo): Rgb16Image		282
+nim	compositeOverlayRgba16	image/codecs/heif/derived.html#compositeOverlayRgba16,seq[Rgba16Image],OverlayInfo	proc compositeOverlayRgba16(layers: seq[Rgba16Image]; o: OverlayInfo): Rgba16Image		302
+nim	compositeOverlayLuma16	image/codecs/heif/derived.html#compositeOverlayLuma16,seq[Gray16Image],OverlayInfo	proc compositeOverlayLuma16(layers: seq[Gray16Image]; o: OverlayInfo): Gray16Image		319

@@ -1,0 +1,13 @@
+nimTitle	heif	image/codecs/heif/heif.html	module image/codecs/heif/heif		0
+nim	decodeHeif	image/codecs/heif/heif.html#decodeHeif,seq[uint8]	proc decodeHeif(data: seq[uint8]): ImageResult[DynamicImage]		491
+nim	listHeifItems	image/codecs/heif/heif.html#listHeifItems,seq[uint8]	proc listHeifItems(data: seq[uint8]): ImageResult[seq[HeifItem]]		510
+nim	decodeHeifItem	image/codecs/heif/heif.html#decodeHeifItem,seq[uint8],uint32	proc decodeHeifItem(data: seq[uint8]; itemId: uint32): ImageResult[DynamicImage]		518
+nim	decodeHeifAll	image/codecs/heif/heif.html#decodeHeifAll,seq[uint8]	proc decodeHeifAll(data: seq[uint8]): ImageResult[seq[DynamicImage]]		527
+nim	heifGroups	image/codecs/heif/heif.html#heifGroups,seq[uint8]	proc heifGroups(data: seq[uint8]): ImageResult[seq[EntityGroup]]		544
+nim	heifMetadata	image/codecs/heif/heif.html#heifMetadata,seq[uint8]	proc heifMetadata(data: seq[uint8]): ImageResult[\n    seq[tuple[id: uint32, typ: string, contentType: string, bytes: seq[uint8]]]]		555
+nim	decodeHeic	image/codecs/heif/heif.html#decodeHeic,seq[uint8]	proc decodeHeic(data: seq[uint8]): ImageResult[DynamicImage]		576
+nim	heifMovieInfo	image/codecs/heif/heif.html#heifMovieInfo,seq[uint8]	proc heifMovieInfo(data: seq[uint8]): ImageResult[HeifMovie]		580
+nim	decodeHeifSequenceSample	image/codecs/heif/heif.html#decodeHeifSequenceSample,seq[uint8],int,int	proc decodeHeifSequenceSample(data: seq[uint8]; trackIdx = 0; sampleIdx = 0): ImageResult[\n    DynamicImage]		649
+nim	decodeHeifSequenceAll	image/codecs/heif/heif.html#decodeHeifSequenceAll,seq[uint8],int	proc decodeHeifSequenceAll(data: seq[uint8]; trackIdx = 0): ImageResult[\n    seq[DynamicImage]]		668
+nim	extractItemBytes	image/codecs/heif/heif.html#extractItemBytes,seq[uint8]	proc extractItemBytes(data: seq[uint8]): ImageResult[seq[uint8]]		689
+nim	extractJ2kCodestream	image/codecs/heif/heif.html#extractJ2kCodestream,seq[uint8]	proc extractJ2kCodestream(data: seq[uint8]): ImageResult[seq[uint8]]		702

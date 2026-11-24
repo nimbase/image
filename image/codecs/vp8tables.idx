@@ -1,0 +1,17 @@
+nimTitle	vp8tables	image/codecs/vp8tables.html	module image/codecs/vp8tables		0
+nim	SegmentIdTree	image/codecs/vp8tables.html#SegmentIdTree	const SegmentIdTree		3
+nim	KeyframeYmodeTree	image/codecs/vp8tables.html#KeyframeYmodeTree	const KeyframeYmodeTree		6
+nim	KeyframeYmodeProbs	image/codecs/vp8tables.html#KeyframeYmodeProbs	const KeyframeYmodeProbs		9
+nim	KeyframeBpredModeTree	image/codecs/vp8tables.html#KeyframeBpredModeTree	const KeyframeBpredModeTree		12
+nim	KeyframeBpredModeProbs	image/codecs/vp8tables.html#KeyframeBpredModeProbs	const KeyframeBpredModeProbs		15
+nim	KeyframeUvModeTree	image/codecs/vp8tables.html#KeyframeUvModeTree	const KeyframeUvModeTree		18
+nim	KeyframeUvModeProbs	image/codecs/vp8tables.html#KeyframeUvModeProbs	const KeyframeUvModeProbs		21
+nim	CoeffUpdateProbs	image/codecs/vp8tables.html#CoeffUpdateProbs	const CoeffUpdateProbs		24
+nim	CoeffProbs	image/codecs/vp8tables.html#CoeffProbs	const CoeffProbs		27
+nim	DctTokenTree	image/codecs/vp8tables.html#DctTokenTree	const DctTokenTree		30
+nim	ProbDctCat	image/codecs/vp8tables.html#ProbDctCat	const ProbDctCat		33
+nim	DctCatBase	image/codecs/vp8tables.html#DctCatBase	const DctCatBase		36
+nim	CoeffBands	image/codecs/vp8tables.html#CoeffBands	const CoeffBands		39
+nim	DcQuant	image/codecs/vp8tables.html#DcQuant	const DcQuant		42
+nim	AcQuant	image/codecs/vp8tables.html#AcQuant	const AcQuant		45
+nim	Zigzag	image/codecs/vp8tables.html#Zigzag	const Zigzag		48

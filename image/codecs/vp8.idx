@@ -1,0 +1,63 @@
+nimTitle	vp8	image/codecs/vp8.html	module image/codecs/vp8		0
+nim	Vp8DecodeError	image/codecs/vp8.html#Vp8DecodeError	object Vp8DecodeError		17
+nim	lmDc	image/codecs/vp8.html#lmDc	LumaMode.lmDc		25
+nim	lmV	image/codecs/vp8.html#lmV	LumaMode.lmV		25
+nim	lmH	image/codecs/vp8.html#lmH	LumaMode.lmH		25
+nim	lmTm	image/codecs/vp8.html#lmTm	LumaMode.lmTm		25
+nim	lmB	image/codecs/vp8.html#lmB	LumaMode.lmB		25
+nim	LumaMode	image/codecs/vp8.html#LumaMode	enum LumaMode		25
+nim	cmDc	image/codecs/vp8.html#cmDc	ChromaMode.cmDc		27
+nim	cmV	image/codecs/vp8.html#cmV	ChromaMode.cmV		27
+nim	cmH	image/codecs/vp8.html#cmH	ChromaMode.cmH		27
+nim	cmTm	image/codecs/vp8.html#cmTm	ChromaMode.cmTm		27
+nim	ChromaMode	image/codecs/vp8.html#ChromaMode	enum ChromaMode		27
+nim	imDc	image/codecs/vp8.html#imDc	IntraMode.imDc		29
+nim	imTm	image/codecs/vp8.html#imTm	IntraMode.imTm		29
+nim	imVe	image/codecs/vp8.html#imVe	IntraMode.imVe		29
+nim	imHe	image/codecs/vp8.html#imHe	IntraMode.imHe		29
+nim	imLd	image/codecs/vp8.html#imLd	IntraMode.imLd		29
+nim	imRd	image/codecs/vp8.html#imRd	IntraMode.imRd		29
+nim	imVr	image/codecs/vp8.html#imVr	IntraMode.imVr		29
+nim	imVl	image/codecs/vp8.html#imVl	IntraMode.imVl		29
+nim	imHd	image/codecs/vp8.html#imHd	IntraMode.imHd		29
+nim	imHu	image/codecs/vp8.html#imHu	IntraMode.imHu		29
+nim	IntraMode	image/codecs/vp8.html#IntraMode	enum IntraMode		29
+nim	BoolDec	image/codecs/vp8.html#BoolDec	object BoolDec		81
+nim	initBoolDec	image/codecs/vp8.html#initBoolDec,seq[uint8]	proc initBoolDec(data: seq[uint8]): BoolDec		90
+nim	readBit	image/codecs/vp8.html#readBit,BoolDec,uint8	proc readBit(d: var BoolDec; prob: uint8): bool		107
+nim	readFlag	image/codecs/vp8.html#readFlag,BoolDec	proc readFlag(d: var BoolDec): bool		125
+nim	readLiteral	image/codecs/vp8.html#readLiteral,BoolDec,int	proc readLiteral(d: var BoolDec; n: int): uint8		128
+nim	TreeNode	image/codecs/vp8.html#TreeNode	object TreeNode		142
+nim	buildNodes	image/codecs/vp8.html#buildNodes,openArray[int8],openArray[uint8]	proc buildNodes(tree: openArray[int8]; probs: openArray[uint8]): seq[TreeNode]		153
+nim	readWithTree	image/codecs/vp8.html#readWithTree,BoolDec,openArray[TreeNode],int	proc readWithTree(d: var BoolDec; tree: openArray[TreeNode]; startIdx: int): int8		160
+nim	idct4x4	image/codecs/vp8.html#idct4x4,array[,int32]	proc idct4x4(blk: var array[16, int32])		182
+nim	iwht4x4	image/codecs/vp8.html#iwht4x4,array[,int32]	proc iwht4x4(blk: var array[16, int32])		212
+nim	yuvMulhi	image/codecs/vp8.html#yuvMulhi,uint8,uint16	proc yuvMulhi(v: uint8; coeff: uint16): int32		381
+nim	yuvClip	image/codecs/vp8.html#yuvClip,int32	proc yuvClip(v: int32): uint8		384
+nim	yuvToR	image/codecs/vp8.html#yuvToR,uint8,uint8	proc yuvToR(y, v: uint8): uint8		387
+nim	yuvToG	image/codecs/vp8.html#yuvToG,uint8,uint8,uint8	proc yuvToG(y, u, v: uint8): uint8		390
+nim	yuvToB	image/codecs/vp8.html#yuvToB,uint8,uint8	proc yuvToB(y, u: uint8): uint8		393
+nim	fancyChroma	image/codecs/vp8.html#fancyChroma,uint8,uint8,uint8,uint8	proc fancyChroma(main, sec1, sec2, tert: uint8): uint8		396
+nim	addResidue	image/codecs/vp8.html#addResidue,seq[uint8],array[,int32],int,int,int	proc addResidue(pblock: var seq[uint8]; rblock: array[16, int32]; y0, x0, stride: int)		499
+nim	predictVpred	image/codecs/vp8.html#predictVpred,seq[uint8],int,int,int,int	proc predictVpred(a: var seq[uint8]; size, x0, y0, stride: int)		508
+nim	predictHpred	image/codecs/vp8.html#predictHpred,seq[uint8],int,int,int,int	proc predictHpred(a: var seq[uint8]; size, x0, y0, stride: int)		515
+nim	predictDcpred	image/codecs/vp8.html#predictDcpred,seq[uint8],int,int,bool,bool	proc predictDcpred(a: var seq[uint8]; size, stride: int; above, left: bool)		521
+nim	predictTmpred	image/codecs/vp8.html#predictTmpred,seq[uint8],int,int,int,int	proc predictTmpred(a: var seq[uint8]; size, x0, y0, stride: int)		539
+nim	predictBdcpred	image/codecs/vp8.html#predictBdcpred,seq[uint8],int,int,int	proc predictBdcpred(a: var seq[uint8]; x0, y0, stride: int)		547
+nim	predictBvepred	image/codecs/vp8.html#predictBvepred,seq[uint8],int,int,int	proc predictBvepred(a: var seq[uint8]; x0, y0, stride: int)		577
+nim	predictBhepred	image/codecs/vp8.html#predictBhepred,seq[uint8],int,int,int	proc predictBhepred(a: var seq[uint8]; x0, y0, stride: int)		587
+nim	predictBldpred	image/codecs/vp8.html#predictBldpred,seq[uint8],int,int,int	proc predictBldpred(a: var seq[uint8]; x0, y0, stride: int)		597
+nim	predictBrdpred	image/codecs/vp8.html#predictBrdpred,seq[uint8],int,int,int	proc predictBrdpred(a: var seq[uint8]; x0, y0, stride: int)		607
+nim	predictBvrpred	image/codecs/vp8.html#predictBvrpred,seq[uint8],int,int,int	proc predictBvrpred(a: var seq[uint8]; x0, y0, stride: int)		617
+nim	predictBvlpred	image/codecs/vp8.html#predictBvlpred,seq[uint8],int,int,int	proc predictBvlpred(a: var seq[uint8]; x0, y0, stride: int)		636
+nim	predictBhdpred	image/codecs/vp8.html#predictBhdpred,seq[uint8],int,int,int	proc predictBhdpred(a: var seq[uint8]; x0, y0, stride: int)		655
+nim	predictBhupred	image/codecs/vp8.html#predictBhupred,seq[uint8],int,int,int	proc predictBhupred(a: var seq[uint8]; x0, y0, stride: int)		674
+nim	createBorderLuma	image/codecs/vp8.html#createBorderLuma,int,int,int,seq[uint8],seq[uint8]	proc createBorderLuma(mbx, mby, mbw: int; top, left: seq[uint8]): seq[uint8]		715
+nim	createBorderChroma	image/codecs/vp8.html#createBorderChroma,int,int,seq[uint8],seq[uint8]	proc createBorderChroma(mbx, mby: int; top, left: seq[uint8]): seq[uint8]		743
+nim	setChromaBorder	image/codecs/vp8.html#setChromaBorder,seq[uint8],seq[uint8],seq[uint8],int	proc setChromaBorder(leftB, topB: var seq[uint8]; cb: seq[uint8]; mbx: int)		759
+nim	YmodeNodes	image/codecs/vp8.html#YmodeNodes	let YmodeNodes		768
+nim	UvNodes	image/codecs/vp8.html#UvNodes	let UvNodes		769
+nim	BpredNodes	image/codecs/vp8.html#BpredNodes	let BpredNodes		770
+nim	Vp8Frame	image/codecs/vp8.html#Vp8Frame	object Vp8Frame		792
+nim	decodeVp8Frame	image/codecs/vp8.html#decodeVp8Frame,openArray[uint8]	proc decodeVp8Frame(data: openArray[uint8]): ImageResult[Vp8Frame]		1320
+nim	vp8ToRgb	image/codecs/vp8.html#vp8ToRgb,Vp8Frame	proc vp8ToRgb(f: Vp8Frame): seq[uint8]		1331

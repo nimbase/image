@@ -9,6 +9,6 @@ nim	psArbitrary	image/codecs/pnm.html#psArbitrary	PnmSubtype.psArbitrary		11
 nim	PnmSubtype	image/codecs/pnm.html#PnmSubtype	enum PnmSubtype		11
 nim	PnmHeader	image/codecs/pnm.html#PnmHeader	object PnmHeader		13
 nim	parsePnmHeader	image/codecs/pnm.html#parsePnmHeader,openArray[uint8]	proc parsePnmHeader(data: openArray[uint8]): ImageResult[\n    tuple[h: PnmHeader, bodyOff: int]]		40
-nim	decodePnm	image/codecs/pnm.html#decodePnm,seq[uint8]	proc decodePnm(data: seq[uint8]): ImageResult[DynamicImage]		102
+nim	decodePnm	image/codecs/pnm.html#decodePnm,openArray[uint8]	proc decodePnm(data: openArray[uint8]): ImageResult[DynamicImage]		102
 nim	encodePnmGray8	image/codecs/pnm.html#encodePnmGray8,GrayImage	proc encodePnmGray8(img: GrayImage): seq[uint8]		218
 nim	encodePnmRgb8	image/codecs/pnm.html#encodePnmRgb8,RgbImage	proc encodePnmRgb8(img: RgbImage): seq[uint8]		224

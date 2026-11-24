@@ -1,0 +1,3 @@
+nimTitle	unc	image/codecs/heif/unc.html	module image/codecs/heif/unc		0
+nim	decompressFrame	image/codecs/heif/unc.html#decompressFrame,seq[uint8],seq[uint8],int	proc decompressFrame(raw: seq[uint8]; cmpPayload: seq[uint8]; expectedLen: int): ImageResult[\n    seq[uint8]]		28
+nim	decodeUncompressed	image/codecs/heif/unc.html#decodeUncompressed,seq[uint8],UncProfile,seq[CmpEntry],PixInfo,int,int,int,bool	proc decodeUncompressed(frame: seq[uint8]; prof: UncProfile; comps: seq[CmpEntry];\n                   pixi: PixInfo; width, height: int; matrix: int;\n                   fullRange: bool): ImageResult[DynamicImage]		58

@@ -1,0 +1,11 @@
+nimTitle	convert	image/convert.html	module image/convert		0
+nim	WebpMaxDim	image/convert.html#WebpMaxDim	const WebpMaxDim		32
+nim	decodeImage	image/convert.html#decodeImage,openArray[uint8]	proc decodeImage(data: openArray[uint8]): ImageResult[DynamicImage]		35
+nim	normalizeToRgba8	image/convert.html#normalizeToRgba8,DynamicImage	proc normalizeToRgba8(img: DynamicImage): ImageResult[RgbaImage]		91
+nim	WebpRequest	image/convert.html#WebpRequest	object WebpRequest		181
+nim	toWebp	image/convert.html#toWebp,DynamicImage,int	proc toWebp(img: DynamicImage; quality = 75): WebpRequest		190
+nim	lossless	image/convert.html#lossless,WebpRequest	proc lossless(req: WebpRequest; on = true): WebpRequest		198
+nim	crop	image/convert.html#crop,WebpRequest,uint32,uint32,uint32,uint32	proc crop(req: WebpRequest; x, y, w, h: uint32): WebpRequest		204
+nim	encode	image/convert.html#encode,WebpRequest	proc encode(req: WebpRequest): ImageResult[seq[uint8]]		228
+nim	convertToWebp	image/convert.html#convertToWebp,openArray[uint8],int	proc convertToWebp(data: openArray[uint8]; quality = 75; lossless = false): ImageResult[\n    seq[uint8]]		248
+nim	decodeImageFile	image/convert.html#decodeImageFile,string	proc decodeImageFile(path: string): ImageResult[DynamicImage]		256

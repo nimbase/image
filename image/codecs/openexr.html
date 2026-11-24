@@ -16,10 +16,10 @@
 <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA3XAAAN1wFCKJt4AAAAB3RJTUUH4QQQEwksSS9ZWwAAAk1JREFUWMPtll2ITVEUx39nn/O7Y5qR8f05wtCUUr6ZIS++8pEnkZInPImneaCQ5METNdOkeFBKUhMPRIkHKfEuUZSUlGlKPN2TrgfncpvmnntnmlEyq1Z7t89/rf9a6+y99oZxGZf/XeIq61EdtgKXgdXA0xrYAvBjOIF1AI9zvjcC74BSpndrJPkBWDScTF8Aa4E3wDlgHbASaANmVqlcCnwHvgDvgVfAJ+AikAAvgfVZwLnSVZHZaOuKoQi3ZOMi4NkYkpe1p4J7A8BpYAD49hfIy/oqG0+hLomiKP2L5L+1ubn5115S+3OAn4EnwBlgMzCjyt6ZAnQCJ4A7wOs88iRJHvw50HoujuPBoCKwHWiosy8MdfZnAdcHk8dxXFJ3VQbQlCTJvRBCGdRbD4M6uc5glpY3eAihpN5S5w12diSEcCCEcKUO4ljdr15T76ur1FDDLIQQ3qv71EdDOe3Kxj3leRXyk+pxdWnFWod6Wt2bY3de3aSuUHcPBVimHs7mK9WrmeOF6lR1o9qnzskh2ar2qm1qizpfXaPeVGdlmGN5pb09qMxz1Xb1kLqgzn1RyH7JUXW52lr5e/Kqi9qpto7V1atuUzfnARrV7jEib1T76gG2qxdGmXyiekkt1GswPTtek0aBfJp6YySGBfWg2tPQ0FAYgf1stUfdmdcjarbYJEniKIq6gY/Aw+zWHAC+p2labGpqiorFYgGYCEzN7oQdQClN07O1/EfDyGgC0ALMBdYAi4FyK+4H3gLPsxfR1zRNi+NP7nH5J+QntnXe5B5mpfQAAAAASUVORK5CYII=">
 
 <!-- CSS -->
-<link rel="stylesheet" type="text/css" href="../../nimdoc.out.css?v=2.2.12">
+<link rel="stylesheet" type="text/css" href="../../nimdoc.out.css?v=2.4.2">
 
 <!-- JS -->
-<script type="text/javascript" src="../../dochack.js?v=2.2.12"></script>
+<script type="text/javascript" src="../../dochack.js?v=2.4.2"></script>
 </head>
 <body>
   <div class="document" id="documentId">
@@ -31,37 +31,83 @@
       <div class="row">
   <div class="three columns">
     <div class="theme-select-wrapper">
-      <label for="theme-select">Theme:&nbsp;</label>
-      <select id="theme-select" onchange="setTheme(this.value)">
-        <option value="auto">🌗 Match OS</option>
-        <option value="dark">🌑 Dark</option>
-        <option value="light">🌕 Light</option>
-      </select>
-    </div>
+  <label for="theme-select">Theme:&nbsp;</label>
+  <select id="theme-select" onchange="setTheme(this.value)">
+    <option value="auto">🌗 Match OS</option>
+    <option value="dark">🌑 Dark</option>
+    <option value="light">🌕 Light</option>
+  </select>
+</div>
+
     <div id="global-links">
-      <ul class="simple">
-        <li><a id="indexLink" href="../../theindex.html">Index</a></li>
-      </ul>
-    </div>
-    <div id="searchInputDiv">
-      Search: <input type="search" id="searchInput" oninput="search()"/>
-    </div>
-    <div>
-      Group by:
-      <select onchange="groupBy(this.value)">
-        <option value="section">Section</option>
-        <option value="type">Type</option>
-      </select>
-    </div>
+  
+  <ul class="simple">
+  <li><a id="indexLink" href="../../theindex.html">Index</a></li>
+</ul>
+
+</div>
+
+      <div id="searchInputDiv">
+  Search: <input type="search" id="searchInput" oninput="search()"/>
+</div>
+
+    <div class="search-groupby">
+  Group by:
+  <select onchange="groupBy(this.value)">
+    <option value="section">Section</option>
+    <option value="type">Type</option>
+  </select>
+</div>
+
     <ul class="simple simple-toc" id="toc-list">
   <li>
   <a class="reference reference-toplevel" href="#6" id="56">Imports</a>
 </li>
 <li>
   <details open>
+    <summary><a class="reference reference-toplevel" href="#7" id="57">Types</a></summary>
+    <ul class="simple simple-toc-section">
+      <li><a class="reference" href="#ExrChannel" title="ExrChannel = object
+  name*: string
+  pixelType*: int32
+  pLinear*: bool
+  xSamp*, ySamp*: int32">ExrChannel</a></li>
+
+    </ul>
+  </details>
+</li>
+<li>
+  <details open>
+    <summary><a class="reference reference-toplevel" href="#8" id="58">Vars</a></summary>
+    <ul class="simple simple-toc-section">
+      <li><a class="reference" href="#b44ExpTable" title="b44ExpTable: seq[uint16]">b44ExpTable</a></li>
+<li><a class="reference" href="#b44LogTable" title="b44LogTable: seq[uint16]">b44LogTable</a></li>
+<li><a class="reference" href="#dwaDctA" title="dwaDctA: float32">dwaDctA</a></li>
+<li><a class="reference" href="#dwaDctB" title="dwaDctB: float32">dwaDctB</a></li>
+<li><a class="reference" href="#dwaDctC" title="dwaDctC: float32">dwaDctC</a></li>
+<li><a class="reference" href="#dwaDctD" title="dwaDctD: float32">dwaDctD</a></li>
+<li><a class="reference" href="#dwaDctE" title="dwaDctE: float32">dwaDctE</a></li>
+<li><a class="reference" href="#dwaDctF" title="dwaDctF: float32">dwaDctF</a></li>
+<li><a class="reference" href="#dwaDctG" title="dwaDctG: float32">dwaDctG</a></li>
+<li><a class="reference" href="#dwaToLinearTab" title="dwaToLinearTab: seq[uint16]">dwaToLinearTab</a></li>
+<li><a class="reference" href="#dwaToNonLinearTab" title="dwaToNonLinearTab: seq[uint16]">dwaToNonLinearTab</a></li>
+
+    </ul>
+  </details>
+</li>
+<li>
+  <details open>
     <summary><a class="reference reference-toplevel" href="#10" id="60">Consts</a></summary>
     <ul class="simple simple-toc-section">
-      <li><a class="reference" href="#ExrMagic" title="ExrMagic = [0x76'u8, 0x0000002F, 0x00000031, 0x00000001]">ExrMagic</a></li>
+      <li><a class="reference" href="#dwaJpegQc" title="dwaJpegQc = [17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24,
+             26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99,
+             99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+             99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99]">dwaJpegQc</a></li>
+<li><a class="reference" href="#dwaJpegQy" title="dwaJpegQy = [16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14,
+             13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22,
+             37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64,
+             78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99]">dwaJpegQy</a></li>
+<li><a class="reference" href="#ExrMagic" title="ExrMagic = [0x76'u8, 0x0000002F, 0x00000031, 0x00000001]">ExrMagic</a></li>
 
     </ul>
   </details>
@@ -70,16 +116,176 @@
   <details open>
     <summary><a class="reference reference-toplevel" href="#12" id="62">Procs</a></summary>
     <ul class="simple simple-toc-section">
-      <ul class="simple nested-toc-section">decodeExr
-  <li><a class="reference" href="#decodeExr%2Cseq%5Buint8%5D" title="decodeExr(data: seq[uint8]): ImageResult[DynamicImage]">decodeExr(data: seq[uint8]): ImageResult[DynamicImage]</a></li>
+      <ul class="simple nested-toc-section">b44ApplyChunk
+  <li><a class="reference" href="#b44ApplyChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5Bint%5D%2Cseq%5Bint32%5D%2Cseq%5Bbool%5D%2Cbool" title="b44ApplyChunk(planar: openArray[uint8]; w, rows: int; chanBytes: seq[int];
+              ptypes: seq[int32]; pLinears: seq[bool]; flatFields: bool): seq[
+    uint8]">b44ApplyChunk(planar: openArray[uint8]; w, rows: int; chanBytes: seq[int];
+              ptypes: seq[int32]; pLinears: seq[bool]; flatFields: bool): seq[
+    uint8]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">b44Pack
+  <li><a class="reference" href="#b44Pack%2Carray%5B%2Cuint16%5D%2Cbool%2Cbool%2Carray%5B%2Cuint8%5D" title="b44Pack(s: array[16, uint16]; flatFields, exactMax: bool;
+        dst: var array[14, uint8]): int">b44Pack(s: array[16, uint16]; flatFields, exactMax: bool;
+        dst: var array[14, uint8]): int</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">b44ShiftAndRound
+  <li><a class="reference" href="#b44ShiftAndRound%2Cint%2Cint" title="b44ShiftAndRound(x, shift: int): int">b44ShiftAndRound(x, shift: int): int</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">b44UndoChunk
+  <li><a class="reference" href="#b44UndoChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5BExrChannel%5D%2Cseq%5Bint%5D" title="b44UndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];
+             chanBytes: seq[int]): ImageResult[seq[uint8]]">b44UndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];
+             chanBytes: seq[int]): ImageResult[seq[uint8]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">b44Unpack
+  <li><a class="reference" href="#b44Unpack%2CopenArray%5Buint8%5D%2Cbool" title="b44Unpack(b: openArray[uint8]; flat: bool): array[16, uint16]">b44Unpack(b: openArray[uint8]; flat: bool): array[16, uint16]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">chunkyToPlanar
+  <li><a class="reference" href="#chunkyToPlanar%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5Bint%5D" title="chunkyToPlanar(full: openArray[uint8]; w, rows: int; chanBytes: seq[int]): seq[
+    uint8]">chunkyToPlanar(full: openArray[uint8]; w, rows: int; chanBytes: seq[int]): seq[
+    uint8]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">decodeExr
+  <li><a class="reference" href="#decodeExr%2CopenArray%5Buint8%5D" title="decodeExr(raw: openArray[uint8]): ImageResult[DynamicImage]">decodeExr(raw: openArray[uint8]): ImageResult[DynamicImage]</a></li>
 
 </ul>
 <ul class="simple nested-toc-section">decodeExrAll
-  <li><a class="reference" href="#decodeExrAll%2Cseq%5Buint8%5D" title="decodeExrAll(data: seq[uint8]): ImageResult[seq[DynamicImage]]">decodeExrAll(data: seq[uint8]): ImageResult[seq[DynamicImage]]</a></li>
+  <li><a class="reference" href="#decodeExrAll%2CopenArray%5Buint8%5D" title="decodeExrAll(raw: openArray[uint8]): ImageResult[seq[DynamicImage]]">decodeExrAll(raw: openArray[uint8]): ImageResult[seq[DynamicImage]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaAlgoQuantize
+  <li><a class="reference" href="#dwaAlgoQuantize%2Cuint16%2Cuint16%2Cfloat32%2Cfloat32" title="dwaAlgoQuantize(src, herrTol: uint16; errTol, srcFloat: float32): uint16">dwaAlgoQuantize(src, herrTol: uint16; errTol, srcFloat: float32): uint16</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaApplyChunk
+  <li><a class="reference" href="#dwaApplyChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5BExrChannel%5D%2Cseq%5Bint%5D%2Cfloat32" title="dwaApplyChunk(planar: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];
+              chanBytes: seq[int]; level = 45.0'f32): tuple[ok: bool,
+    blk: seq[uint8]]">dwaApplyChunk(planar: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];
+              chanBytes: seq[int]; level = 45.0'f32): tuple[ok: bool,
+    blk: seq[uint8]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaCountLeadingZeros
+  <li><a class="reference" href="#dwaCountLeadingZeros%2Cuint32" title="dwaCountLeadingZeros(x: uint32): int">dwaCountLeadingZeros(x: uint32): int</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaCountSetBits
+  <li><a class="reference" href="#dwaCountSetBits%2Cuint16" title="dwaCountSetBits(x: uint16): int">dwaCountSetBits(x: uint16): int</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaCscFwd
+  <li><a class="reference" href="#dwaCscFwd%2Carray%5B%2Cfloat32%5D%2Carray%5B%2Cfloat32%5D%2Carray%5B%2Cfloat32%5D" title="dwaCscFwd(r, g, b: var array[64, float32])">dwaCscFwd(r, g, b: var array[64, float32])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaCscInv
+  <li><a class="reference" href="#dwaCscInv%2Cfloat32%2Cfloat32%2Cfloat32%2Cfloat32%2Cfloat32%2Cfloat32" title="dwaCscInv(y, cb, cr: float32; r, g, b: var float32)">dwaCscInv(y, cb, cr: float32; r, g, b: var float32)</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaDctDcOnly
+  <li><a class="reference" href="#dwaDctDcOnly%2Carray%5B%2Cfloat32%5D" title="dwaDctDcOnly(d: var array[64, float32])">dwaDctDcOnly(d: var array[64, float32])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaDctForward
+  <li><a class="reference" href="#dwaDctForward%2Carray%5B%2Cfloat32%5D" title="dwaDctForward(d: var array[64, float32])">dwaDctForward(d: var array[64, float32])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaDctInverse
+  <li><a class="reference" href="#dwaDctInverse%2Carray%5B%2Cfloat32%5D" title="dwaDctInverse(d: var array[64, float32])">dwaDctInverse(d: var array[64, float32])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaDctInverseScalar
+  <li><a class="reference" href="#dwaDctInverseScalar%2Carray%5B%2Cfloat32%5D" title="dwaDctInverseScalar(d: var array[64, float32])">dwaDctInverseScalar(d: var array[64, float32])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaEncodeGroup
+  <li><a class="reference" href="#dwaEncodeGroup%2Cseq%5Bseq%5Buint16%5D%5D%2CopenArray%5Bint%5D%2Cfloat32%2Cseq%5Buint16%5D%2CopenArray%5Bbool%5D%2Cint%2Cint%2Cseq%5Buint16%5D%2Cseq%5Bseq%5Buint16%5D%5D" title="dwaEncodeGroup(halves: seq[seq[uint16]]; chs: openArray[int]; qbe: float32;
+               toNonlin: seq[uint16]; hasNonlin: openArray[bool]; w, h: int;
+               acBuf: var seq[uint16]; dcBufs: var seq[seq[uint16]]): bool">dwaEncodeGroup(halves: seq[seq[uint16]]; chs: openArray[int]; qbe: float32;
+               toNonlin: seq[uint16]; hasNonlin: openArray[bool]; w, h: int;
+               acBuf: var seq[uint16]; dcBufs: var seq[seq[uint16]]): bool</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaFdiv
+  <li><a class="reference" href="#dwaFdiv%2Cfloat32%2Cfloat32" title="dwaFdiv(a, b: float32): float32">dwaFdiv(a, b: float32): float32</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaFloatToHalf
+  <li><a class="reference" href="#dwaFloatToHalf%2Cfloat32" title="dwaFloatToHalf(f: float32): uint16">dwaFloatToHalf(f: float32): uint16</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaFmul
+  <li><a class="reference" href="#dwaFmul%2Cfloat32%2Cfloat32" title="dwaFmul(a, b: float32): float32">dwaFmul(a, b: float32): float32</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaFromHalfZigzag
+  <li><a class="reference" href="#dwaFromHalfZigzag%2CopenArray%5Buint16%5D%2Carray%5B%2Cfloat32%5D" title="dwaFromHalfZigzag(src: openArray[uint16]; dst: var array[64, float32])">dwaFromHalfZigzag(src: openArray[uint16]; dst: var array[64, float32])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaParseRules
+  <li><a class="reference" href="#dwaParseRules%2CopenArray%5Buint8%5D%2Cint%2Cint" title="dwaParseRules(data: openArray[uint8]; pos: var int; left: int): tuple[ok: bool,
+    rules: seq[DwaRule]]">dwaParseRules(data: openArray[uint8]; pos: var int; left: int): tuple[ok: bool,
+    rules: seq[DwaRule]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaQCloseExp
+  <li><a class="reference" href="#dwaQCloseExp%2Cuint32%2Cuint32%2Cfloat32%2Cfloat32" title="dwaQCloseExp(abssrc, tolSig: uint32; errTol, srcFloat: float32): uint32">dwaQCloseExp(abssrc, tolSig: uint32; errTol, srcFloat: float32): uint32</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaQuantizeZig
+  <li><a class="reference" href="#dwaQuantizeZig%2Carray%5B%2Cuint16%5D%2Carray%5B%2Cfloat32%5D%2CopenArray%5Bfloat32%5D%2CopenArray%5Buint16%5D" title="dwaQuantizeZig(halfZig: var array[64, uint16]; dct: array[64, float32];
+               qtbl: openArray[float32]; htbl: openArray[uint16])">dwaQuantizeZig(halfZig: var array[64, uint16]; dct: array[64, float32];
+               qtbl: openArray[float32]; htbl: openArray[uint16])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaQuantSmall
+  <li><a class="reference" href="#dwaQuantSmall%2Cuint32%2Cint%2Cfloat32%2Cfloat32%2Cfloat32%2Cuint32%2Cbool" title="dwaQuantSmall(alt: uint32; smallbits: var int; srcFloat, errTol: float32;
+              smalldelta: var float32; smallest: var uint32; isLarge: bool)">dwaQuantSmall(alt: uint32; smallbits: var int; srcFloat, errTol: float32;
+              smalldelta: var float32; smallest: var uint32; isLarge: bool)</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaRleAc
+  <li><a class="reference" href="#dwaRleAc%2CopenArray%5Buint16%5D%2Cseq%5Buint16%5D" title="dwaRleAc(halfZig: openArray[uint16]; acBuf: var seq[uint16])">dwaRleAc(halfZig: openArray[uint16]; acBuf: var seq[uint16])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaRleCompress
+  <li><a class="reference" href="#dwaRleCompress%2CopenArray%5Buint8%5D" title="dwaRleCompress(data: openArray[uint8]): seq[uint8]">dwaRleCompress(data: openArray[uint8]): seq[uint8]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaRleDecompress
+  <li><a class="reference" href="#dwaRleDecompress%2CopenArray%5Buint8%5D%2Cint" title="dwaRleDecompress(data: openArray[uint8]; expected: int): seq[uint8]">dwaRleDecompress(data: openArray[uint8]; expected: int): seq[uint8]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaTranspose8
+  <li><a class="reference" href="#dwaTranspose8%2Carray%5B%2Cfloat32%5D" title="dwaTranspose8(d: var array[64, float32])">dwaTranspose8(d: var array[64, float32])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaUndoChunk
+  <li><a class="reference" href="#dwaUndoChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5BExrChannel%5D%2Cseq%5Bint%5D" title="dwaUndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];
+             chanBytes: seq[int]): ImageResult[seq[uint8]]">dwaUndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];
+             chanBytes: seq[int]): ImageResult[seq[uint8]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">dwaUnRleAc
+  <li><a class="reference" href="#dwaUnRleAc%2CopenArray%5Buint16%5D%2Cint%2Carray%5B%2Cuint16%5D" title="dwaUnRleAc(ac: openArray[uint16]; pos: var int; hz: var array[64, uint16]): tuple[
+    ok: bool, lnz: int]">dwaUnRleAc(ac: openArray[uint16]; pos: var int; hz: var array[64, uint16]): tuple[
+    ok: bool, lnz: int]</a></li>
 
 </ul>
 <ul class="simple nested-toc-section">encodeExr
-  <li><a class="reference" href="#encodeExr%2CDynamicImage" title="encodeExr(img: DynamicImage): ImageResult[seq[uint8]]">encodeExr(img: DynamicImage): ImageResult[seq[uint8]]</a></li>
+  <li><a class="reference" href="#encodeExr%2CDynamicImage%2Cint" title="encodeExr(img: DynamicImage; compression: int = 3): ImageResult[seq[uint8]]">encodeExr(img: DynamicImage; compression: int = 3): ImageResult[seq[uint8]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">ensureB44Tables
+  <li><a class="reference" href="#ensureB44Tables" title="ensureB44Tables()">ensureB44Tables()</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">ensureDwaTables
+  <li><a class="reference" href="#ensureDwaTables" title="ensureDwaTables()">ensureDwaTables()</a></li>
 
 </ul>
 <ul class="simple nested-toc-section">floatToHalf
@@ -88,6 +294,96 @@
 </ul>
 <ul class="simple nested-toc-section">halfToFloat
   <li><a class="reference" href="#halfToFloat%2Cuint16" title="halfToFloat(h: uint16): float32">halfToFloat(h: uint16): float32</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufBuildDecTable
+  <li><a class="reference" href="#hufBuildDecTable%2CopenArray%5Buint64%5D%2Cint%2Cint" title="hufBuildDecTable(hcode: openArray[uint64]; iMin, iMax: int): seq[HufDecEntry]">hufBuildDecTable(hcode: openArray[uint64]; iMin, iMax: int): seq[HufDecEntry]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufBuildEncTable
+  <li><a class="reference" href="#hufBuildEncTable%2CopenArray%5Buint64%5D%2Cint%2Cint" title="hufBuildEncTable(frq: var openArray[uint64]; iMin, iMax: var int): seq[uint64]">hufBuildEncTable(frq: var openArray[uint64]; iMin, iMax: var int): seq[uint64]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufCanonicalCodeTable
+  <li><a class="reference" href="#hufCanonicalCodeTable%2CopenArray%5Buint64%5D" title="hufCanonicalCodeTable(hcode: var openArray[uint64])">hufCanonicalCodeTable(hcode: var openArray[uint64])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufCompress
+  <li><a class="reference" href="#hufCompress%2CopenArray%5Buint16%5D" title="hufCompress(raw: openArray[uint16]): tuple[ok: bool, packed: seq[uint8]]">hufCompress(raw: openArray[uint16]): tuple[ok: bool, packed: seq[uint8]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufDecode
+  <li><a class="reference" href="#hufDecode%2CopenArray%5Buint64%5D%2CopenArray%5BHufDecEntry%5D%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cint" title="hufDecode(hcode: openArray[uint64]; hdecod: openArray[HufDecEntry];
+          data: openArray[uint8]; nBits: int; rlc, nOut: int): tuple[ok: bool,
+    outp: seq[uint16]]">hufDecode(hcode: openArray[uint64]; hdecod: openArray[HufDecEntry];
+          data: openArray[uint8]; nBits: int; rlc, nOut: int): tuple[ok: bool,
+    outp: seq[uint16]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufDecompress
+  <li><a class="reference" href="#hufDecompress%2CopenArray%5Buint8%5D%2Cint" title="hufDecompress(comp: openArray[uint8]; nRaw: int): tuple[ok: bool,
+    raw: seq[uint16]]">hufDecompress(comp: openArray[uint8]; nRaw: int): tuple[ok: bool,
+    raw: seq[uint16]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufEncode
+  <li><a class="reference" href="#hufEncode%2CopenArray%5Buint64%5D%2CopenArray%5Buint16%5D%2Cint" title="hufEncode(hcode: openArray[uint64]; data: openArray[uint16]; rlc: int): tuple[
+    bits: seq[uint8], nBits: int]">hufEncode(hcode: openArray[uint64]; data: openArray[uint16]; rlc: int): tuple[
+    bits: seq[uint8], nBits: int]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufPackEncTable
+  <li><a class="reference" href="#hufPackEncTable%2CopenArray%5Buint64%5D%2Cint%2Cint" title="hufPackEncTable(hcode: openArray[uint64]; iMin, iMax: int): seq[uint8]">hufPackEncTable(hcode: openArray[uint64]; iMin, iMax: int): seq[uint8]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">hufUnpackEncTable
+  <li><a class="reference" href="#hufUnpackEncTable%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cint%2CopenArray%5Buint64%5D" title="hufUnpackEncTable(data: openArray[uint8]; pos: var int; iMin, iMax: int;
+                  hcode: var openArray[uint64]): bool">hufUnpackEncTable(data: openArray[uint8]; pos: var int; iMin, iMax: int;
+                  hcode: var openArray[uint64]): bool</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">pizApplyChunk
+  <li><a class="reference" href="#pizApplyChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5Bint%5D%2Cseq%5Bint32%5D" title="pizApplyChunk(planar: openArray[uint8]; w, rows: int; chanBytes: seq[int];
+              ptypes: seq[int32]): tuple[ok: bool, blk: seq[uint8]]">pizApplyChunk(planar: openArray[uint8]; w, rows: int; chanBytes: seq[int];
+              ptypes: seq[int32]): tuple[ok: bool, blk: seq[uint8]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">pizApplyLut
+  <li><a class="reference" href="#pizApplyLut%2CopenArray%5Buint16%5D%2CopenArray%5Buint16%5D" title="pizApplyLut(lut: openArray[uint16]; data: var openArray[uint16])">pizApplyLut(lut: openArray[uint16]; data: var openArray[uint16])</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">pizBitmapFromData
+  <li><a class="reference" href="#pizBitmapFromData%2CopenArray%5Buint16%5D%2CopenArray%5Buint8%5D" title="pizBitmapFromData(data: openArray[uint16]; bitmap: var openArray[uint8]): tuple[
+    mn, mx: int]">pizBitmapFromData(data: openArray[uint16]; bitmap: var openArray[uint8]): tuple[
+    mn, mx: int]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">pizForwardLut
+  <li><a class="reference" href="#pizForwardLut%2CopenArray%5Buint8%5D%2CopenArray%5Buint16%5D" title="pizForwardLut(bitmap: openArray[uint8]; lut: var openArray[uint16]): int">pizForwardLut(bitmap: openArray[uint8]; lut: var openArray[uint16]): int</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">pizReverseLut
+  <li><a class="reference" href="#pizReverseLut%2CopenArray%5Buint8%5D%2CopenArray%5Buint16%5D" title="pizReverseLut(bitmap: openArray[uint8]; lut: var openArray[uint16]): int">pizReverseLut(bitmap: openArray[uint8]; lut: var openArray[uint16]): int</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">pizUndoChunk
+  <li><a class="reference" href="#pizUndoChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5BExrChannel%5D%2Cseq%5Bint%5D" title="pizUndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];
+             chanBytes: seq[int]): ImageResult[seq[uint8]]">pizUndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];
+             chanBytes: seq[int]): ImageResult[seq[uint8]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">pizWav2DDecode
+  <li><a class="reference" href="#pizWav2DDecode%2CopenArray%5Buint16%5D%2Cint%2Cint%2Cint%2Cint%2Cuint16" title="pizWav2DDecode(buf: var openArray[uint16]; nx, ox, ny, oy: int; maxVal: uint16)">pizWav2DDecode(buf: var openArray[uint16]; nx, ox, ny, oy: int; maxVal: uint16)</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">pizWav2DEncode
+  <li><a class="reference" href="#pizWav2DEncode%2CopenArray%5Buint16%5D%2Cint%2Cint%2Cint%2Cint%2Cuint16" title="pizWav2DEncode(buf: var openArray[uint16]; nx, ox, ny, oy: int; maxVal: uint16)">pizWav2DEncode(buf: var openArray[uint16]; nx, ox, ny, oy: int; maxVal: uint16)</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">planarToChunky
+  <li><a class="reference" href="#planarToChunky%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5Bint%5D" title="planarToChunky(blk: openArray[uint8]; w, rows: int; chanBytes: seq[int]): seq[
+    uint8]">planarToChunky(blk: openArray[uint8]; w, rows: int; chanBytes: seq[int]): seq[
+    uint8]</a></li>
 
 </ul>
 
@@ -102,17 +398,151 @@
     
     <div id="tocRoot"></div>
     
-    <p class="module-desc">OpenEXR codec — references/image/src/codecs/openexr.rs + exr@1.74.0 Single-part scanline only (tiled/multipart/deep/PIZ/PXR24/B44/DWAA/B return Unsupported). NONE/RLE/ZIP/ZIPS + half/float/uint -&gt; 32F images. RLE/ZIP pipeline per exrs: separate even/odd halves, delta samples, then RLE (neg=literal -c bytes, pos=repeat c+1) / zlib-deflate.</p>
+    <p class="module-desc">OpenEXR codec — references/image/src/codecs/openexr.rs + exr@1.74.0 Single-part scanline only (tiled/multipart/deep return Unsupported). NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A/PIZ/DWAA/DWAB + half/float/uint. RLE/ZIP pipeline per OpenEXRCore internal_zip.c / internal_rle.c: separate even/odd halves, biased delta (first byte raw, rest cur-prev+128), then RLE (neg=literal -c bytes, pos=repeat c+1) / zlib-deflate. PXR24 per OpenEXRCore internal_pxr24.c: float-&gt;float24, per-row delta, MSB-first planes, zlib (reimplemented; no copied code). B44/B44A per OpenEXRCore internal_b44.c + internal_b44_table_init.c: 4x4 half blocks -&gt; 14 bytes (3 for B44A flat fields), exact shift-search, sign-magnitude ordering, exp/log tables for pLinear. PIZ per OpenEXRCore internal_piz.c (wavelet + range bitmap) and internal_huf.c (canonical Huffman with reversed numeric order, zero-run table packing, RLE pseudo-symbol; slow-path decoder).The file layout stores each scanline channel-contiguous (<a class="reference internal" href="#ch1 row">ch0 row</a>..., channels alphabetical). Our <tt class="docutils literal"><span class="pre"><span class="Identifier">full</span></span></tt>/<tt class="docutils literal"><span class="pre"><span class="Identifier">raw</span></span></tt> buffers are pixel-chunky. These convert at the boundary. (PXR24's own transform already produces/consumes planar rows, so it shares this boundary too.)</p>
     <div class="section" id="6">
   <h1><a class="toc-backref" href="#6">Imports</a></h1>
   <dl class="item">
     <a class="reference external" href="../color.html">../color</a>, <a class="reference external" href="../error.html">../error</a>, <a class="reference external" href="../buffer.html">../buffer</a>, <a class="reference external" href="../dynamic.html">../dynamic</a>, <a class="reference external" href="../zlibwrap.html">../zlibwrap</a>
   </dl>
 </div>
+<div class="section" id="7">
+  <h1><a class="toc-backref" href="#7">Types</a></h1>
+  <dl class="item">
+    <div id="ExrChannel">
+  <dt><pre><a href="#ExrChannel"><span class="Identifier">ExrChannel</span></a> <span class="Other">=</span> <span class="Keyword">object</span>
+  <span class="Identifier">name</span><span class="Operator">*</span><span class="Other">:</span> <span class="Identifier">string</span>
+  <span class="Identifier">pixelType</span><span class="Operator">*</span><span class="Other">:</span> <span class="Identifier">int32</span>
+  <span class="Identifier">pLinear</span><span class="Operator">*</span><span class="Other">:</span> <span class="Identifier">bool</span>
+  <span class="Identifier">xSamp</span><span class="Operator">*</span><span class="Other">,</span> <span class="Identifier">ySamp</span><span class="Operator">*</span><span class="Other">:</span> <span class="Identifier">int32</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+  </dl>
+</div>
+<div class="section" id="8">
+  <h1><a class="toc-backref" href="#8">Vars</a></h1>
+  <dl class="item">
+    <div id="b44ExpTable">
+  <dt><pre><a href="#b44ExpTable"><span class="Identifier">b44ExpTable</span></a><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="b44LogTable">
+  <dt><pre><a href="#b44LogTable"><span class="Identifier">b44LogTable</span></a><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaDctA">
+  <dt><pre><a href="#dwaDctA"><span class="Identifier">dwaDctA</span></a><span class="Other">:</span> <span class="Identifier">float32</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaDctB">
+  <dt><pre><a href="#dwaDctB"><span class="Identifier">dwaDctB</span></a><span class="Other">:</span> <span class="Identifier">float32</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaDctC">
+  <dt><pre><a href="#dwaDctC"><span class="Identifier">dwaDctC</span></a><span class="Other">:</span> <span class="Identifier">float32</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaDctD">
+  <dt><pre><a href="#dwaDctD"><span class="Identifier">dwaDctD</span></a><span class="Other">:</span> <span class="Identifier">float32</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaDctE">
+  <dt><pre><a href="#dwaDctE"><span class="Identifier">dwaDctE</span></a><span class="Other">:</span> <span class="Identifier">float32</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaDctF">
+  <dt><pre><a href="#dwaDctF"><span class="Identifier">dwaDctF</span></a><span class="Other">:</span> <span class="Identifier">float32</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaDctG">
+  <dt><pre><a href="#dwaDctG"><span class="Identifier">dwaDctG</span></a><span class="Other">:</span> <span class="Identifier">float32</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaToLinearTab">
+  <dt><pre><a href="#dwaToLinearTab"><span class="Identifier">dwaToLinearTab</span></a><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaToNonLinearTab">
+  <dt><pre><a href="#dwaToNonLinearTab"><span class="Identifier">dwaToNonLinearTab</span></a><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+  </dl>
+</div>
 <div class="section" id="10">
   <h1><a class="toc-backref" href="#10">Consts</a></h1>
   <dl class="item">
-    <div id="ExrMagic">
+    <div id="dwaJpegQc">
+  <dt><pre><a href="#dwaJpegQc"><span class="Identifier">dwaJpegQc</span></a> <span class="Other">=</span> <span class="Other">[</span><span class="DecNumber">17</span><span class="Other">,</span> <span class="DecNumber">18</span><span class="Other">,</span> <span class="DecNumber">24</span><span class="Other">,</span> <span class="DecNumber">47</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">18</span><span class="Other">,</span> <span class="DecNumber">21</span><span class="Other">,</span> <span class="DecNumber">26</span><span class="Other">,</span> <span class="DecNumber">66</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">24</span><span class="Other">,</span>
+             <span class="DecNumber">26</span><span class="Other">,</span> <span class="DecNumber">56</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">47</span><span class="Other">,</span> <span class="DecNumber">66</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span>
+             <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span>
+             <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">]</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="dwaJpegQy">
+  <dt><pre><a href="#dwaJpegQy"><span class="Identifier">dwaJpegQy</span></a> <span class="Other">=</span> <span class="Other">[</span><span class="DecNumber">16</span><span class="Other">,</span> <span class="DecNumber">11</span><span class="Other">,</span> <span class="DecNumber">10</span><span class="Other">,</span> <span class="DecNumber">16</span><span class="Other">,</span> <span class="DecNumber">24</span><span class="Other">,</span> <span class="DecNumber">40</span><span class="Other">,</span> <span class="DecNumber">51</span><span class="Other">,</span> <span class="DecNumber">61</span><span class="Other">,</span> <span class="DecNumber">12</span><span class="Other">,</span> <span class="DecNumber">12</span><span class="Other">,</span> <span class="DecNumber">14</span><span class="Other">,</span> <span class="DecNumber">19</span><span class="Other">,</span> <span class="DecNumber">26</span><span class="Other">,</span> <span class="DecNumber">58</span><span class="Other">,</span> <span class="DecNumber">60</span><span class="Other">,</span> <span class="DecNumber">55</span><span class="Other">,</span> <span class="DecNumber">14</span><span class="Other">,</span>
+             <span class="DecNumber">13</span><span class="Other">,</span> <span class="DecNumber">16</span><span class="Other">,</span> <span class="DecNumber">24</span><span class="Other">,</span> <span class="DecNumber">40</span><span class="Other">,</span> <span class="DecNumber">57</span><span class="Other">,</span> <span class="DecNumber">69</span><span class="Other">,</span> <span class="DecNumber">56</span><span class="Other">,</span> <span class="DecNumber">14</span><span class="Other">,</span> <span class="DecNumber">17</span><span class="Other">,</span> <span class="DecNumber">22</span><span class="Other">,</span> <span class="DecNumber">29</span><span class="Other">,</span> <span class="DecNumber">51</span><span class="Other">,</span> <span class="DecNumber">87</span><span class="Other">,</span> <span class="DecNumber">80</span><span class="Other">,</span> <span class="DecNumber">62</span><span class="Other">,</span> <span class="DecNumber">18</span><span class="Other">,</span> <span class="DecNumber">22</span><span class="Other">,</span>
+             <span class="DecNumber">37</span><span class="Other">,</span> <span class="DecNumber">56</span><span class="Other">,</span> <span class="DecNumber">68</span><span class="Other">,</span> <span class="DecNumber">109</span><span class="Other">,</span> <span class="DecNumber">103</span><span class="Other">,</span> <span class="DecNumber">77</span><span class="Other">,</span> <span class="DecNumber">24</span><span class="Other">,</span> <span class="DecNumber">35</span><span class="Other">,</span> <span class="DecNumber">55</span><span class="Other">,</span> <span class="DecNumber">64</span><span class="Other">,</span> <span class="DecNumber">81</span><span class="Other">,</span> <span class="DecNumber">104</span><span class="Other">,</span> <span class="DecNumber">113</span><span class="Other">,</span> <span class="DecNumber">92</span><span class="Other">,</span> <span class="DecNumber">49</span><span class="Other">,</span> <span class="DecNumber">64</span><span class="Other">,</span>
+             <span class="DecNumber">78</span><span class="Other">,</span> <span class="DecNumber">87</span><span class="Other">,</span> <span class="DecNumber">103</span><span class="Other">,</span> <span class="DecNumber">121</span><span class="Other">,</span> <span class="DecNumber">120</span><span class="Other">,</span> <span class="DecNumber">101</span><span class="Other">,</span> <span class="DecNumber">72</span><span class="Other">,</span> <span class="DecNumber">92</span><span class="Other">,</span> <span class="DecNumber">95</span><span class="Other">,</span> <span class="DecNumber">98</span><span class="Other">,</span> <span class="DecNumber">112</span><span class="Other">,</span> <span class="DecNumber">100</span><span class="Other">,</span> <span class="DecNumber">103</span><span class="Other">,</span> <span class="DecNumber">99</span><span class="Other">]</span></pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+<div id="ExrMagic">
   <dt><pre><a href="#ExrMagic"><span class="Identifier">ExrMagic</span></a> <span class="Other">=</span> <span class="Other">[</span><span class="DecNumber">0x76'u8</span><span class="Other">,</span> <span class="DecNumber">0x0000002F</span><span class="Other">,</span> <span class="DecNumber">0x00000031</span><span class="Other">,</span> <span class="DecNumber">0x00000001</span><span class="Other">]</span></pre></dt>
   <dd>
     
@@ -126,10 +556,83 @@
 <div class="section" id="12">
   <h1><a class="toc-backref" href="#12">Procs</a></h1>
   <dl class="item">
-    <div id="decodeExr-procs-all">
-  <div id="decodeExr,seq[uint8]">
-  <dt><pre><span class="Keyword">proc</span> <a href="#decodeExr%2Cseq%5Buint8%5D"><span class="Identifier">decodeExr</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <div id="b44ApplyChunk-procs-all">
+  <div id="b44ApplyChunk,openArray[uint8],int,int,seq[int],seq[int32],seq[bool],bool">
+  <dt><pre><span class="Keyword">proc</span> <a href="#b44ApplyChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5Bint%5D%2Cseq%5Bint32%5D%2Cseq%5Bbool%5D%2Cbool"><span class="Identifier">b44ApplyChunk</span></a><span class="Other">(</span><span class="Identifier">planar</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">rows</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">chanBytes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">;</span>
+                   <span class="Identifier">ptypes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int32</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">pLinears</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">bool</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">flatFields</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span>
+    <span class="Identifier">uint8</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Encode one chunk to B44/B44A: 4x4 half blocks via b44Pack (with edge replication and pLinear exp conversion), float/uint channels verbatim. Mirrors compress() in internal_b44.c.
+    
+  </dd>
+</div>
+
+</div>
+<div id="b44Pack-procs-all">
+  <div id="b44Pack,array[,uint16],bool,bool,array[,uint8]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#b44Pack%2Carray%5B%2Cuint16%5D%2Cbool%2Cbool%2Carray%5B%2Cuint8%5D"><span class="Identifier">b44Pack</span></a><span class="Other">(</span><span class="Identifier">s</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">16</span><span class="Other">,</span> <span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">flatFields</span><span class="Other">,</span> <span class="Identifier">exactMax</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">;</span>
+             <span class="Identifier">dst</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">14</span><span class="Other">,</span> <span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">int</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Compress one 4x4 half block (sign-magnitude preordered) to 3 (flat fields + B44A) or 14 bytes in <tt class="docutils literal"><span class="pre"><span class="Identifier">dst</span></span></tt>; returns the byte count. Stack-array form of pack() in internal_b44.c: the per-block temp seq this replaces was the highest-frequency EXR allocation. Callers that need a seq can slice <tt class="docutils literal"><span class="pre"><span class="Identifier">dst</span><span class="Operator">.</span><span class="Identifier">toOpenArray</span><span class="Punctuation">(</span><span class="DecNumber">0</span><span class="Punctuation">,</span> <span class="Identifier">n</span> <span class="Operator">-</span> <span class="DecNumber">1</span><span class="Punctuation">)</span></span></tt>.
+    
+  </dd>
+</div>
+
+</div>
+<div id="b44ShiftAndRound-procs-all">
+  <div id="b44ShiftAndRound,int,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#b44ShiftAndRound%2Cint%2Cint"><span class="Identifier">b44ShiftAndRound</span></a><span class="Other">(</span><span class="Identifier">x</span><span class="Other">,</span> <span class="Identifier">shift</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">int</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    y = x * 2^-shift rounded to nearest, ties to even.
+    
+  </dd>
+</div>
+
+</div>
+<div id="b44UndoChunk-procs-all">
+  <div id="b44UndoChunk,openArray[uint8],int,int,seq[ExrChannel],seq[int]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#b44UndoChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5BExrChannel%5D%2Cseq%5Bint%5D"><span class="Identifier">b44UndoChunk</span></a><span class="Other">(</span><span class="Identifier">comp</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">rows</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span>
+                  <span class="Identifier">channels</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><a href="#ExrChannel"><span class="Identifier">ExrChannel</span></a><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">chanBytes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span>
+    <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Decode one B44/B44A chunk to planar-per-scanline rows. Mirrors uncompress_b44_impl in internal_b44.c (4x4 blocks, edge replication, flat-field 3-byte form, pLinear log conversion, float/uint passthrough).
+    
+  </dd>
+</div>
+
+</div>
+<div id="b44Unpack-procs-all">
+  <div id="b44Unpack,openArray[uint8],bool">
+  <dt><pre><span class="Keyword">proc</span> <a href="#b44Unpack%2CopenArray%5Buint8%5D%2Cbool"><span class="Identifier">b44Unpack</span></a><span class="Other">(</span><span class="Identifier">b</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">flat</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">16</span><span class="Other">,</span> <span class="Identifier">uint16</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
     <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Inverse of b44Pack (mirrors unpack14/unpack3 in internal_b44.c).
+    
+  </dd>
+</div>
+
+</div>
+<div id="chunkyToPlanar-procs-all">
+  <div id="chunkyToPlanar,openArray[uint8],int,int,seq[int]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#chunkyToPlanar%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5Bint%5D"><span class="Identifier">chunkyToPlanar</span></a><span class="Other">(</span><span class="Identifier">full</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">rows</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">chanBytes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span>
+    <span class="Identifier">uint8</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+</div>
+<div id="decodeExr-procs-all">
+  <div id="decodeExr,openArray[uint8]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#decodeExr%2CopenArray%5Buint8%5D"><span class="Identifier">decodeExr</span></a><span class="Other">(</span><span class="Identifier">raw</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Identifier">ValueError</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
   <dd>
     
     
@@ -139,8 +642,20 @@
 
 </div>
 <div id="decodeExrAll-procs-all">
-  <div id="decodeExrAll,seq[uint8]">
-  <dt><pre><span class="Keyword">proc</span> <a href="#decodeExrAll%2Cseq%5Buint8%5D"><span class="Identifier">decodeExrAll</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><span class="Identifier">seq</span><span class="Other">[</span><a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">]</span><span class="Other">]</span> {.
+  <div id="decodeExrAll,openArray[uint8]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#decodeExrAll%2CopenArray%5Buint8%5D"><span class="Identifier">decodeExrAll</span></a><span class="Other">(</span><span class="Identifier">raw</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><span class="Identifier">seq</span><span class="Other">[</span><a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">]</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Identifier">ValueError</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaAlgoQuantize-procs-all">
+  <div id="dwaAlgoQuantize,uint16,uint16,float32,float32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaAlgoQuantize%2Cuint16%2Cuint16%2Cfloat32%2Cfloat32"><span class="Identifier">dwaAlgoQuantize</span></a><span class="Other">(</span><span class="Identifier">src</span><span class="Other">,</span> <span class="Identifier">herrTol</span><span class="Other">:</span> <span class="Identifier">uint16</span><span class="Other">;</span> <span class="Identifier">errTol</span><span class="Other">,</span> <span class="Identifier">srcFloat</span><span class="Other">:</span> <span class="Identifier">float32</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">uint16</span> {.
     <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
   <dd>
     
@@ -150,13 +665,329 @@
 </div>
 
 </div>
-<div id="encodeExr-procs-all">
-  <div id="encodeExr,DynamicImage">
-  <dt><pre><span class="Keyword">proc</span> <a href="#encodeExr%2CDynamicImage"><span class="Identifier">encodeExr</span></a><span class="Other">(</span><span class="Identifier">img</span><span class="Other">:</span> <a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+<div id="dwaApplyChunk-procs-all">
+  <div id="dwaApplyChunk,openArray[uint8],int,int,seq[ExrChannel],seq[int],float32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaApplyChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5BExrChannel%5D%2Cseq%5Bint%5D%2Cfloat32"><span class="Identifier">dwaApplyChunk</span></a><span class="Other">(</span><span class="Identifier">planar</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">rows</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span>
+                   <span class="Identifier">channels</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><a href="#ExrChannel"><span class="Identifier">ExrChannel</span></a><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">chanBytes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">;</span>
+                   <span class="Identifier">level</span> <span class="Other">=</span> <span class="FloatNumber">45.0'f32</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span><span class="Identifier">ok</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">,</span> <span class="Identifier">blk</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Full DWAA/DWAB chunk encode: channel classification (default rules), CSC + wavelet... no - DCT + quantize + Huffman, RLE/UNKNOWN paths. Falls back to raw planar when the encoding does not win.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaCountLeadingZeros-procs-all">
+  <div id="dwaCountLeadingZeros,uint32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaCountLeadingZeros%2Cuint32"><span class="Identifier">dwaCountLeadingZeros</span></a><span class="Other">(</span><span class="Identifier">x</span><span class="Other">:</span> <span class="Identifier">uint32</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">int</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    clz (matches __builtin_clz).
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaCountSetBits-procs-all">
+  <div id="dwaCountSetBits,uint16">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaCountSetBits%2Cuint16"><span class="Identifier">dwaCountSetBits</span></a><span class="Other">(</span><span class="Identifier">x</span><span class="Other">:</span> <span class="Identifier">uint16</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">int</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    popcount (matches __builtin_popcount).
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaCscFwd-procs-all">
+  <div id="dwaCscFwd,array[,float32],array[,float32],array[,float32]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaCscFwd%2Carray%5B%2Cfloat32%5D%2Carray%5B%2Cfloat32%5D%2Carray%5B%2Cfloat32%5D"><span class="Identifier">dwaCscFwd</span></a><span class="Other">(</span><span class="Identifier">r</span><span class="Other">,</span> <span class="Identifier">g</span><span class="Other">,</span> <span class="Identifier">b</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float32</span><span class="Other">]</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Forward 709 CSC (R'G'B' -&gt; Y'CbCr, no offset). Scalar reference order.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaCscInv-procs-all">
+  <div id="dwaCscInv,float32,float32,float32,float32,float32,float32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaCscInv%2Cfloat32%2Cfloat32%2Cfloat32%2Cfloat32%2Cfloat32%2Cfloat32"><span class="Identifier">dwaCscInv</span></a><span class="Other">(</span><span class="Identifier">y</span><span class="Other">,</span> <span class="Identifier">cb</span><span class="Other">,</span> <span class="Identifier">cr</span><span class="Other">:</span> <span class="Identifier">float32</span><span class="Other">;</span> <span class="Identifier">r</span><span class="Other">,</span> <span class="Identifier">g</span><span class="Other">,</span> <span class="Identifier">b</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">float32</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Inverse 709 CSC (Y'CbCr -&gt; R'G'B', no offset). Scalar reference version.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaDctDcOnly-procs-all">
+  <div id="dwaDctDcOnly,array[,float32]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaDctDcOnly%2Carray%5B%2Cfloat32%5D"><span class="Identifier">dwaDctDcOnly</span></a><span class="Other">(</span><span class="Identifier">d</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float32</span><span class="Other">]</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaDctForward-procs-all">
+  <div id="dwaDctForward,array[,float32]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaDctForward%2Carray%5B%2Cfloat32%5D"><span class="Identifier">dwaDctForward</span></a><span class="Other">(</span><span class="Identifier">d</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float32</span><span class="Other">]</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Forward 8x8 DCT, SSE2 association + decimal constants (dctForward8x8 SSE2 path). Column-first via explicit transposes in the caller, exactly like the reference (two column passes with an in-place transpose between). Constants are the sasseembler's decimal literals, NOT cosf-computed (they differ by 1-2 ulp).
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaDctInverse-procs-all">
+  <div id="dwaDctInverse,array[,float32]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaDctInverse%2Carray%5B%2Cfloat32%5D"><span class="Identifier">dwaDctInverse</span></a><span class="Other">(</span><span class="Identifier">d</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float32</span><span class="Other">]</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Full 8x8 inverse DCT with the AVX association order and the sAvxCoef matrix constants (internal_dwa_simd.h IDCT_AVX_BODY), not the scalar a..g formulation. On x86-64 with AVX the reference dispatches to the AVX version, whose pairwise-sum association and differently-rounded constants change low bits vs scalar; matching it is required for bit-exact DWA decode on this platform. (On ARM the reference uses scalar/NEON paths, which round differently there too; DWA is inherently platform-specific. See dwaDctInverseScalar.)
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaDctInverseScalar-procs-all">
+  <div id="dwaDctInverseScalar,array[,float32]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaDctInverseScalar%2Carray%5B%2Cfloat32%5D"><span class="Identifier">dwaDctInverseScalar</span></a><span class="Other">(</span><span class="Identifier">d</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float32</span><span class="Other">]</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Scalar-order 8x8 inverse DCT (dctInverse8x8_scalar, zeroedRows=0). Matches the reference on ARM/NEON and on x86 without AVX; kept for documentation and differential testing. x86-64 with AVX (this machine) uses dwaDctInverse above.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaEncodeGroup-procs-all">
+  <div id="dwaEncodeGroup,seq[seq[uint16]],openArray[int],float32,seq[uint16],openArray[bool],int,int,seq[uint16],seq[seq[uint16]]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaEncodeGroup%2Cseq%5Bseq%5Buint16%5D%5D%2CopenArray%5Bint%5D%2Cfloat32%2Cseq%5Buint16%5D%2CopenArray%5Bbool%5D%2Cint%2Cint%2Cseq%5Buint16%5D%2Cseq%5Bseq%5Buint16%5D%5D"><span class="Identifier">dwaEncodeGroup</span></a><span class="Other">(</span><span class="Identifier">halves</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">chs</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">qbe</span><span class="Other">:</span> <span class="Identifier">float32</span><span class="Other">;</span>
+                    <span class="Identifier">toNonlin</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">hasNonlin</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">bool</span><span class="Other">]</span><span class="Other">;</span>
+                    <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">h</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">acBuf</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span>
+                    <span class="Identifier">dcBufs</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">bool</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Encode one LOSSY group (1 or 3 channels): mirror-pad 8x8 blocks, toNonlinear, forward CSC, forward DCT, quantize + zigzag. AC goes to the shared stream in block order; DC is collected per channel (the chunk packs DC grouped by channel). Mirrors LossyDctEncoder_execute.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaFdiv-procs-all">
+  <div id="dwaFdiv,float32,float32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaFdiv%2Cfloat32%2Cfloat32"><span class="Identifier">dwaFdiv</span></a><span class="Other">(</span><span class="Identifier">a</span><span class="Other">,</span> <span class="Identifier">b</span><span class="Other">:</span> <span class="Identifier">float32</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">float32</span> {.<span class="Identifier">noinline</span><span class="Other">,</span> <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+                                       <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Runtime float32 division. Stops the compiler folding constant quotients (e.g. 1/2.2) in float64, which rounds 1 ulp away from the float32 result the reference computes at runtime.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaFloatToHalf-procs-all">
+  <div id="dwaFloatToHalf,float32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaFloatToHalf%2Cfloat32"><span class="Identifier">dwaFloatToHalf</span></a><span class="Other">(</span><span class="Identifier">f</span><span class="Other">:</span> <span class="Identifier">float32</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">uint16</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Imath imath_float_to_half, exactly: round-half-even, NaN payload preserved, overflow (&gt; 0x477FEFFF) rounds to infinity. (Our shared floatToHalf clamps overflow to HALF_MAX instead, which matches the B44/PXR24 call sites but not DWA.)
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaFmul-procs-all">
+  <div id="dwaFmul,float32,float32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaFmul%2Cfloat32%2Cfloat32"><span class="Identifier">dwaFmul</span></a><span class="Other">(</span><span class="Identifier">a</span><span class="Other">,</span> <span class="Identifier">b</span><span class="Other">:</span> <span class="Identifier">float32</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">float32</span> {.<span class="Identifier">noinline</span><span class="Other">,</span> <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+                                       <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Runtime float32 multiply (same constant-folding hazard as dwaFdiv).
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaFromHalfZigzag-procs-all">
+  <div id="dwaFromHalfZigzag,openArray[uint16],array[,float32]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaFromHalfZigzag%2CopenArray%5Buint16%5D%2Carray%5B%2Cfloat32%5D"><span class="Identifier">dwaFromHalfZigzag</span></a><span class="Other">(</span><span class="Identifier">src</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">dst</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float32</span><span class="Other">]</span><span class="Other">)</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaParseRules-procs-all">
+  <div id="dwaParseRules,openArray[uint8],int,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaParseRules%2CopenArray%5Buint8%5D%2Cint%2Cint"><span class="Identifier">dwaParseRules</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">pos</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">left</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span>
+    <span class="Identifier">ok</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">,</span> <span class="Identifier">rules</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">DwaRule</span><span class="Other">]</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Rules blob: u16 LE total size (incl. itself), then NUL-terminated suffix + value byte ((cscIdx+1)&lt;&lt;4 | scheme&lt;&lt;2 | ci) + type byte.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaQCloseExp-procs-all">
+  <div id="dwaQCloseExp,uint32,uint32,float32,float32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaQCloseExp%2Cuint32%2Cuint32%2Cfloat32%2Cfloat32"><span class="Identifier">dwaQCloseExp</span></a><span class="Other">(</span><span class="Identifier">abssrc</span><span class="Other">,</span> <span class="Identifier">tolSig</span><span class="Other">:</span> <span class="Identifier">uint32</span><span class="Other">;</span> <span class="Identifier">errTol</span><span class="Other">,</span> <span class="Identifier">srcFloat</span><span class="Other">:</span> <span class="Identifier">float32</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">uint32</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaQuantizeZig-procs-all">
+  <div id="dwaQuantizeZig,array[,uint16],array[,float32],openArray[float32],openArray[uint16]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaQuantizeZig%2Carray%5B%2Cuint16%5D%2Carray%5B%2Cfloat32%5D%2CopenArray%5Bfloat32%5D%2CopenArray%5Buint16%5D"><span class="Identifier">dwaQuantizeZig</span></a><span class="Other">(</span><span class="Identifier">halfZig</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">dct</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float32</span><span class="Other">]</span><span class="Other">;</span>
+                    <span class="Identifier">qtbl</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">float32</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">htbl</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">)</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Forward-DCT coeffs -&gt; quantized half zigzag (XDR). Mirrors quantizeCoeffAndZigXDR (including its inv_remap == dwaZigzag order).
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaQuantSmall-procs-all">
+  <div id="dwaQuantSmall,uint32,int,float32,float32,float32,uint32,bool">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaQuantSmall%2Cuint32%2Cint%2Cfloat32%2Cfloat32%2Cfloat32%2Cuint32%2Cbool"><span class="Identifier">dwaQuantSmall</span></a><span class="Other">(</span><span class="Identifier">alt</span><span class="Other">:</span> <span class="Identifier">uint32</span><span class="Other">;</span> <span class="Identifier">smallbits</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">srcFloat</span><span class="Other">,</span> <span class="Identifier">errTol</span><span class="Other">:</span> <span class="Identifier">float32</span><span class="Other">;</span>
+                   <span class="Identifier">smalldelta</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">float32</span><span class="Other">;</span> <span class="Identifier">smallest</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">uint32</span><span class="Other">;</span> <span class="Identifier">isLarge</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">)</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Shared body of TEST_QUANT_ALTERNATE_SMALL/LARGE.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaRleAc-procs-all">
+  <div id="dwaRleAc,openArray[uint16],seq[uint16]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaRleAc%2CopenArray%5Buint16%5D%2Cseq%5Buint16%5D"><span class="Identifier">dwaRleAc</span></a><span class="Other">(</span><span class="Identifier">halfZig</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">acBuf</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
     <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
   <dd>
     
-    ZIP scanline writer. Accepts Rgb32F/Rgba32F/Luma32F (convert first).
+    RLE the AC zigzag (verbatim / short-run / EOB 0xFF00). Mirrors LossyDctEncoder_rleAc.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaRleCompress-procs-all">
+  <div id="dwaRleCompress,openArray[uint8]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaRleCompress%2CopenArray%5Buint8%5D"><span class="Identifier">dwaRleCompress</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Pure RLE counts (no delta/interleave; the DWA RLE path operates on pre-split byte planes). Mirrors internal_rle_compress (MIN 3/MAX 127).
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaRleDecompress-procs-all">
+  <div id="dwaRleDecompress,openArray[uint8],int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaRleDecompress%2CopenArray%5Buint8%5D%2Cint"><span class="Identifier">dwaRleDecompress</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">expected</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Plain RLE counts (no delta/interleave; the DWA RLE path splits bytes but skips the biased predictor). Caller checks length.
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaTranspose8-procs-all">
+  <div id="dwaTranspose8,array[,float32]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaTranspose8%2Carray%5B%2Cfloat32%5D"><span class="Identifier">dwaTranspose8</span></a><span class="Other">(</span><span class="Identifier">d</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float32</span><span class="Other">]</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaUndoChunk-procs-all">
+  <div id="dwaUndoChunk,openArray[uint8],int,int,seq[ExrChannel],seq[int]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaUndoChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5BExrChannel%5D%2Cseq%5Bint%5D"><span class="Identifier">dwaUndoChunk</span></a><span class="Other">(</span><span class="Identifier">comp</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">rows</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span>
+                  <span class="Identifier">channels</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><a href="#ExrChannel"><span class="Identifier">ExrChannel</span></a><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">chanBytes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span>
+    <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Identifier">ValueError</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Full DWAA/DWAB chunk decode to planar-per-scanline rows. Mirrors DwaCompressor_uncompress (scalar paths; SIMD only reorders work).
+    
+  </dd>
+</div>
+
+</div>
+<div id="dwaUnRleAc-procs-all">
+  <div id="dwaUnRleAc,openArray[uint16],int,array[,uint16]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#dwaUnRleAc%2CopenArray%5Buint16%5D%2Cint%2Carray%5B%2Cuint16%5D"><span class="Identifier">dwaUnRleAc</span></a><span class="Other">(</span><span class="Identifier">ac</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">pos</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">hz</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span>
+    <span class="Identifier">ok</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">,</span> <span class="Identifier">lnz</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Expand one block's AC run symbols (0xFFxx: xx zeros, 0 = end of block).
+    
+  </dd>
+</div>
+
+</div>
+<div id="encodeExr-procs-all">
+  <div id="encodeExr,DynamicImage,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#encodeExr%2CDynamicImage%2Cint"><span class="Identifier">encodeExr</span></a><span class="Other">(</span><span class="Identifier">img</span><span class="Other">:</span> <a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">;</span> <span class="Identifier">compression</span><span class="Other">:</span> <span class="Identifier">int</span> <span class="Other">=</span> <span class="DecNumber">3</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Scanline writer (ZIP default; PXR24/B44/B44A/PIZ opt-in). Accepts Rgb32F/Rgba32F/Luma32F (convert first). PXR24 rounds float channels to 24 bits on write (lossy). B44 only compresses half channels, so this float-only writer stores them uncompressed (spec passthrough). HALF/UINT-exactness only matters on decode of foreign files. Channel data is packed alphabetically by name (B,G,R / A,B,G,R), per the file layout; the chlist is written in the same order.
+    
+  </dd>
+</div>
+
+</div>
+<div id="ensureB44Tables-procs-all">
+  <div id="ensureB44Tables">
+  <dt><pre><span class="Keyword">proc</span> <a href="#ensureB44Tables"><span class="Identifier">ensureB44Tables</span></a><span class="Other">(</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    <pre>y = exp(x/8), x = 8*log(y) in half, exactly per
+internal_b44_table_init.c (float32 libm ops, round-half-even).</pre>
+
+    
+  </dd>
+</div>
+
+</div>
+<div id="ensureDwaTables-procs-all">
+  <div id="ensureDwaTables">
+  <dt><pre><span class="Keyword">proc</span> <a href="#ensureDwaTables"><span class="Identifier">ensureDwaTables</span></a><span class="Other">(</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Perceptual half&lt;-&gt;half LUTs + scalar DCT constants, exactly per internal_dwa_table_init.c (float32 libm ops) and internal_dwa_simd.h.
     
   </dd>
 </div>
@@ -184,6 +1015,226 @@
 </div>
 
 </div>
+<div id="hufBuildDecTable-procs-all">
+  <div id="hufBuildDecTable,openArray[uint64],int,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufBuildDecTable%2CopenArray%5Buint64%5D%2Cint%2Cint"><span class="Identifier">hufBuildDecTable</span></a><span class="Other">(</span><span class="Identifier">hcode</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint64</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">iMin</span><span class="Other">,</span> <span class="Identifier">iMax</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span>
+    <span class="Identifier">HufDecEntry</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Identifier">ValueError</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    14-bit prefix table + long-code lists. Mirrors hufBuildDecTable(). Raises ValueError (caught as corrupt chunk) on table conflicts.
+    
+  </dd>
+</div>
+
+</div>
+<div id="hufBuildEncTable-procs-all">
+  <div id="hufBuildEncTable,openArray[uint64],int,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufBuildEncTable%2CopenArray%5Buint64%5D%2Cint%2Cint"><span class="Identifier">hufBuildEncTable</span></a><span class="Other">(</span><span class="Identifier">frq</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint64</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">iMin</span><span class="Other">,</span> <span class="Identifier">iMax</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span>
+    <span class="Identifier">uint64</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Huffman code lengths via tree simulation + canonical assignment. Returns the code table (length | code&lt;&lt;6); sets iMin/iMax (min/max symbol, iMax including the RLE pseudo-symbol with frequency 1). frq is destroyed.
+    
+  </dd>
+</div>
+
+</div>
+<div id="hufCanonicalCodeTable-procs-all">
+  <div id="hufCanonicalCodeTable,openArray[uint64]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufCanonicalCodeTable%2CopenArray%5Buint64%5D"><span class="Identifier">hufCanonicalCodeTable</span></a><span class="Other">(</span><span class="Identifier">hcode</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint64</span><span class="Other">]</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Canonical codes, reversed numeric order: shorter codes (zero-filled right) are numerically larger; same-length codes grow with symbols. Table derivable from lengths alone (not transmitted).
+    
+  </dd>
+</div>
+
+</div>
+<div id="hufCompress-procs-all">
+  <div id="hufCompress,openArray[uint16]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufCompress%2CopenArray%5Buint16%5D"><span class="Identifier">hufCompress</span></a><span class="Other">(</span><span class="Identifier">raw</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span><span class="Identifier">ok</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">,</span> <span class="Identifier">packed</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Full Huffman stream: 20-byte header (im, iM, tableLen, nBits, 0), packed table, packed data. Mirrors internal_huf_compress.
+    
+  </dd>
+</div>
+
+</div>
+<div id="hufDecode-procs-all">
+  <div id="hufDecode,openArray[uint64],openArray[HufDecEntry],openArray[uint8],int,int,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufDecode%2CopenArray%5Buint64%5D%2CopenArray%5BHufDecEntry%5D%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cint"><span class="Identifier">hufDecode</span></a><span class="Other">(</span><span class="Identifier">hcode</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint64</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">hdecod</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">HufDecEntry</span><span class="Other">]</span><span class="Other">;</span>
+               <span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">nBits</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">rlc</span><span class="Other">,</span> <span class="Identifier">nOut</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span>
+    <span class="Identifier">ok</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">,</span> <span class="Identifier">outp</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Slow-path bit-exact decode with RLE pseudo-symbol handling. Returns ok=false on any corrupt input (bounds checked throughout).
+    
+  </dd>
+</div>
+
+</div>
+<div id="hufDecompress-procs-all">
+  <div id="hufDecompress,openArray[uint8],int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufDecompress%2CopenArray%5Buint8%5D%2Cint"><span class="Identifier">hufDecompress</span></a><span class="Other">(</span><span class="Identifier">comp</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">nRaw</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span><span class="Identifier">ok</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">,</span>
+    <span class="Identifier">raw</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Identifier">ValueError</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Inverse of hufCompress. Mirrors the slow path of internal_huf_decompress (prefix table, no SIMD fast path needed for conformance).
+    
+  </dd>
+</div>
+
+</div>
+<div id="hufEncode-procs-all">
+  <div id="hufEncode,openArray[uint64],openArray[uint16],int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufEncode%2CopenArray%5Buint64%5D%2CopenArray%5Buint16%5D%2Cint"><span class="Identifier">hufEncode</span></a><span class="Other">(</span><span class="Identifier">hcode</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint64</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">rlc</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span>
+    <span class="Identifier">bits</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">nBits</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Huffman + RLE encode. Returns the packed bit stream and its exact bit length. Mirrors hufEncode(): a run of cs extras is emitted as code(s) <a class="reference internal" href="#, code(rle), 8-bit cs">, code(rle), 8-bit cs</a> when shorter, else cs+1 literals.
+    
+  </dd>
+</div>
+
+</div>
+<div id="hufPackEncTable-procs-all">
+  <div id="hufPackEncTable,openArray[uint64],int,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufPackEncTable%2CopenArray%5Buint64%5D%2Cint%2Cint"><span class="Identifier">hufPackEncTable</span></a><span class="Other">(</span><span class="Identifier">hcode</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint64</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">iMin</span><span class="Other">,</span> <span class="Identifier">iMax</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Pack code lengths only (zero runs compressed).
+    
+  </dd>
+</div>
+
+</div>
+<div id="hufUnpackEncTable-procs-all">
+  <div id="hufUnpackEncTable,openArray[uint8],int,int,int,openArray[uint64]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#hufUnpackEncTable%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cint%2CopenArray%5Buint64%5D"><span class="Identifier">hufUnpackEncTable</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">pos</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">iMin</span><span class="Other">,</span> <span class="Identifier">iMax</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span>
+                       <span class="Identifier">hcode</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint64</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">bool</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Unpack lengths; returns false on corrupt input.
+    
+  </dd>
+</div>
+
+</div>
+<div id="pizApplyChunk-procs-all">
+  <div id="pizApplyChunk,openArray[uint8],int,int,seq[int],seq[int32]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#pizApplyChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5Bint%5D%2Cseq%5Bint32%5D"><span class="Identifier">pizApplyChunk</span></a><span class="Other">(</span><span class="Identifier">planar</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">rows</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">chanBytes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">;</span>
+                   <span class="Identifier">ptypes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int32</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span><span class="Identifier">ok</span><span class="Other">:</span> <span class="Identifier">bool</span><span class="Other">,</span> <span class="Identifier">blk</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Full PIZ chunk encode: channel-major gather, bitmap + forward LUT, wavelet, Huffman. Falls back to raw planar when Huffman (with its headers) does not win. Mirrors internal_exr_apply_piz.
+    
+  </dd>
+</div>
+
+</div>
+<div id="pizApplyLut-procs-all">
+  <div id="pizApplyLut,openArray[uint16],openArray[uint16]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#pizApplyLut%2CopenArray%5Buint16%5D%2CopenArray%5Buint16%5D"><span class="Identifier">pizApplyLut</span></a><span class="Other">(</span><span class="Identifier">lut</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">data</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">)</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+</div>
+<div id="pizBitmapFromData-procs-all">
+  <div id="pizBitmapFromData,openArray[uint16],openArray[uint8]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#pizBitmapFromData%2CopenArray%5Buint16%5D%2CopenArray%5Buint8%5D"><span class="Identifier">pizBitmapFromData</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">bitmap</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span>
+    <span class="Identifier">mn</span><span class="Other">,</span> <span class="Identifier">mx</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Presence bitmap over the value range; bit 0 (value 0) never stored.
+    
+  </dd>
+</div>
+
+</div>
+<div id="pizForwardLut-procs-all">
+  <div id="pizForwardLut,openArray[uint8],openArray[uint16]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#pizForwardLut%2CopenArray%5Buint8%5D%2CopenArray%5Buint16%5D"><span class="Identifier">pizForwardLut</span></a><span class="Other">(</span><span class="Identifier">bitmap</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">lut</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">int</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Compress the value range: maps every present value (plus 0) to a dense index. Returns max index.
+    
+  </dd>
+</div>
+
+</div>
+<div id="pizReverseLut-procs-all">
+  <div id="pizReverseLut,openArray[uint8],openArray[uint16]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#pizReverseLut%2CopenArray%5Buint8%5D%2CopenArray%5Buint16%5D"><span class="Identifier">pizReverseLut</span></a><span class="Other">(</span><span class="Identifier">bitmap</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">lut</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">int</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Inverse mapping (dense index -&gt; original value). Returns max index.
+    
+  </dd>
+</div>
+
+</div>
+<div id="pizUndoChunk-procs-all">
+  <div id="pizUndoChunk,openArray[uint8],int,int,seq[ExrChannel],seq[int]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#pizUndoChunk%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5BExrChannel%5D%2Cseq%5Bint%5D"><span class="Identifier">pizUndoChunk</span></a><span class="Other">(</span><span class="Identifier">comp</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">rows</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span>
+                  <span class="Identifier">channels</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><a href="#ExrChannel"><span class="Identifier">ExrChannel</span></a><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">chanBytes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span>
+    <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Identifier">ValueError</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Full PIZ chunk decode to planar-per-scanline rows. Mirrors internal_exr_undo_piz.
+    
+  </dd>
+</div>
+
+</div>
+<div id="pizWav2DDecode-procs-all">
+  <div id="pizWav2DDecode,openArray[uint16],int,int,int,int,uint16">
+  <dt><pre><span class="Keyword">proc</span> <a href="#pizWav2DDecode%2CopenArray%5Buint16%5D%2Cint%2Cint%2Cint%2Cint%2Cuint16"><span class="Identifier">pizWav2DDecode</span></a><span class="Other">(</span><span class="Identifier">buf</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">nx</span><span class="Other">,</span> <span class="Identifier">ox</span><span class="Other">,</span> <span class="Identifier">ny</span><span class="Other">,</span> <span class="Identifier">oy</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span>
+                    <span class="Identifier">maxVal</span><span class="Other">:</span> <span class="Identifier">uint16</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Inverse 2D transform, in place, strided. Mirrors wav_2D_decode.
+    
+  </dd>
+</div>
+
+</div>
+<div id="pizWav2DEncode-procs-all">
+  <div id="pizWav2DEncode,openArray[uint16],int,int,int,int,uint16">
+  <dt><pre><span class="Keyword">proc</span> <a href="#pizWav2DEncode%2CopenArray%5Buint16%5D%2Cint%2Cint%2Cint%2Cint%2Cuint16"><span class="Identifier">pizWav2DEncode</span></a><span class="Other">(</span><span class="Identifier">buf</span><span class="Other">:</span> <span class="Keyword">var</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint16</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">nx</span><span class="Other">,</span> <span class="Identifier">ox</span><span class="Other">,</span> <span class="Identifier">ny</span><span class="Other">,</span> <span class="Identifier">oy</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span>
+                    <span class="Identifier">maxVal</span><span class="Other">:</span> <span class="Identifier">uint16</span><span class="Other">)</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Forward 2D Haar-ish transform, in place, strided. Mirrors wav_2D_encode.
+    
+  </dd>
+</div>
+
+</div>
+<div id="planarToChunky-procs-all">
+  <div id="planarToChunky,openArray[uint8],int,int,seq[int]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#planarToChunky%2CopenArray%5Buint8%5D%2Cint%2Cint%2Cseq%5Bint%5D"><span class="Identifier">planarToChunky</span></a><span class="Other">(</span><span class="Identifier">blk</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">rows</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span> <span class="Identifier">chanBytes</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">int</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span>
+    <span class="Identifier">uint8</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    
+    
+  </dd>
+</div>
+
+</div>
 
   </dl>
 </div>
@@ -194,7 +1245,7 @@
       <div class="twelve-columns footer">
         <span class="nim-sprite"></span>
         <br>
-        <small style="color: var(--hint);">Made with Nim. Generated: 2026-10-27 13:52:22 UTC</small>
+        <small style="color: var(--hint);">Made with Nim. Generated: 2026-11-24 19:21:34 UTC</small>
       </div>
     </div>
   </div>

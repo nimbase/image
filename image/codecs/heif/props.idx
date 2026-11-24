@@ -1,0 +1,47 @@
+nimTitle	props	image/codecs/heif/props.html	module image/codecs/heif/props		0
+nim	SpatialExtents	image/codecs/heif/props.html#SpatialExtents	object SpatialExtents		8
+nim	PixInfo	image/codecs/heif/props.html#PixInfo	object PixInfo		11
+nim	Nclx	image/codecs/heif/props.html#Nclx	object Nclx		14
+nim	Rotation	image/codecs/heif/props.html#Rotation	object Rotation		20
+nim	Mirror	image/codecs/heif/props.html#Mirror	object Mirror		24
+nim	CleanAperture	image/codecs/heif/props.html#CleanAperture	object CleanAperture		30
+nim	UncProfile	image/codecs/heif/props.html#UncProfile	object UncProfile		34
+nim	CmpEntry	image/codecs/heif/props.html#CmpEntry	object CmpEntry		45
+nim	parseIspe	image/codecs/heif/props.html#parseIspe,seq[uint8]	proc parseIspe(payload: seq[uint8]): SpatialExtents		48
+nim	parsePixi	image/codecs/heif/props.html#parsePixi,seq[uint8]	proc parsePixi(payload: seq[uint8]): PixInfo		59
+nim	parseNclx	image/codecs/heif/props.html#parseNclx,seq[uint8]	proc parseNclx(payload: seq[uint8]): Nclx		71
+nim	parseIrot	image/codecs/heif/props.html#parseIrot,seq[uint8]	proc parseIrot(payload: seq[uint8]): Rotation		86
+nim	parseImir	image/codecs/heif/props.html#parseImir,seq[uint8]	proc parseImir(payload: seq[uint8]): Mirror		91
+nim	parseClap	image/codecs/heif/props.html#parseClap,seq[uint8]	proc parseClap(payload: seq[uint8]): CleanAperture		96
+nim	clapCrop	image/codecs/heif/props.html#clapCrop,CleanAperture,int,int	proc clapCrop(clap: CleanAperture; imgW, imgH: int): tuple[x, y, w, h: int]		108
+nim	parseCmpd	image/codecs/heif/props.html#parseCmpd,seq[uint8]	proc parseCmpd(payload: seq[uint8]): seq[CmpEntry]		124
+nim	parseUncC	image/codecs/heif/props.html#parseUncC,seq[uint8]	proc parseUncC(payload: seq[uint8]): UncProfile		137
+nim	parseCmpC	image/codecs/heif/props.html#parseCmpC,seq[uint8]	proc parseCmpC(payload: seq[uint8]): string		204
+nim	PixelAspect	image/codecs/heif/props.html#PixelAspect	object PixelAspect		216
+nim	AuxType	image/codecs/heif/props.html#AuxType	object AuxType		218
+nim	RelLoc	image/codecs/heif/props.html#RelLoc	object RelLoc		220
+nim	LayerSel	image/codecs/heif/props.html#LayerSel	object LayerSel		222
+nim	UserDesc	image/codecs/heif/props.html#UserDesc	object UserDesc		224
+nim	parsePasp	image/codecs/heif/props.html#parsePasp,seq[uint8]	proc parsePasp(payload: seq[uint8]): PixelAspect		227
+nim	parseAuxC	image/codecs/heif/props.html#parseAuxC,seq[uint8]	proc parseAuxC(payload: seq[uint8]): AuxType		236
+nim	parseRloc	image/codecs/heif/props.html#parseRloc,seq[uint8]	proc parseRloc(payload: seq[uint8]): RelLoc		245
+nim	parseLsel	image/codecs/heif/props.html#parseLsel,seq[uint8]	proc parseLsel(payload: seq[uint8]): LayerSel		253
+nim	ScaleInfo	image/codecs/heif/props.html#ScaleInfo	object ScaleInfo		258
+nim	parseIscl	image/codecs/heif/props.html#parseIscl,seq[uint8]	proc parseIscl(payload: seq[uint8]): ScaleInfo		261
+nim	parseUdes	image/codecs/heif/props.html#parseUdes,seq[uint8]	proc parseUdes(payload: seq[uint8]): UserDesc		274
+nim	parseAltt	image/codecs/heif/props.html#parseAltt,seq[uint8]	proc parseAltt(payload: seq[uint8]): UserDesc		283
+nim	buildIspe	image/codecs/heif/props.html#buildIspe,uint32,uint32	proc buildIspe(w, h: uint32): seq[uint8]		294
+nim	buildPixi	image/codecs/heif/props.html#buildPixi,openArray[int]	proc buildPixi(bits: openArray[int]): seq[uint8]		300
+nim	buildNclx	image/codecs/heif/props.html#buildNclx,uint16,uint16,uint8,bool	proc buildNclx(primaries, transfer: uint16; matrix: uint8; fullRange: bool): seq[\n    uint8]		306
+nim	buildIrot	image/codecs/heif/props.html#buildIrot,int	proc buildIrot(turns: int): seq[uint8]		316
+nim	buildImir	image/codecs/heif/props.html#buildImir,bool	proc buildImir(topBottom: bool): seq[uint8]		319
+nim	buildClap	image/codecs/heif/props.html#buildClap,uint32,uint32,uint32,uint32,int32,int32	proc buildClap(wNum, wDen, hNum, hDen: uint32; hOff, vOff: int32): seq[uint8]		322
+nim	buildPasp	image/codecs/heif/props.html#buildPasp,uint32,uint32	proc buildPasp(h, v: uint32): seq[uint8]		329
+nim	buildAuxC	image/codecs/heif/props.html#buildAuxC,string	proc buildAuxC(uri: string): seq[uint8]		333
+nim	buildRloc	image/codecs/heif/props.html#buildRloc,uint32,uint32	proc buildRloc(h, v: uint32): seq[uint8]		339
+nim	buildIscl	image/codecs/heif/props.html#buildIscl,uint16,uint16,uint16,uint16	proc buildIscl(wNum, wDen, hNum, hDen: uint16): seq[uint8]		344
+nim	buildUdes	image/codecs/heif/props.html#buildUdes,string,string,string,string	proc buildUdes(lang, name, desc, tags: string): seq[uint8]		354
+nim	buildUncCV1	image/codecs/heif/props.html#buildUncCV1,string	proc buildUncCV1(tag: string): seq[uint8]		360
+nim	buildUncCV0	image/codecs/heif/props.html#buildUncCV0,int,int,int,openArray[int]	proc buildUncCV0(depth: int; sampling, interleave: int; compTypes: openArray[int]): seq[\n    uint8]		365
+nim	buildUncCTiled	image/codecs/heif/props.html#buildUncCTiled,int,openArray[int],int,int	proc buildUncCTiled(depth: int; compTypes: openArray[int]; cols, rows: int): seq[\n    uint8]		383
+nim	buildCmpd	image/codecs/heif/props.html#buildCmpd,openArray[int]	proc buildCmpd(compTypes: openArray[int]): seq[uint8]		394

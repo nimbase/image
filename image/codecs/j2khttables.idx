@@ -1,0 +1,3 @@
+nimTitle	j2khttables	image/codecs/j2khttables.html	module image/codecs/j2khttables		0
+nim	HT_VLC_INITIAL	image/codecs/j2khttables.html#HT_VLC_INITIAL	const HT_VLC_INITIAL		21
+nim	HT_VLC_NON_INITIAL	image/codecs/j2khttables.html#HT_VLC_NON_INITIAL	const HT_VLC_NON_INITIAL		151

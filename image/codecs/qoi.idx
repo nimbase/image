@@ -8,5 +8,5 @@ nim	QoiOpRgba	image/codecs/qoi.html#QoiOpRgba	const QoiOpRgba		16
 nim	QoiMask2	image/codecs/qoi.html#QoiMask2	const QoiMask2		17
 nim	QoiHeader	image/codecs/qoi.html#QoiHeader	object QoiHeader		20
 nim	parseQoiHeader	image/codecs/qoi.html#parseQoiHeader,openArray[uint8]	proc parseQoiHeader(data: openArray[uint8]): ImageResult[QoiHeader]		25
-nim	decodeQoi	image/codecs/qoi.html#decodeQoi,seq[uint8]	proc decodeQoi(data: seq[uint8]): ImageResult[RgbaImage]		39
+nim	decodeQoi	image/codecs/qoi.html#decodeQoi,openArray[uint8]	proc decodeQoi(data: openArray[uint8]): ImageResult[RgbaImage]		39
 nim	encodeQoi	image/codecs/qoi.html#encodeQoi,RgbaImage,uint8,uint8	proc encodeQoi(img: RgbaImage; channels = 4'u8; colorspace = 0'u8): seq[uint8]		99

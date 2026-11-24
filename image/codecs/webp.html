@@ -16,10 +16,10 @@
 <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA3XAAAN1wFCKJt4AAAAB3RJTUUH4QQQEwksSS9ZWwAAAk1JREFUWMPtll2ITVEUx39nn/O7Y5qR8f05wtCUUr6ZIS++8pEnkZInPImneaCQ5METNdOkeFBKUhMPRIkHKfEuUZSUlGlKPN2TrgfncpvmnntnmlEyq1Z7t89/rf9a6+y99oZxGZf/XeIq61EdtgKXgdXA0xrYAvBjOIF1AI9zvjcC74BSpndrJPkBWDScTF8Aa4E3wDlgHbASaANmVqlcCnwHvgDvgVfAJ+AikAAvgfVZwLnSVZHZaOuKoQi3ZOMi4NkYkpe1p4J7A8BpYAD49hfIy/oqG0+hLomiKP2L5L+1ubn5115S+3OAn4EnwBlgMzCjyt6ZAnQCJ4A7wOs88iRJHvw50HoujuPBoCKwHWiosy8MdfZnAdcHk8dxXFJ3VQbQlCTJvRBCGdRbD4M6uc5glpY3eAihpN5S5w12diSEcCCEcKUO4ljdr15T76ur1FDDLIQQ3qv71EdDOe3Kxj3leRXyk+pxdWnFWod6Wt2bY3de3aSuUHcPBVimHs7mK9WrmeOF6lR1o9qnzskh2ar2qm1qizpfXaPeVGdlmGN5pb09qMxz1Xb1kLqgzn1RyH7JUXW52lr5e/Kqi9qpto7V1atuUzfnARrV7jEib1T76gG2qxdGmXyiekkt1GswPTtek0aBfJp6YySGBfWg2tPQ0FAYgf1stUfdmdcjarbYJEniKIq6gY/Aw+zWHAC+p2labGpqiorFYgGYCEzN7oQdQClN07O1/EfDyGgC0ALMBdYAi4FyK+4H3gLPsxfR1zRNi+NP7nH5J+QntnXe5B5mpfQAAAAASUVORK5CYII=">
 
 <!-- CSS -->
-<link rel="stylesheet" type="text/css" href="../../nimdoc.out.css?v=2.2.12">
+<link rel="stylesheet" type="text/css" href="../../nimdoc.out.css?v=2.4.2">
 
 <!-- JS -->
-<script type="text/javascript" src="../../dochack.js?v=2.2.12"></script>
+<script type="text/javascript" src="../../dochack.js?v=2.4.2"></script>
 </head>
 <body>
   <div class="document" id="documentId">
@@ -31,28 +31,34 @@
       <div class="row">
   <div class="three columns">
     <div class="theme-select-wrapper">
-      <label for="theme-select">Theme:&nbsp;</label>
-      <select id="theme-select" onchange="setTheme(this.value)">
-        <option value="auto">🌗 Match OS</option>
-        <option value="dark">🌑 Dark</option>
-        <option value="light">🌕 Light</option>
-      </select>
-    </div>
+  <label for="theme-select">Theme:&nbsp;</label>
+  <select id="theme-select" onchange="setTheme(this.value)">
+    <option value="auto">🌗 Match OS</option>
+    <option value="dark">🌑 Dark</option>
+    <option value="light">🌕 Light</option>
+  </select>
+</div>
+
     <div id="global-links">
-      <ul class="simple">
-        <li><a id="indexLink" href="../../theindex.html">Index</a></li>
-      </ul>
-    </div>
-    <div id="searchInputDiv">
-      Search: <input type="search" id="searchInput" oninput="search()"/>
-    </div>
-    <div>
-      Group by:
-      <select onchange="groupBy(this.value)">
-        <option value="section">Section</option>
-        <option value="type">Type</option>
-      </select>
-    </div>
+  
+  <ul class="simple">
+  <li><a id="indexLink" href="../../theindex.html">Index</a></li>
+</ul>
+
+</div>
+
+      <div id="searchInputDiv">
+  Search: <input type="search" id="searchInput" oninput="search()"/>
+</div>
+
+    <div class="search-groupby">
+  Group by:
+  <select onchange="groupBy(this.value)">
+    <option value="section">Section</option>
+    <option value="type">Type</option>
+  </select>
+</div>
+
     <ul class="simple simple-toc" id="toc-list">
   <li>
   <a class="reference reference-toplevel" href="#6" id="56">Imports</a>
@@ -68,17 +74,17 @@
     
     <div id="tocRoot"></div>
     
-    <p class="module-desc">WebP facade: VP8L lossless (pure Nim) + container.</p>
+    <p class="module-desc">WebP facade: VP8L lossless + VP8 lossy keyframe (pure Nim) + container.</p>
     <div class="section" id="6">
   <h1><a class="toc-backref" href="#6">Imports</a></h1>
   <dl class="item">
-    <a class="reference external" href="vp8l.html">vp8l</a>
+    <a class="reference external" href="vp8l.html">vp8l</a>, <a class="reference external" href="vp8enc.html">vp8enc</a>
   </dl>
 </div>
 <div class="section" id="19">
   <h1><a class="toc-backref" href="#19">Exports</a></h1>
   <dl class="item">
-    <a href="vp8l.html#encodeWebp,DynamicImage"><span class="Identifier">encodeWebp</span></a>, <a href="vp8l.html#decodeVp8l,seq[uint8],int,int"><span class="Identifier">decodeVp8l</span></a>, <a href="vp8l.html#encodeVp8l,RgbaImage"><span class="Identifier">encodeVp8l</span></a>, <a href="vp8l.html#decodeWebp,seq[uint8]"><span class="Identifier">decodeWebp</span></a>
+    <a href="vp8l.html#MetaPlan"><span class="Identifier">MetaPlan</span></a>, <a href="vp8l.html#Vp8lScratch"><span class="Identifier">Vp8lScratch</span></a>, <a href="vp8l.html#applyColorFwd,seq[Rgba[uint8]],int,int,int,seq[array[,uint8]]"><span class="Identifier">applyColorFwd</span></a>, <a href="vp8l.html#applyPredictorFwd,seq[Rgba[uint8]],int,int,int,seq[uint8]"><span class="Identifier">applyPredictorFwd</span></a>, <a href="vp8l.html#applySubGreenFwd,seq[Rgba[uint8]]"><span class="Identifier">applySubGreenFwd</span></a>, <a href="vp8l.html#buildLens,openArray[int],int"><span class="Identifier">buildLens</span></a>, <a href="vp8l.html#chooseColorParams,seq[Rgba[uint8]],int,int,int"><span class="Identifier">chooseColorParams</span></a>, <a href="vp8l.html#choosePredictorModes,seq[Rgba[uint8]],int,int,int"><span class="Identifier">choosePredictorModes</span></a>, <a href="vp8l.html#decodeAlph,openArray[uint8],int,int"><span class="Identifier">decodeAlph</span></a>, <a href="vp8l.html#decodeVp8l,openArray[uint8],int,int"><span class="Identifier">decodeVp8l</span></a>, <a href="vp8l.html#decodeVp8lHeaderless,openArray[uint8],int,int"><span class="Identifier">decodeVp8lHeaderless</span></a>, <a href="vp8l.html#decodeWebp,openArray[uint8]"><span class="Identifier">decodeWebp</span></a>, <a href="vp8l.html#distChoice,int,int,openArray[int]"><span class="Identifier">distChoice</span></a>, <a href="vp8l.html#encodeAlph,openArray[uint8],int,int"><span class="Identifier">encodeAlph</span></a>, <a href="vp8l.html#encodeStream,RgbaImage,bool"><span class="Identifier">encodeStream</span></a>, <a href="vp8l.html#encodeVp8l,RgbaImage"><span class="Identifier">encodeVp8l</span></a>, <a href="vp8l.html#encodeVp8l,RgbaImage,Vp8lScratch"><span class="Identifier">encodeVp8l</span></a>, <a href="vp8l.html#encodeVp8lPayload,RgbaImage,seq[Rgba[uint8]],seq[uint8],seq[array[,uint8]]"><span class="Identifier">encodeVp8lPayload</span></a>, <a href="vp8l.html#encodeWebp,DynamicImage"><span class="Identifier">encodeWebp</span></a>, <a href="vp8l.html#encodeWebp,DynamicImage,Vp8lScratch"><span class="Identifier">encodeWebp</span></a>, <a href="vp8l.html#initVp8lScratch"><span class="Identifier">initVp8lScratch</span></a>, <a href="vp8l.html#lengthSymExtra,int"><span class="Identifier">lengthSymExtra</span></a>, <a href="vp8l.html#parseLz77,seq[Rgba[uint8]],int,openArray[uint16],openArray[uint16],openArray[uint16],openArray[uint16]"><span class="Identifier">parseLz77</span></a>, <a href="vp8l.html#unfilterAlpha,int,seq[uint8],int,int"><span class="Identifier">unfilterAlpha</span></a>, <a href="vp8l.html#wrapWebpLossyAlpha,openArray[uint8],openArray[uint8],int,int"><span class="Identifier">wrapWebpLossyAlpha</span></a>, <a href="vp8enc.html#BoolEnc"><span class="Identifier">BoolEnc</span></a>, <a href="vp8enc.html#CurTokCosts"><span class="Identifier">CurTokCosts</span></a>, <a href="vp8enc.html#TokCosts"><span class="Identifier">TokCosts</span></a>, <a href="vp8enc.html#TokCostTable"><span class="Identifier">TokCostTable</span></a>, <a href="vp8enc.html#TokPaths"><span class="Identifier">TokPaths</span></a>, <a href="vp8enc.html#bitCost,uint8,bool"><span class="Identifier">bitCost</span></a>, <a href="vp8enc.html#coeffBlockRate,array[,int32],int,int,int"><span class="Identifier">coeffBlockRate</span></a>, <a href="vp8enc.html#encodeVp8Lossy,RgbaImage,int"><span class="Identifier">encodeVp8Lossy</span></a>, <a href="vp8enc.html#encodeWebpLossy,RgbaImage,int"><span class="Identifier">encodeWebpLossy</span></a>, <a href="vp8enc.html#extraRate,int,int"><span class="Identifier">extraRate</span></a>, <a href="vp8enc.html#fdct4x4,array[,float64]"><span class="Identifier">fdct4x4</span></a>, <a href="vp8enc.html#fillBorderChroma,seq[uint8],int,int,seq[uint8],seq[uint8]"><span class="Identifier">fillBorderChroma</span></a>, <a href="vp8enc.html#fillBorderLuma,seq[uint8],int,int,int,seq[uint8],seq[uint8]"><span class="Identifier">fillBorderLuma</span></a>, <a href="vp8enc.html#flush,BoolEnc"><span class="Identifier">flush</span></a>, <a href="vp8enc.html#fwht4x4,array[,float64]"><span class="Identifier">fwht4x4</span></a>, <a href="vp8enc.html#initBoolEnc"><span class="Identifier">initBoolEnc</span></a>, <a href="vp8enc.html#putBit,BoolEnc,bool,uint8"><span class="Identifier">putBit</span></a>, <a href="vp8enc.html#putFlag,BoolEnc,bool"><span class="Identifier">putFlag</span></a>, <a href="vp8enc.html#putLiteral,BoolEnc,uint8,int"><span class="Identifier">putLiteral</span></a>, <a href="vp8enc.html#putSigned,BoolEnc,int32,int"><span class="Identifier">putSigned</span></a>, <a href="vp8enc.html#quantizeCoeff,float64,int16"><span class="Identifier">quantizeCoeff</span></a>, <a href="vp8enc.html#rgbToYuv601,uint8,uint8,uint8"><span class="Identifier">rgbToYuv601</span></a>, <a href="vp8enc.html#ssd16,array[,uint8],array[,uint8]"><span class="Identifier">ssd16</span></a>, <a href="vp8enc.html#ssd8,array[,uint8],array[,uint8]"><span class="Identifier">ssd8</span></a>, <a href="vp8enc.html#treeCost,seq[TreeNode],int"><span class="Identifier">treeCost</span></a>, <a href="vp8enc.html#trellisBlk,array[,float64],int16,int16,int,int,int,float64"><span class="Identifier">trellisBlk</span></a>, <a href="vp8enc.html#trellisLambda,float64"><span class="Identifier">trellisLambda</span></a>, <a href="vp8enc.html#vp8LastNumUpdates"><span class="Identifier">vp8LastNumUpdates</span></a>, <a href="vp8enc.html#vp8QualityToFilter,int"><span class="Identifier">vp8QualityToFilter</span></a>, <a href="vp8enc.html#vp8QualityToQi,int"><span class="Identifier">vp8QualityToQi</span></a>, <a href="vp8enc.html#vp8RdoLambda,int16"><span class="Identifier">vp8RdoLambda</span></a>, <a href="vp8enc.html#writeExtra,BoolEnc,int,int"><span class="Identifier">writeExtra</span></a>, <a href="vp8enc.html#writeToken,BoolEnc,int,int,int,int,int"><span class="Identifier">writeToken</span></a>
   </dl>
 </div>
 
@@ -88,7 +94,7 @@
       <div class="twelve-columns footer">
         <span class="nim-sprite"></span>
         <br>
-        <small style="color: var(--hint);">Made with Nim. Generated: 2026-10-27 13:52:22 UTC</small>
+        <small style="color: var(--hint);">Made with Nim. Generated: 2026-11-24 19:21:34 UTC</small>
       </div>
     </div>
   </div>

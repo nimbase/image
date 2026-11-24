@@ -1,7 +1,72 @@
 nimTitle	openexr	image/codecs/openexr.html	module image/codecs/openexr		0
-nim	ExrMagic	image/codecs/openexr.html#ExrMagic	const ExrMagic		13
-nim	halfToFloat	image/codecs/openexr.html#halfToFloat,uint16	proc halfToFloat(h: uint16): float32		15
-nim	floatToHalf	image/codecs/openexr.html#floatToHalf,float32	proc floatToHalf(f: float32): uint16		32
-nim	decodeExrAll	image/codecs/openexr.html#decodeExrAll,seq[uint8]	proc decodeExrAll(data: seq[uint8]): ImageResult[seq[DynamicImage]]		163
-nim	decodeExr	image/codecs/openexr.html#decodeExr,seq[uint8]	proc decodeExr(data: seq[uint8]): ImageResult[DynamicImage]		388
-nim	encodeExr	image/codecs/openexr.html#encodeExr,DynamicImage	proc encodeExr(img: DynamicImage): ImageResult[seq[uint8]]		409
+nim	ExrMagic	image/codecs/openexr.html#ExrMagic	const ExrMagic		24
+nim	halfToFloat	image/codecs/openexr.html#halfToFloat,uint16	proc halfToFloat(h: uint16): float32		26
+nim	floatToHalf	image/codecs/openexr.html#floatToHalf,float32	proc floatToHalf(f: float32): uint16		44
+nim	planarToChunky	image/codecs/openexr.html#planarToChunky,openArray[uint8],int,int,seq[int]	proc planarToChunky(blk: openArray[uint8]; w, rows: int; chanBytes: seq[int]): seq[\n    uint8]		134
+nim	chunkyToPlanar	image/codecs/openexr.html#chunkyToPlanar,openArray[uint8],int,int,seq[int]	proc chunkyToPlanar(full: openArray[uint8]; w, rows: int; chanBytes: seq[int]): seq[\n    uint8]		152
+nim	ExrChannel	image/codecs/openexr.html#ExrChannel	object ExrChannel		374
+nim	hufCanonicalCodeTable	image/codecs/openexr.html#hufCanonicalCodeTable,openArray[uint64]	proc hufCanonicalCodeTable(hcode: var openArray[uint64])		412
+nim	hufBuildEncTable	image/codecs/openexr.html#hufBuildEncTable,openArray[uint64],int,int	proc hufBuildEncTable(frq: var openArray[uint64]; iMin, iMax: var int): seq[uint64]		482
+nim	hufPackEncTable	image/codecs/openexr.html#hufPackEncTable,openArray[uint64],int,int	proc hufPackEncTable(hcode: openArray[uint64]; iMin, iMax: int): seq[uint8]		527
+nim	hufUnpackEncTable	image/codecs/openexr.html#hufUnpackEncTable,openArray[uint8],int,int,int,openArray[uint64]	proc hufUnpackEncTable(data: openArray[uint8]; pos: var int; iMin, iMax: int;\n                  hcode: var openArray[uint64]): bool		559
+nim	hufEncode	image/codecs/openexr.html#hufEncode,openArray[uint64],openArray[uint16],int	proc hufEncode(hcode: openArray[uint64]; data: openArray[uint16]; rlc: int): tuple[\n    bits: seq[uint8], nBits: int]		626
+nim	hufBuildDecTable	image/codecs/openexr.html#hufBuildDecTable,openArray[uint64],int,int	proc hufBuildDecTable(hcode: openArray[uint64]; iMin, iMax: int): seq[HufDecEntry]		651
+nim	hufDecode	image/codecs/openexr.html#hufDecode,openArray[uint64],openArray[HufDecEntry],openArray[uint8],int,int,int	proc hufDecode(hcode: openArray[uint64]; hdecod: openArray[HufDecEntry];\n          data: openArray[uint8]; nBits: int; rlc, nOut: int): tuple[ok: bool,\n    outp: seq[uint16]]		677
+nim	pizBitmapFromData	image/codecs/openexr.html#pizBitmapFromData,openArray[uint16],openArray[uint8]	proc pizBitmapFromData(data: openArray[uint16]; bitmap: var openArray[uint8]): tuple[\n    mn, mx: int]		752
+nim	pizForwardLut	image/codecs/openexr.html#pizForwardLut,openArray[uint8],openArray[uint16]	proc pizForwardLut(bitmap: openArray[uint8]; lut: var openArray[uint16]): int		767
+nim	pizReverseLut	image/codecs/openexr.html#pizReverseLut,openArray[uint8],openArray[uint16]	proc pizReverseLut(bitmap: openArray[uint8]; lut: var openArray[uint16]): int		776
+nim	pizApplyLut	image/codecs/openexr.html#pizApplyLut,openArray[uint16],openArray[uint16]	proc pizApplyLut(lut: openArray[uint16]; data: var openArray[uint16])		787
+nim	pizWav2DEncode	image/codecs/openexr.html#pizWav2DEncode,openArray[uint16],int,int,int,int,uint16	proc pizWav2DEncode(buf: var openArray[uint16]; nx, ox, ny, oy: int; maxVal: uint16)		844
+nim	pizWav2DDecode	image/codecs/openexr.html#pizWav2DDecode,openArray[uint16],int,int,int,int,uint16	proc pizWav2DDecode(buf: var openArray[uint16]; nx, ox, ny, oy: int; maxVal: uint16)		901
+nim	hufCompress	image/codecs/openexr.html#hufCompress,openArray[uint16]	proc hufCompress(raw: openArray[uint16]): tuple[ok: bool, packed: seq[uint8]]		957
+nim	hufDecompress	image/codecs/openexr.html#hufDecompress,openArray[uint8],int	proc hufDecompress(comp: openArray[uint8]; nRaw: int): tuple[ok: bool,\n    raw: seq[uint16]]		983
+nim	pizApplyChunk	image/codecs/openexr.html#pizApplyChunk,openArray[uint8],int,int,seq[int],seq[int32]	proc pizApplyChunk(planar: openArray[uint8]; w, rows: int; chanBytes: seq[int];\n              ptypes: seq[int32]): tuple[ok: bool, blk: seq[uint8]]		1049
+nim	pizUndoChunk	image/codecs/openexr.html#pizUndoChunk,openArray[uint8],int,int,seq[ExrChannel],seq[int]	proc pizUndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];\n             chanBytes: seq[int]): ImageResult[seq[uint8]]		1100
+nim	dwaFdiv	image/codecs/openexr.html#dwaFdiv,float32,float32	proc dwaFdiv(a, b: float32): float32		26
+nim	dwaFmul	image/codecs/openexr.html#dwaFmul,float32,float32	proc dwaFmul(a, b: float32): float32		32
+nim	dwaFloatToHalf	image/codecs/openexr.html#dwaFloatToHalf,float32	proc dwaFloatToHalf(f: float32): uint16		36
+nim	dwaToLinearTab	image/codecs/openexr.html#dwaToLinearTab	var dwaToLinearTab		65
+nim	dwaToNonLinearTab	image/codecs/openexr.html#dwaToNonLinearTab	var dwaToNonLinearTab		66
+nim	dwaDctA	image/codecs/openexr.html#dwaDctA	var dwaDctA		67
+nim	dwaDctB	image/codecs/openexr.html#dwaDctB	var dwaDctB		67
+nim	dwaDctC	image/codecs/openexr.html#dwaDctC	var dwaDctC		67
+nim	dwaDctD	image/codecs/openexr.html#dwaDctD	var dwaDctD		67
+nim	dwaDctE	image/codecs/openexr.html#dwaDctE	var dwaDctE		67
+nim	dwaDctF	image/codecs/openexr.html#dwaDctF	var dwaDctF		67
+nim	dwaDctG	image/codecs/openexr.html#dwaDctG	var dwaDctG		67
+nim	ensureDwaTables	image/codecs/openexr.html#ensureDwaTables	proc ensureDwaTables()		69
+nim	dwaFromHalfZigzag	image/codecs/openexr.html#dwaFromHalfZigzag,openArray[uint16],array[,float32]	proc dwaFromHalfZigzag(src: openArray[uint16]; dst: var array[64, float32])		115
+nim	dwaCscInv	image/codecs/openexr.html#dwaCscInv,float32,float32,float32,float32,float32,float32	proc dwaCscInv(y, cb, cr: float32; r, g, b: var float32)		119
+nim	dwaDctDcOnly	image/codecs/openexr.html#dwaDctDcOnly,array[,float32]	proc dwaDctDcOnly(d: var array[64, float32])		125
+nim	dwaUnRleAc	image/codecs/openexr.html#dwaUnRleAc,openArray[uint16],int,array[,uint16]	proc dwaUnRleAc(ac: openArray[uint16]; pos: var int; hz: var array[64, uint16]): tuple[\n    ok: bool, lnz: int]		129
+nim	dwaRleDecompress	image/codecs/openexr.html#dwaRleDecompress,openArray[uint8],int	proc dwaRleDecompress(data: openArray[uint8]; expected: int): seq[uint8]		146
+nim	dwaDctInverse	image/codecs/openexr.html#dwaDctInverse,array[,float32]	proc dwaDctInverse(d: var array[64, float32])		163
+nim	dwaDctInverseScalar	image/codecs/openexr.html#dwaDctInverseScalar,array[,float32]	proc dwaDctInverseScalar(d: var array[64, float32])		221
+nim	dwaParseRules	image/codecs/openexr.html#dwaParseRules,openArray[uint8],int,int	proc dwaParseRules(data: openArray[uint8]; pos: var int; left: int): tuple[ok: bool,\n    rules: seq[DwaRule]]		351
+nim	dwaUndoChunk	image/codecs/openexr.html#dwaUndoChunk,openArray[uint8],int,int,seq[ExrChannel],seq[int]	proc dwaUndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];\n             chanBytes: seq[int]): ImageResult[seq[uint8]]		471
+nim	dwaDctForward	image/codecs/openexr.html#dwaDctForward,array[,float32]	proc dwaDctForward(d: var array[64, float32])		6
+nim	dwaTranspose8	image/codecs/openexr.html#dwaTranspose8,array[,float32]	proc dwaTranspose8(d: var array[64, float32])		47
+nim	dwaCscFwd	image/codecs/openexr.html#dwaCscFwd,array[,float32],array[,float32],array[,float32]	proc dwaCscFwd(r, g, b: var array[64, float32])		52
+nim	dwaJpegQy	image/codecs/openexr.html#dwaJpegQy	const dwaJpegQy		60
+nim	dwaJpegQc	image/codecs/openexr.html#dwaJpegQc	const dwaJpegQc		64
+nim	dwaCountSetBits	image/codecs/openexr.html#dwaCountSetBits,uint16	proc dwaCountSetBits(x: uint16): int		69
+nim	dwaCountLeadingZeros	image/codecs/openexr.html#dwaCountLeadingZeros,uint32	proc dwaCountLeadingZeros(x: uint32): int		77
+nim	dwaQuantSmall	image/codecs/openexr.html#dwaQuantSmall,uint32,int,float32,float32,float32,uint32,bool	proc dwaQuantSmall(alt: uint32; smallbits: var int; srcFloat, errTol: float32;\n              smalldelta: var float32; smallest: var uint32; isLarge: bool)		89
+nim	dwaQCloseExp	image/codecs/openexr.html#dwaQCloseExp,uint32,uint32,float32,float32	proc dwaQCloseExp(abssrc, tolSig: uint32; errTol, srcFloat: float32): uint32		200
+nim	dwaAlgoQuantize	image/codecs/openexr.html#dwaAlgoQuantize,uint16,uint16,float32,float32	proc dwaAlgoQuantize(src, herrTol: uint16; errTol, srcFloat: float32): uint16		346
+nim	dwaRleCompress	image/codecs/openexr.html#dwaRleCompress,openArray[uint8]	proc dwaRleCompress(data: openArray[uint8]): seq[uint8]		385
+nim	dwaQuantizeZig	image/codecs/openexr.html#dwaQuantizeZig,array[,uint16],array[,float32],openArray[float32],openArray[uint16]	proc dwaQuantizeZig(halfZig: var array[64, uint16]; dct: array[64, float32];\n               qtbl: openArray[float32]; htbl: openArray[uint16])		433
+nim	dwaRleAc	image/codecs/openexr.html#dwaRleAc,openArray[uint16],seq[uint16]	proc dwaRleAc(halfZig: openArray[uint16]; acBuf: var seq[uint16])		444
+nim	dwaEncodeGroup	image/codecs/openexr.html#dwaEncodeGroup,seq[seq[uint16]],openArray[int],float32,seq[uint16],openArray[bool],int,int,seq[uint16],seq[seq[uint16]]	proc dwaEncodeGroup(halves: seq[seq[uint16]]; chs: openArray[int]; qbe: float32;\n               toNonlin: seq[uint16]; hasNonlin: openArray[bool]; w, h: int;\n               acBuf: var seq[uint16]; dcBufs: var seq[seq[uint16]]): bool		464
+nim	dwaApplyChunk	image/codecs/openexr.html#dwaApplyChunk,openArray[uint8],int,int,seq[ExrChannel],seq[int],float32	proc dwaApplyChunk(planar: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];\n              chanBytes: seq[int]; level = 45.0'f32): tuple[ok: bool,\n    blk: seq[uint8]]		515
+nim	b44ExpTable	image/codecs/openexr.html#b44ExpTable	var b44ExpTable		1167
+nim	b44LogTable	image/codecs/openexr.html#b44LogTable	var b44LogTable		1168
+nim	ensureB44Tables	image/codecs/openexr.html#ensureB44Tables	proc ensureB44Tables()		1170
+nim	b44ShiftAndRound	image/codecs/openexr.html#b44ShiftAndRound,int,int	proc b44ShiftAndRound(x, shift: int): int		1193
+nim	b44Pack	image/codecs/openexr.html#b44Pack,array[,uint16],bool,bool,array[,uint8]	proc b44Pack(s: array[16, uint16]; flatFields, exactMax: bool;\n        dst: var array[14, uint8]): int		1201
+nim	b44Unpack	image/codecs/openexr.html#b44Unpack,openArray[uint8],bool	proc b44Unpack(b: openArray[uint8]; flat: bool): array[16, uint16]		1261
+nim	b44ApplyChunk	image/codecs/openexr.html#b44ApplyChunk,openArray[uint8],int,int,seq[int],seq[int32],seq[bool],bool	proc b44ApplyChunk(planar: openArray[uint8]; w, rows: int; chanBytes: seq[int];\n              ptypes: seq[int32]; pLinears: seq[bool]; flatFields: bool): seq[\n    uint8]		1294
+nim	b44UndoChunk	image/codecs/openexr.html#b44UndoChunk,openArray[uint8],int,int,seq[ExrChannel],seq[int]	proc b44UndoChunk(comp: openArray[uint8]; w, rows: int; channels: seq[ExrChannel];\n             chanBytes: seq[int]): ImageResult[seq[uint8]]		1333
+nim	decodeExrAll	image/codecs/openexr.html#decodeExrAll,openArray[uint8]	proc decodeExrAll(raw: openArray[uint8]): ImageResult[seq[DynamicImage]]		1409
+nim	decodeExr	image/codecs/openexr.html#decodeExr,openArray[uint8]	proc decodeExr(raw: openArray[uint8]): ImageResult[DynamicImage]		1712
+nim	encodeExr	image/codecs/openexr.html#encodeExr,DynamicImage,int	proc encodeExr(img: DynamicImage; compression: int = 3): ImageResult[seq[uint8]]		1733

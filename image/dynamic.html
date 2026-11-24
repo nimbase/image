@@ -16,10 +16,10 @@
 <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA3XAAAN1wFCKJt4AAAAB3RJTUUH4QQQEwksSS9ZWwAAAk1JREFUWMPtll2ITVEUx39nn/O7Y5qR8f05wtCUUr6ZIS++8pEnkZInPImneaCQ5METNdOkeFBKUhMPRIkHKfEuUZSUlGlKPN2TrgfncpvmnntnmlEyq1Z7t89/rf9a6+y99oZxGZf/XeIq61EdtgKXgdXA0xrYAvBjOIF1AI9zvjcC74BSpndrJPkBWDScTF8Aa4E3wDlgHbASaANmVqlcCnwHvgDvgVfAJ+AikAAvgfVZwLnSVZHZaOuKoQi3ZOMi4NkYkpe1p4J7A8BpYAD49hfIy/oqG0+hLomiKP2L5L+1ubn5115S+3OAn4EnwBlgMzCjyt6ZAnQCJ4A7wOs88iRJHvw50HoujuPBoCKwHWiosy8MdfZnAdcHk8dxXFJ3VQbQlCTJvRBCGdRbD4M6uc5glpY3eAihpN5S5w12diSEcCCEcKUO4ljdr15T76ur1FDDLIQQ3qv71EdDOe3Kxj3leRXyk+pxdWnFWod6Wt2bY3de3aSuUHcPBVimHs7mK9WrmeOF6lR1o9qnzskh2ar2qm1qizpfXaPeVGdlmGN5pb09qMxz1Xb1kLqgzn1RyH7JUXW52lr5e/Kqi9qpto7V1atuUzfnARrV7jEib1T76gG2qxdGmXyiekkt1GswPTtek0aBfJp6YySGBfWg2tPQ0FAYgf1stUfdmdcjarbYJEniKIq6gY/Aw+zWHAC+p2labGpqiorFYgGYCEzN7oQdQClN07O1/EfDyGgC0ALMBdYAi4FyK+4H3gLPsxfR1zRNi+NP7nH5J+QntnXe5B5mpfQAAAAASUVORK5CYII=">
 
 <!-- CSS -->
-<link rel="stylesheet" type="text/css" href="../nimdoc.out.css?v=2.2.12">
+<link rel="stylesheet" type="text/css" href="../nimdoc.out.css?v=2.4.2">
 
 <!-- JS -->
-<script type="text/javascript" src="../dochack.js?v=2.2.12"></script>
+<script type="text/javascript" src="../dochack.js?v=2.4.2"></script>
 </head>
 <body>
   <div class="document" id="documentId">
@@ -31,28 +31,34 @@
       <div class="row">
   <div class="three columns">
     <div class="theme-select-wrapper">
-      <label for="theme-select">Theme:&nbsp;</label>
-      <select id="theme-select" onchange="setTheme(this.value)">
-        <option value="auto">🌗 Match OS</option>
-        <option value="dark">🌑 Dark</option>
-        <option value="light">🌕 Light</option>
-      </select>
-    </div>
+  <label for="theme-select">Theme:&nbsp;</label>
+  <select id="theme-select" onchange="setTheme(this.value)">
+    <option value="auto">🌗 Match OS</option>
+    <option value="dark">🌑 Dark</option>
+    <option value="light">🌕 Light</option>
+  </select>
+</div>
+
     <div id="global-links">
-      <ul class="simple">
-        <li><a id="indexLink" href="../theindex.html">Index</a></li>
-      </ul>
-    </div>
-    <div id="searchInputDiv">
-      Search: <input type="search" id="searchInput" oninput="search()"/>
-    </div>
-    <div>
-      Group by:
-      <select onchange="groupBy(this.value)">
-        <option value="section">Section</option>
-        <option value="type">Type</option>
-      </select>
-    </div>
+  
+  <ul class="simple">
+  <li><a id="indexLink" href="../theindex.html">Index</a></li>
+</ul>
+
+</div>
+
+      <div id="searchInputDiv">
+  Search: <input type="search" id="searchInput" oninput="search()"/>
+</div>
+
+    <div class="search-groupby">
+  Group by:
+  <select onchange="groupBy(this.value)">
+    <option value="section">Section</option>
+    <option value="type">Type</option>
+  </select>
+</div>
+
     <ul class="simple simple-toc" id="toc-list">
   <li>
   <a class="reference reference-toplevel" href="#6" id="56">Imports</a>
@@ -102,6 +108,10 @@
   <li><a class="reference" href="#color%2CDynamicImage" title="color(img: DynamicImage): ColorType">color(img: DynamicImage): ColorType</a></li>
 
 </ul>
+<ul class="simple nested-toc-section">cropImage
+  <li><a class="reference" href="#cropImage%2CDynamicImage%2Cuint32%2Cuint32%2Cuint32%2Cuint32" title="cropImage(img: DynamicImage; x, y, w, h: uint32): ImageResult[DynamicImage]">cropImage(img: DynamicImage; x, y, w, h: uint32): ImageResult[DynamicImage]</a></li>
+
+</ul>
 <ul class="simple nested-toc-section">dimensions
   <li><a class="reference" href="#dimensions%2CDynamicImage" title="dimensions(img: DynamicImage): tuple[w, h: uint32]">dimensions(img: DynamicImage): tuple[w, h: uint32]</a></li>
 
@@ -134,7 +144,7 @@
     <div class="section" id="6">
   <h1><a class="toc-backref" href="#6">Imports</a></h1>
   <dl class="item">
-    <a class="reference external" href="color.html">color</a>, <a class="reference external" href="error.html">error</a>, <a class="reference external" href="buffer.html">buffer</a>, <a class="reference external" href="format.html">format</a>
+    <a class="reference external" href="color.html">color</a>, <a class="reference external" href="error.html">error</a>, <a class="reference external" href="buffer.html">buffer</a>, <a class="reference external" href="format.html">format</a>, <a class="reference external" href="math.html">math</a>
   </dl>
 </div>
 <div class="section" id="7">
@@ -200,6 +210,18 @@
 </div>
 
 </div>
+<div id="cropImage-procs-all">
+  <div id="cropImage,DynamicImage,uint32,uint32,uint32,uint32">
+  <dt><pre><span class="Keyword">proc</span> <a href="#cropImage%2CDynamicImage%2Cuint32%2Cuint32%2Cuint32%2Cuint32"><span class="Identifier">cropImage</span></a><span class="Other">(</span><span class="Identifier">img</span><span class="Other">:</span> <a href="#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">;</span> <span class="Identifier">x</span><span class="Other">,</span> <span class="Identifier">y</span><span class="Other">,</span> <span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">h</span><span class="Other">:</span> <span class="Identifier">uint32</span><span class="Other">)</span><span class="Other">:</span> <a href="error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><a href="#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Strict width/height crop. The rectangle must be fully inside the source image (no clamping); the source variant is preserved and the source itself is left unchanged.
+    
+  </dd>
+</div>
+
+</div>
 <div id="dimensions-procs-all">
   <div id="dimensions,DynamicImage">
   <dt><pre><span class="Keyword">func</span> <a href="#dimensions%2CDynamicImage"><span class="Identifier">dimensions</span></a><span class="Other">(</span><span class="Identifier">img</span><span class="Other">:</span> <a href="#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">)</span><span class="Other">:</span> <span class="Keyword">tuple</span><span class="Other">[</span><span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">h</span><span class="Other">:</span> <span class="Identifier">uint32</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
@@ -255,7 +277,7 @@
       <div class="twelve-columns footer">
         <span class="nim-sprite"></span>
         <br>
-        <small style="color: var(--hint);">Made with Nim. Generated: 2026-10-27 13:52:21 UTC</small>
+        <small style="color: var(--hint);">Made with Nim. Generated: 2026-11-24 19:21:33 UTC</small>
       </div>
     </div>
   </div>

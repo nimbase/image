@@ -16,10 +16,10 @@
 <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA3XAAAN1wFCKJt4AAAAB3RJTUUH4QQQEwksSS9ZWwAAAk1JREFUWMPtll2ITVEUx39nn/O7Y5qR8f05wtCUUr6ZIS++8pEnkZInPImneaCQ5METNdOkeFBKUhMPRIkHKfEuUZSUlGlKPN2TrgfncpvmnntnmlEyq1Z7t89/rf9a6+y99oZxGZf/XeIq61EdtgKXgdXA0xrYAvBjOIF1AI9zvjcC74BSpndrJPkBWDScTF8Aa4E3wDlgHbASaANmVqlcCnwHvgDvgVfAJ+AikAAvgfVZwLnSVZHZaOuKoQi3ZOMi4NkYkpe1p4J7A8BpYAD49hfIy/oqG0+hLomiKP2L5L+1ubn5115S+3OAn4EnwBlgMzCjyt6ZAnQCJ4A7wOs88iRJHvw50HoujuPBoCKwHWiosy8MdfZnAdcHk8dxXFJ3VQbQlCTJvRBCGdRbD4M6uc5glpY3eAihpN5S5w12diSEcCCEcKUO4ljdr15T76ur1FDDLIQQ3qv71EdDOe3Kxj3leRXyk+pxdWnFWod6Wt2bY3de3aSuUHcPBVimHs7mK9WrmeOF6lR1o9qnzskh2ar2qm1qizpfXaPeVGdlmGN5pb09qMxz1Xb1kLqgzn1RyH7JUXW52lr5e/Kqi9qpto7V1atuUzfnARrV7jEib1T76gG2qxdGmXyiekkt1GswPTtek0aBfJp6YySGBfWg2tPQ0FAYgf1stUfdmdcjarbYJEniKIq6gY/Aw+zWHAC+p2labGpqiorFYgGYCEzN7oQdQClN07O1/EfDyGgC0ALMBdYAi4FyK+4H3gLPsxfR1zRNi+NP7nH5J+QntnXe5B5mpfQAAAAASUVORK5CYII=">
 
 <!-- CSS -->
-<link rel="stylesheet" type="text/css" href="../../nimdoc.out.css?v=2.2.12">
+<link rel="stylesheet" type="text/css" href="../../nimdoc.out.css?v=2.4.2">
 
 <!-- JS -->
-<script type="text/javascript" src="../../dochack.js?v=2.2.12"></script>
+<script type="text/javascript" src="../../dochack.js?v=2.4.2"></script>
 </head>
 <body>
   <div class="document" id="documentId">
@@ -31,38 +31,87 @@
       <div class="row">
   <div class="three columns">
     <div class="theme-select-wrapper">
-      <label for="theme-select">Theme:&nbsp;</label>
-      <select id="theme-select" onchange="setTheme(this.value)">
-        <option value="auto">🌗 Match OS</option>
-        <option value="dark">🌑 Dark</option>
-        <option value="light">🌕 Light</option>
-      </select>
-    </div>
+  <label for="theme-select">Theme:&nbsp;</label>
+  <select id="theme-select" onchange="setTheme(this.value)">
+    <option value="auto">🌗 Match OS</option>
+    <option value="dark">🌑 Dark</option>
+    <option value="light">🌕 Light</option>
+  </select>
+</div>
+
     <div id="global-links">
-      <ul class="simple">
-        <li><a id="indexLink" href="../../theindex.html">Index</a></li>
-      </ul>
-    </div>
-    <div id="searchInputDiv">
-      Search: <input type="search" id="searchInput" oninput="search()"/>
-    </div>
-    <div>
-      Group by:
-      <select onchange="groupBy(this.value)">
-        <option value="section">Section</option>
-        <option value="type">Type</option>
-      </select>
-    </div>
+  
+  <ul class="simple">
+  <li><a id="indexLink" href="../../theindex.html">Index</a></li>
+</ul>
+
+</div>
+
+      <div id="searchInputDiv">
+  Search: <input type="search" id="searchInput" oninput="search()"/>
+</div>
+
+    <div class="search-groupby">
+  Group by:
+  <select onchange="groupBy(this.value)">
+    <option value="section">Section</option>
+    <option value="type">Type</option>
+  </select>
+</div>
+
     <ul class="simple simple-toc" id="toc-list">
   <li>
   <a class="reference reference-toplevel" href="#6" id="56">Imports</a>
 </li>
 <li>
   <details open>
+    <summary><a class="reference reference-toplevel" href="#7" id="57">Types</a></summary>
+    <ul class="simple simple-toc-section">
+      <li><a class="reference" href="#JpegScratch" title="JpegScratch = object
+  clean*: PooledBuffer[uint8] ## Assembly row buffers (Y/Cb/Cr gather rows, `outW` bytes each) for
+                              ## the 3-component fast path. Same terms as `clean`: largest width
+                              ## wins, capacity retained across decodes. Fully overwritten per row,
+                              ## so no zeroing is needed (unlike PNG `prev`, which filters row 0
+                              ## against zeros). Width-sized KBs: `shrinkAfterSpike` leaves them
+                              ## alone. The exotic-sampling `xmaps` (3x `outW` ints, almost never
+                              ## taken) stay fresh allocs — pooling them would pin capacity for a
+                              ## path that barely runs.
+  yRow*: PooledBuffer[uint8]
+  cbRow*: PooledBuffer[uint8]
+  crRow*: PooledBuffer[uint8]">JpegScratch</a></li>
+
+    </ul>
+  </details>
+</li>
+<li>
+  <details open>
     <summary><a class="reference reference-toplevel" href="#12" id="62">Procs</a></summary>
     <ul class="simple simple-toc-section">
       <ul class="simple nested-toc-section">decodeJpeg
-  <li><a class="reference" href="#decodeJpeg%2Cseq%5Buint8%5D" title="decodeJpeg(data: seq[uint8]): ImageResult[DynamicImage]">decodeJpeg(data: seq[uint8]): ImageResult[DynamicImage]</a></li>
+  <li><a class="reference" href="#decodeJpeg%2CopenArray%5Buint8%5D%2Cint" title="decodeJpeg(data: openArray[uint8]; denom = 1): ImageResult[DynamicImage]">decodeJpeg(data: openArray[uint8]; denom = 1): ImageResult[DynamicImage]</a></li>
+<li><a class="reference" href="#decodeJpeg%2CopenArray%5Buint8%5D%2CJpegScratch%2Cint" title="decodeJpeg(data: openArray[uint8]; scratch: var JpegScratch; denom = 1): ImageResult[
+    DynamicImage]">decodeJpeg(data: openArray[uint8]; scratch: var JpegScratch; denom = 1): ImageResult[
+    DynamicImage]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">decodeJpegRgbaInto
+  <li><a class="reference" href="#decodeJpegRgbaInto%2CopenArray%5Buint8%5D%2CJpegScratch%2Cptr.UncheckedArray%5BRgba%5Buint8%5D%5D%2Cint%2Cint" title="decodeJpegRgbaInto(data: openArray[uint8]; scratch: var JpegScratch;
+                   dst: ptr UncheckedArray[Rgba[uint8]]; capPx: int; denom = 1): ImageResult[
+    tuple[w, h: int]]">decodeJpegRgbaInto(data: openArray[uint8]; scratch: var JpegScratch;
+                   dst: ptr UncheckedArray[Rgba[uint8]]; capPx: int; denom = 1): ImageResult[
+    tuple[w, h: int]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">initJpegScratch
+  <li><a class="reference" href="#initJpegScratch%2Cint" title="initJpegScratch(cap = 0): JpegScratch">initJpegScratch(cap = 0): JpegScratch</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">jpegDimensions
+  <li><a class="reference" href="#jpegDimensions%2CopenArray%5Buint8%5D" title="jpegDimensions(data: openArray[uint8]): ImageResult[tuple[w, h: uint32]]">jpegDimensions(data: openArray[uint8]): ImageResult[tuple[w, h: uint32]]</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">shrinkAfterSpike
+  <li><a class="reference" href="#shrinkAfterSpike%2CJpegScratch%2Cint" title="shrinkAfterSpike(s: var JpegScratch; steady: int)">shrinkAfterSpike(s: var JpegScratch; steady: int)</a></li>
 
 </ul>
 
@@ -84,16 +133,99 @@
     <a class="reference external" href="../color.html">../color</a>, <a class="reference external" href="../error.html">../error</a>, <a class="reference external" href="../buffer.html">../buffer</a>, <a class="reference external" href="../dynamic.html">../dynamic</a>, <a class="reference external" href="../simd.html">../simd</a>
   </dl>
 </div>
+<div class="section" id="7">
+  <h1><a class="toc-backref" href="#7">Types</a></h1>
+  <dl class="item">
+    <div id="JpegScratch">
+  <dt><pre><a href="#JpegScratch"><span class="Identifier">JpegScratch</span></a> <span class="Other">=</span> <span class="Keyword">object</span>
+  <span class="Identifier">clean</span><span class="Operator">*</span><span class="Other">:</span> <span class="Identifier">PooledBuffer</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span> <span class="Comment">## Assembly row buffers (Y/Cb/Cr gather rows, `outW` bytes each) for</span>
+                              <span class="Comment">## the 3-component fast path. Same terms as `clean`: largest width</span>
+                              <span class="Comment">## wins, capacity retained across decodes. Fully overwritten per row,</span>
+                              <span class="Comment">## so no zeroing is needed (unlike PNG `prev`, which filters row 0</span>
+                              <span class="Comment">## against zeros). Width-sized KBs: `shrinkAfterSpike` leaves them</span>
+                              <span class="Comment">## alone. The exotic-sampling `xmaps` (3x `outW` ints, almost never</span>
+                              <span class="Comment">## taken) stay fresh allocs — pooling them would pin capacity for a</span>
+                              <span class="Comment">## path that barely runs.</span>
+  <span class="Identifier">yRow</span><span class="Operator">*</span><span class="Other">:</span> <span class="Identifier">PooledBuffer</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span>
+  <span class="Identifier">cbRow</span><span class="Operator">*</span><span class="Other">:</span> <span class="Identifier">PooledBuffer</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span>
+  <span class="Identifier">crRow</span><span class="Operator">*</span><span class="Other">:</span> <span class="Identifier">PooledBuffer</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span></pre></dt>
+  <dd>
+    
+    Reusable cross-decode scratch for <tt class="docutils literal"><span class="pre"><span class="Identifier">decodeJpeg</span></span></tt>. Owns the cleaned entropy buffer across calls, so decoding many similar-size photos (a gallery walk) allocates the largest scan buffer once instead of once per photo. Outputs are unaffected: every scan rebuilds the content from <tt class="docutils literal"><span class="pre"><span class="Identifier">clear</span><span class="Punctuation">(</span><span class="Punctuation">)</span></span></tt>. Not thread-safe — use one per decoding thread. Call <tt class="docutils literal"><span class="pre"><span class="Identifier">shrinkAfterSpike</span></span></tt> after a large photo if the process keeps decoding much smaller ones, so peak capacity is not pinned.
+    
+  </dd>
+</div>
+
+  </dl>
+</div>
 <div class="section" id="12">
   <h1><a class="toc-backref" href="#12">Procs</a></h1>
   <dl class="item">
     <div id="decodeJpeg-procs-all">
-  <div id="decodeJpeg,seq[uint8]">
-  <dt><pre><span class="Keyword">proc</span> <a href="#decodeJpeg%2Cseq%5Buint8%5D"><span class="Identifier">decodeJpeg</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">seq</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+  <div id="decodeJpeg,openArray[uint8],int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#decodeJpeg%2CopenArray%5Buint8%5D%2Cint"><span class="Identifier">decodeJpeg</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">denom</span> <span class="Other">=</span> <span class="DecNumber">1</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Baseline / progressive JPEG decode. <tt class="docutils literal"><span class="pre"><span class="Identifier">denom</span></span></tt> 2/4/8 emits a 1/denom-scaled image (full IDCT + in-block box average, libjpeg <tt class="docutils literal"><span class="pre"><span class="Operator">-</span><span class="Identifier">scale</span></span></tt> style); 1 is full resolution. Output dims are ceil(w/denom).
+    
+  </dd>
+</div>
+<div id="decodeJpeg,openArray[uint8],JpegScratch,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#decodeJpeg%2CopenArray%5Buint8%5D%2CJpegScratch%2Cint"><span class="Identifier">decodeJpeg</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">scratch</span><span class="Other">:</span> <span class="Keyword">var</span> <a href="#JpegScratch"><span class="Identifier">JpegScratch</span></a><span class="Other">;</span> <span class="Identifier">denom</span> <span class="Other">=</span> <span class="DecNumber">1</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span>
+    <a href="../dynamic.html#DynamicImage"><span class="Identifier">DynamicImage</span></a><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Baseline / progressive JPEG decode reusing <tt class="docutils literal"><span class="pre"><span class="Identifier">scratch</span></span></tt> across calls. Bit-identical to <tt class="docutils literal"><span class="pre"><span class="Identifier">decodeJpeg</span><span class="Punctuation">(</span><span class="Identifier">data</span><span class="Punctuation">,</span> <span class="Identifier">denom</span><span class="Punctuation">)</span></span></tt>; only the cleaned entropy buffer and the assembly rows are retained between decodes (not pixels, not coefficients). Pass a long-lived scratch when decoding many photos in a row; call <tt class="docutils literal"><span class="pre"><span class="Identifier">shrinkAfterSpike</span></span></tt> to release a past entropy peak.
+    
+  </dd>
+</div>
+
+</div>
+<div id="decodeJpegRgbaInto-procs-all">
+  <div id="decodeJpegRgbaInto,openArray[uint8],JpegScratch,ptr.UncheckedArray[Rgba[uint8]],int,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#decodeJpegRgbaInto%2CopenArray%5Buint8%5D%2CJpegScratch%2Cptr.UncheckedArray%5BRgba%5Buint8%5D%5D%2Cint%2Cint"><span class="Identifier">decodeJpegRgbaInto</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">scratch</span><span class="Other">:</span> <span class="Keyword">var</span> <a href="#JpegScratch"><span class="Identifier">JpegScratch</span></a><span class="Other">;</span>
+                        <span class="Identifier">dst</span><span class="Other">:</span> <span class="Keyword">ptr</span> <span class="Identifier">UncheckedArray</span><span class="Other">[</span><a href="../color.html#Rgba"><span class="Identifier">Rgba</span></a><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">capPx</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">;</span>
+                        <span class="Identifier">denom</span> <span class="Other">=</span> <span class="DecNumber">1</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><span class="Keyword">tuple</span><span class="Other">[</span><span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">h</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">]</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
     <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
   <dd>
     
+    Decode baseline/progressive JPEG straight into a caller-owned RGBA buffer: no Rgb temp, no conversion alloc. Bit-identical to <tt class="docutils literal"><span class="pre"><span class="Identifier">decodeJpeg</span><span class="Punctuation">(</span><span class="Identifier">data</span><span class="Punctuation">,</span> <span class="Identifier">scratch</span><span class="Punctuation">,</span> <span class="Identifier">denom</span><span class="Punctuation">)</span></span></tt> + <tt class="docutils literal"><span class="pre"><span class="Identifier">toRgba8</span></span></tt> for gray and 3-component input; 4-component (CMYK/YCCK) returns Unsupported (fall back to the conversion path). <tt class="docutils literal"><span class="pre"><span class="Identifier">capPx</span></span></tt> must cover <tt class="docutils literal"><span class="pre"><span class="Identifier">ceil</span><span class="Punctuation">(</span><span class="Identifier">w</span><span class="Operator">/</span><span class="Identifier">denom</span><span class="Punctuation">)</span><span class="Operator">*</span><span class="Identifier">ceil</span><span class="Punctuation">(</span><span class="Identifier">h</span><span class="Operator">/</span><span class="Identifier">denom</span><span class="Punctuation">)</span></span></tt> pixels; a short (or nil) destination fails cleanly with <tt class="docutils literal"><span class="pre"><span class="Identifier">dst</span></span></tt> untouched.
     
+  </dd>
+</div>
+
+</div>
+<div id="initJpegScratch-procs-all">
+  <div id="initJpegScratch,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#initJpegScratch%2Cint"><span class="Identifier">initJpegScratch</span></a><span class="Other">(</span><span class="Identifier">cap</span> <span class="Other">=</span> <span class="DecNumber">0</span><span class="Other">)</span><span class="Other">:</span> <a href="#JpegScratch"><span class="Identifier">JpegScratch</span></a> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Empty scratch, optionally reserving <tt class="docutils literal"><span class="pre"><span class="Identifier">cap</span></span></tt> bytes up front (entropy buffer only; row buffers size themselves per decode).
+    
+  </dd>
+</div>
+
+</div>
+<div id="jpegDimensions-procs-all">
+  <div id="jpegDimensions,openArray[uint8]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#jpegDimensions%2CopenArray%5Buint8%5D"><span class="Identifier">jpegDimensions</span></a><span class="Other">(</span><span class="Identifier">data</span><span class="Other">:</span> <span class="Identifier">openArray</span><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <a href="../error.html#ImageResult"><span class="Identifier">ImageResult</span></a><span class="Other">[</span><span class="Keyword">tuple</span><span class="Other">[</span><span class="Identifier">w</span><span class="Other">,</span> <span class="Identifier">h</span><span class="Other">:</span> <span class="Identifier">uint32</span><span class="Other">]</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    SOF-only header scan: image dimensions without decoding pixels. Used to pick a scaled-decode denominator before the full decode.
+    
+  </dd>
+</div>
+
+</div>
+<div id="shrinkAfterSpike-procs-all">
+  <div id="shrinkAfterSpike,JpegScratch,int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#shrinkAfterSpike%2CJpegScratch%2Cint"><span class="Identifier">shrinkAfterSpike</span></a><span class="Other">(</span><span class="Identifier">s</span><span class="Other">:</span> <span class="Keyword">var</span> <a href="#JpegScratch"><span class="Identifier">JpegScratch</span></a><span class="Other">;</span> <span class="Identifier">steady</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span> {.<span class="Identifier">inline</span><span class="Other">,</span> <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
+    <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Drop the entropy buffer to <tt class="docutils literal"><span class="pre"><span class="Identifier">steady</span></span></tt> bytes after a large spike.
     
   </dd>
 </div>
@@ -109,7 +241,7 @@
       <div class="twelve-columns footer">
         <span class="nim-sprite"></span>
         <br>
-        <small style="color: var(--hint);">Made with Nim. Generated: 2026-10-27 13:52:22 UTC</small>
+        <small style="color: var(--hint);">Made with Nim. Generated: 2026-11-24 19:21:33 UTC</small>
       </div>
     </div>
   </div>

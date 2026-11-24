@@ -1,2 +1,9 @@
 nimTitle	jpgdec	image/codecs/jpgdec.html	module image/codecs/jpgdec		0
-nim	decodeJpeg	image/codecs/jpgdec.html#decodeJpeg,seq[uint8]	proc decodeJpeg(data: seq[uint8]): ImageResult[DynamicImage]		123
+nim	jpegDimensions	image/codecs/jpgdec.html#jpegDimensions,openArray[uint8]	proc jpegDimensions(data: openArray[uint8]): ImageResult[tuple[w, h: uint32]]		332
+nim	JpegScratch	image/codecs/jpgdec.html#JpegScratch	object JpegScratch		367
+nim	initJpegScratch	image/codecs/jpgdec.html#initJpegScratch,int	proc initJpegScratch(cap = 0): JpegScratch		388
+nim	shrinkAfterSpike	image/codecs/jpgdec.html#shrinkAfterSpike,JpegScratch,int	proc shrinkAfterSpike(s: var JpegScratch; steady: int)		396
+nim	decodeJpeg	image/codecs/jpgdec.html#decodeJpeg,openArray[uint8],int	proc decodeJpeg(data: openArray[uint8]; denom = 1): ImageResult[DynamicImage]		1166
+nim	decodeJpeg	image/codecs/jpgdec.html#decodeJpeg,openArray[uint8],JpegScratch,int	proc decodeJpeg(data: openArray[uint8]; scratch: var JpegScratch; denom = 1): ImageResult[\n    DynamicImage]		1174
+nim	decodeJpegRgbaInto	image/codecs/jpgdec.html#decodeJpegRgbaInto,openArray[uint8],JpegScratch,ptr.UncheckedArray[Rgba[uint8]],int,int	proc decodeJpegRgbaInto(data: openArray[uint8]; scratch: var JpegScratch;\n                   dst: ptr UncheckedArray[Rgba[uint8]]; capPx: int; denom = 1): ImageResult[\n    tuple[w, h: int]]		1184
+nimgrp	decodejpeg	image/codecs/jpgdec.html#decodeJpeg-procs-all	proc		1166

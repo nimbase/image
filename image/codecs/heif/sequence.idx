@@ -1,0 +1,17 @@
+nimTitle	sequence	image/codecs/heif/sequence.html	module image/codecs/heif/sequence		0
+nim	HeifSample	image/codecs/heif/sequence.html#HeifSample	object HeifSample		14
+nim	HeifTrack	image/codecs/heif/sequence.html#HeifTrack	object HeifTrack		20
+nim	HeifMovie	image/codecs/heif/sequence.html#HeifMovie	object HeifMovie		32
+nim	parseMovie	image/codecs/heif/sequence.html#parseMovie,seq[uint8]	proc parseMovie(data: seq[uint8]): HeifMovie		444
+nim	hasMovie	image/codecs/heif/sequence.html#hasMovie,seq[uint8]	proc hasMovie(data: seq[uint8]): bool		473
+nim	buildMvhd	image/codecs/heif/sequence.html#buildMvhd,uint32,uint32	proc buildMvhd(timescale: uint32; duration: uint32): seq[uint8]		480
+nim	buildTkhd	image/codecs/heif/sequence.html#buildTkhd,uint32,uint32,int,int	proc buildTkhd(trackId: uint32; duration: uint32; w, h: int): seq[uint8]		496
+nim	buildMdhd	image/codecs/heif/sequence.html#buildMdhd,uint32,uint32	proc buildMdhd(timescale: uint32; duration: uint32): seq[uint8]		514
+nim	buildVmhd	image/codecs/heif/sequence.html#buildVmhd	proc buildVmhd(): seq[uint8]		524
+nim	buildDinf	image/codecs/heif/sequence.html#buildDinf	proc buildDinf(): seq[uint8]		530
+nim	buildVisualEntry	image/codecs/heif/sequence.html#buildVisualEntry,string,int,int,seq[seq[uint8]]	proc buildVisualEntry(coding: string; w, h: int; codecBoxes: seq[seq[uint8]]): seq[\n    uint8]		538
+nim	buildStsd	image/codecs/heif/sequence.html#buildStsd,seq[seq[uint8]]	proc buildStsd(entries: seq[seq[uint8]]): seq[uint8]		556
+nim	buildStts	image/codecs/heif/sequence.html#buildStts,int,uint32	proc buildStts(count: int; delta: uint32): seq[uint8]		563
+nim	buildStsc	image/codecs/heif/sequence.html#buildStsc,int	proc buildStsc(chunkCount: int): seq[uint8]		571
+nim	buildStsz	image/codecs/heif/sequence.html#buildStsz,seq[int]	proc buildStsz(sizes: seq[int]): seq[uint8]		581
+nim	buildStco	image/codecs/heif/sequence.html#buildStco,seq[int]	proc buildStco(offsets: seq[int]): seq[uint8]		589

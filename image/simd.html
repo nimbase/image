@@ -16,10 +16,10 @@
 <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA3XAAAN1wFCKJt4AAAAB3RJTUUH4QQQEwksSS9ZWwAAAk1JREFUWMPtll2ITVEUx39nn/O7Y5qR8f05wtCUUr6ZIS++8pEnkZInPImneaCQ5METNdOkeFBKUhMPRIkHKfEuUZSUlGlKPN2TrgfncpvmnntnmlEyq1Z7t89/rf9a6+y99oZxGZf/XeIq61EdtgKXgdXA0xrYAvBjOIF1AI9zvjcC74BSpndrJPkBWDScTF8Aa4E3wDlgHbASaANmVqlcCnwHvgDvgVfAJ+AikAAvgfVZwLnSVZHZaOuKoQi3ZOMi4NkYkpe1p4J7A8BpYAD49hfIy/oqG0+hLomiKP2L5L+1ubn5115S+3OAn4EnwBlgMzCjyt6ZAnQCJ4A7wOs88iRJHvw50HoujuPBoCKwHWiosy8MdfZnAdcHk8dxXFJ3VQbQlCTJvRBCGdRbD4M6uc5glpY3eAihpN5S5w12diSEcCCEcKUO4ljdr15T76ur1FDDLIQQ3qv71EdDOe3Kxj3leRXyk+pxdWnFWod6Wt2bY3de3aSuUHcPBVimHs7mK9WrmeOF6lR1o9qnzskh2ar2qm1qizpfXaPeVGdlmGN5pb09qMxz1Xb1kLqgzn1RyH7JUXW52lr5e/Kqi9qpto7V1atuUzfnARrV7jEib1T76gG2qxdGmXyiekkt1GswPTtek0aBfJp6YySGBfWg2tPQ0FAYgf1stUfdmdcjarbYJEniKIq6gY/Aw+zWHAC+p2labGpqiorFYgGYCEzN7oQdQClN07O1/EfDyGgC0ALMBdYAi4FyK+4H3gLPsxfR1zRNi+NP7nH5J+QntnXe5B5mpfQAAAAASUVORK5CYII=">
 
 <!-- CSS -->
-<link rel="stylesheet" type="text/css" href="../nimdoc.out.css?v=2.2.12">
+<link rel="stylesheet" type="text/css" href="../nimdoc.out.css?v=2.4.2">
 
 <!-- JS -->
-<script type="text/javascript" src="../dochack.js?v=2.2.12"></script>
+<script type="text/javascript" src="../dochack.js?v=2.4.2"></script>
 </head>
 <body>
   <div class="document" id="documentId">
@@ -31,28 +31,34 @@
       <div class="row">
   <div class="three columns">
     <div class="theme-select-wrapper">
-      <label for="theme-select">Theme:&nbsp;</label>
-      <select id="theme-select" onchange="setTheme(this.value)">
-        <option value="auto">🌗 Match OS</option>
-        <option value="dark">🌑 Dark</option>
-        <option value="light">🌕 Light</option>
-      </select>
-    </div>
+  <label for="theme-select">Theme:&nbsp;</label>
+  <select id="theme-select" onchange="setTheme(this.value)">
+    <option value="auto">🌗 Match OS</option>
+    <option value="dark">🌑 Dark</option>
+    <option value="light">🌕 Light</option>
+  </select>
+</div>
+
     <div id="global-links">
-      <ul class="simple">
-        <li><a id="indexLink" href="../theindex.html">Index</a></li>
-      </ul>
-    </div>
-    <div id="searchInputDiv">
-      Search: <input type="search" id="searchInput" oninput="search()"/>
-    </div>
-    <div>
-      Group by:
-      <select onchange="groupBy(this.value)">
-        <option value="section">Section</option>
-        <option value="type">Type</option>
-      </select>
-    </div>
+  
+  <ul class="simple">
+  <li><a id="indexLink" href="../theindex.html">Index</a></li>
+</ul>
+
+</div>
+
+      <div id="searchInputDiv">
+  Search: <input type="search" id="searchInput" oninput="search()"/>
+</div>
+
+    <div class="search-groupby">
+  Group by:
+  <select onchange="groupBy(this.value)">
+    <option value="section">Section</option>
+    <option value="type">Type</option>
+  </select>
+</div>
+
     <ul class="simple simple-toc" id="toc-list">
   <li>
   <a class="reference reference-toplevel" href="#6" id="56">Imports</a>
@@ -97,20 +103,16 @@
   <li><a class="reference" href="#fdctPass2%2Cptr.float64%2Cptr.float64%2Cptr.float64%2Cptr.float64" title="fdctPass2(midP, resP, cosP, cfacP: ptr float64)">fdctPass2(midP, resP, cosP, cfacP: ptr float64)</a></li>
 
 </ul>
+<ul class="simple nested-toc-section">idctBlockInt
+  <li><a class="reference" href="#idctBlockInt%2Carray%5B%2Cfloat64%5D%2Carray%5B%2Cint%5D" title="idctBlockInt(coef: array[64, float64]; qt: array[64, int]): array[64, uint8]">idctBlockInt(coef: array[64, float64]; qt: array[64, int]): array[64, uint8]</a></li>
+
+</ul>
 <ul class="simple nested-toc-section">idctBlockScalar
   <li><a class="reference" href="#idctBlockScalar%2Carray%5B%2Cfloat64%5D%2Carray%5B%2Cint%5D" title="idctBlockScalar(coef: array[64, float64]; qt: array[64, int]): array[64, uint8]">idctBlockScalar(coef: array[64, float64]; qt: array[64, int]): array[64, uint8]</a></li>
 
 </ul>
 <ul class="simple nested-toc-section">idctBlockSimd
   <li><a class="reference" href="#idctBlockSimd%2Carray%5B%2Cfloat64%5D%2Carray%5B%2Cint%5D" title="idctBlockSimd(coef: array[64, float64]; qt: array[64, int]): array[64, uint8]">idctBlockSimd(coef: array[64, float64]; qt: array[64, int]): array[64, uint8]</a></li>
-
-</ul>
-<ul class="simple nested-toc-section">idctPass1
-  <li><a class="reference" href="#idctPass1%2Cptr.float64%2Cptr.float64%2Cptr.float64%2Cptr.float64" title="idctPass1(tmpP, midP, cosP, cfacP: ptr float64)">idctPass1(tmpP, midP, cosP, cfacP: ptr float64)</a></li>
-
-</ul>
-<ul class="simple nested-toc-section">idctPass2
-  <li><a class="reference" href="#idctPass2%2Cptr.float64%2Cptr.float64%2Cptr.float64%2Cptr.float64" title="idctPass2(midP, outP, cosP, cfacP: ptr float64)">idctPass2(midP, outP, cosP, cfacP: ptr float64)</a></li>
 
 </ul>
 <ul class="simple nested-toc-section">paeth
@@ -123,6 +125,14 @@
 </ul>
 <ul class="simple nested-toc-section">unfilterRowScalar
   <li><a class="reference" href="#unfilterRowScalar%2Cuint8%2Cseq%5Buint8%5D%2Cseq%5Buint8%5D%2Cint" title="unfilterRowScalar(filter: uint8; cur, prev: var seq[uint8]; bpp: int): bool">unfilterRowScalar(filter: uint8; cur, prev: var seq[uint8]; bpp: int): bool</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">ycbcrRowRgbaScalar
+  <li><a class="reference" href="#ycbcrRowRgbaScalar%2Cptr.uint8%2Cptr.uint8%2Cptr.uint8%2Cptr.Rgba%5Buint8%5D%2Cint" title="ycbcrRowRgbaScalar(yP, cbP, crP: ptr uint8; rgbaP: ptr Rgba[uint8]; n: int)">ycbcrRowRgbaScalar(yP, cbP, crP: ptr uint8; rgbaP: ptr Rgba[uint8]; n: int)</a></li>
+
+</ul>
+<ul class="simple nested-toc-section">ycbcrRowRgbaSimd
+  <li><a class="reference" href="#ycbcrRowRgbaSimd%2Cptr.uint8%2Cptr.uint8%2Cptr.uint8%2Cptr.Rgba%5Buint8%5D%2Cint" title="ycbcrRowRgbaSimd(yP, cbP, crP: ptr uint8; rgbaP: ptr Rgba[uint8]; n: int)">ycbcrRowRgbaSimd(yP, cbP, crP: ptr uint8; rgbaP: ptr Rgba[uint8]; n: int)</a></li>
 
 </ul>
 <ul class="simple nested-toc-section">ycbcrRowScalar
@@ -156,7 +166,7 @@
     <div class="section" id="6">
   <h1><a class="toc-backref" href="#6">Imports</a></h1>
   <dl class="item">
-    <a class="reference external" href="simd/x86_sse2.html">simd/x86_sse2</a>, <a class="reference external" href="simd/x86_avx2.html">simd/x86_avx2</a>
+    <a class="reference external" href="color.html">color</a>, <a class="reference external" href="simd/x86_sse2.html">simd/x86_sse2</a>, <a class="reference external" href="simd/x86_avx2.html">simd/x86_avx2</a>
   </dl>
 </div>
 <div class="section" id="8">
@@ -254,13 +264,25 @@
 </div>
 
 </div>
+<div id="idctBlockInt-procs-all">
+  <div id="idctBlockInt,array[,float64],array[,int]">
+  <dt><pre><span class="Keyword">proc</span> <a href="#idctBlockInt%2Carray%5B%2Cfloat64%5D%2Carray%5B%2Cint%5D"><span class="Identifier">idctBlockInt</span></a><span class="Other">(</span><span class="Identifier">coef</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float64</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">qt</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">int</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">uint8</span><span class="Other">]</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Integer AAN IDCT shared core (stb-style). Coefficients arrive as int-valued floats; dequant <tt class="docutils literal"><span class="pre"><span class="Identifier">int</span><span class="Punctuation">(</span><span class="Identifier">coef</span><span class="Punctuation">)</span><span class="Operator">*</span><span class="Identifier">qt</span></span></tt> is exact, then column and row 1D passes run in int64 (no overflow for any int32 input). Columns with all-zero AC take the DC shortcut, as in the reference. Output differs ±1-2 from the old float IDCT (same tolerance class as djpeg's default integer IDCT); exact-sum oracles were re-validated against djpeg (see t_jpeg). Unchecked: fixed small loop ranges over fixed-size arrays.
+    
+  </dd>
+</div>
+
+</div>
 <div id="idctBlockScalar-procs-all">
   <div id="idctBlockScalar,array[,float64],array[,int]">
   <dt><pre><span class="Keyword">proc</span> <a href="#idctBlockScalar%2Carray%5B%2Cfloat64%5D%2Carray%5B%2Cint%5D"><span class="Identifier">idctBlockScalar</span></a><span class="Other">(</span><span class="Identifier">coef</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">float64</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">qt</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span> <span class="Identifier">int</span><span class="Other">]</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">array</span><span class="Other">[</span><span class="DecNumber">64</span><span class="Other">,</span>
     <span class="Identifier">uint8</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
   <dd>
     
-    Scalar oracle: separable float IDCT with dequant. Vectorized paths must match this exactly (same op order per element).
+    Scalar oracle: integer AAN IDCT with exact dequant (see <tt class="docutils literal"><span class="pre"><span class="Identifier">idctBlockInt</span></span></tt>). <tt class="docutils literal"><span class="pre"><span class="Identifier">idctBlockSimd</span></span></tt> shares the core, so the two agree bit-for-bit by construction.
     
   </dd>
 </div>
@@ -272,31 +294,7 @@
     <span class="Identifier">uint8</span><span class="Other">]</span> {.<span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
   <dd>
     
-    Vectorized IDCT. Pass 1 scales rows by one scalar per (y, u); pass 2 uses the <tt class="docutils literal"><span class="pre"><span class="Punctuation">(</span><span class="Identifier">c</span> <span class="Operator">*</span> <span class="Identifier">m</span><span class="Punctuation">)</span> <span class="Operator">*</span> <span class="Identifier">t</span></span></tt> form to preserve the scalar multiply grouping.
-    
-  </dd>
-</div>
-
-</div>
-<div id="idctPass1-procs-all">
-  <div id="idctPass1,ptr.float64,ptr.float64,ptr.float64,ptr.float64">
-  <dt><pre><span class="Keyword">proc</span> <a href="#idctPass1%2Cptr.float64%2Cptr.float64%2Cptr.float64%2Cptr.float64"><span class="Identifier">idctPass1</span></a><span class="Other">(</span><span class="Identifier">tmpP</span><span class="Other">,</span> <span class="Identifier">midP</span><span class="Other">,</span> <span class="Identifier">cosP</span><span class="Other">,</span> <span class="Identifier">cfacP</span><span class="Other">:</span> <span class="Keyword">ptr</span> <span class="Identifier">float64</span><span class="Other">)</span> {.<span class="Identifier">inline</span><span class="Other">,</span> <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
-    <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
-  <dd>
-    
-    First IDCT pass, dispatched to the best backend.
-    
-  </dd>
-</div>
-
-</div>
-<div id="idctPass2-procs-all">
-  <div id="idctPass2,ptr.float64,ptr.float64,ptr.float64,ptr.float64">
-  <dt><pre><span class="Keyword">proc</span> <a href="#idctPass2%2Cptr.float64%2Cptr.float64%2Cptr.float64%2Cptr.float64"><span class="Identifier">idctPass2</span></a><span class="Other">(</span><span class="Identifier">midP</span><span class="Other">,</span> <span class="Identifier">outP</span><span class="Other">,</span> <span class="Identifier">cosP</span><span class="Other">,</span> <span class="Identifier">cfacP</span><span class="Other">:</span> <span class="Keyword">ptr</span> <span class="Identifier">float64</span><span class="Other">)</span> {.<span class="Identifier">inline</span><span class="Other">,</span> <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span>
-    <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
-  <dd>
-    
-    Second IDCT pass, dispatched to the best backend.
+    Decode IDCT entry point: currently the shared integer core (see <tt class="docutils literal"><span class="pre"><span class="Identifier">idctBlockInt</span></span></tt>; arch-specific integer kernels are future work — the old float passes were removed when the algorithm changed).
     
   </dd>
 </div>
@@ -319,7 +317,7 @@
     <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
   <dd>
     
-    Drop-in replacement for the scalar row filter with runtime dispatch. Only the Up filter currently has SIMD kernels (fully parallel); Sub/Average/Paeth have intra-row dependencies and stay scalar for now.
+    Drop-in replacement for the scalar row filter with runtime dispatch. Up is fully parallel (16/32-byte chunks). Sub/Average/Paeth chain on <tt class="docutils literal"><span class="pre"><span class="Identifier">cur</span><span class="Punctuation">[</span><span class="Identifier">i</span><span class="Operator">-</span><span class="Identifier">bpp</span><span class="Punctuation">]</span></span></tt>, so chunks seed from the buffer and propagate: Sub via doubling shifts (linear), Average/Paeth one frontier per round with a blend mask (nonlinear estimators run once per byte on final taps). bpp 1/2 Average/Paeth and bpp-3 Paeth stay scalar: 5+ frontier rounds lose to the scalar loop (see t_simd_png timings). Small rows (&lt; 16 bytes) stay scalar to avoid setup cost.
     
   </dd>
 </div>
@@ -332,6 +330,30 @@
   <dd>
     
     Scalar reference and fallback. All SIMD paths must match this exactly.
+    
+  </dd>
+</div>
+
+</div>
+<div id="ycbcrRowRgbaScalar-procs-all">
+  <div id="ycbcrRowRgbaScalar,ptr.uint8,ptr.uint8,ptr.uint8,ptr.Rgba[uint8],int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#ycbcrRowRgbaScalar%2Cptr.uint8%2Cptr.uint8%2Cptr.uint8%2Cptr.Rgba%5Buint8%5D%2Cint"><span class="Identifier">ycbcrRowRgbaScalar</span></a><span class="Other">(</span><span class="Identifier">yP</span><span class="Other">,</span> <span class="Identifier">cbP</span><span class="Other">,</span> <span class="Identifier">crP</span><span class="Other">:</span> <span class="Keyword">ptr</span> <span class="Identifier">uint8</span><span class="Other">;</span> <span class="Identifier">rgbaP</span><span class="Other">:</span> <span class="Keyword">ptr</span> <a href="color.html#Rgba"><span class="Identifier">Rgba</span></a><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">n</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    Scalar oracle: planar Y/Cb/Cr rows to interleaved RGBA bytes (alpha 255). Same converter as <tt class="docutils literal"><span class="pre"><span class="Identifier">ycbcrToRgb</span></span></tt>, so pixels match <tt class="docutils literal"><span class="pre"><span class="Identifier">decodeJpeg</span></span></tt> + <tt class="docutils literal"><span class="pre"><span class="Identifier">toRgba8</span></span></tt> exactly; vectorized row paths must match this the same way they match <tt class="docutils literal"><span class="pre"><span class="Identifier">ycbcrRowScalar</span></span></tt>.
+    
+  </dd>
+</div>
+
+</div>
+<div id="ycbcrRowRgbaSimd-procs-all">
+  <div id="ycbcrRowRgbaSimd,ptr.uint8,ptr.uint8,ptr.uint8,ptr.Rgba[uint8],int">
+  <dt><pre><span class="Keyword">proc</span> <a href="#ycbcrRowRgbaSimd%2Cptr.uint8%2Cptr.uint8%2Cptr.uint8%2Cptr.Rgba%5Buint8%5D%2Cint"><span class="Identifier">ycbcrRowRgbaSimd</span></a><span class="Other">(</span><span class="Identifier">yP</span><span class="Other">,</span> <span class="Identifier">cbP</span><span class="Other">,</span> <span class="Identifier">crP</span><span class="Other">:</span> <span class="Keyword">ptr</span> <span class="Identifier">uint8</span><span class="Other">;</span> <span class="Identifier">rgbaP</span><span class="Other">:</span> <span class="Keyword">ptr</span> <a href="color.html#Rgba"><span class="Identifier">Rgba</span></a><span class="Other">[</span><span class="Identifier">uint8</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">n</span><span class="Other">:</span> <span class="Identifier">int</span><span class="Other">)</span> {.
+    <span><span class="Other pragmadots">...</span></span><span class="pragmawrap"><span class="Identifier">raises</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">tags</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span><span class="Other">,</span> <span class="Identifier">forbids</span><span class="Other">:</span> <span class="Other">[</span><span class="Other">]</span></span>.}</pre></dt>
+  <dd>
+    
+    RGBA row converter with runtime dispatch. Same float math and truncation as <tt class="docutils literal"><span class="pre"><span class="Identifier">ycbcrRowSimd</span></span></tt>, alpha lane 255; identical pixels.
     
   </dd>
 </div>
@@ -383,7 +405,7 @@
       <div class="twelve-columns footer">
         <span class="nim-sprite"></span>
         <br>
-        <small style="color: var(--hint);">Made with Nim. Generated: 2026-10-27 13:52:22 UTC</small>
+        <small style="color: var(--hint);">Made with Nim. Generated: 2026-11-24 19:21:33 UTC</small>
       </div>
     </div>
   </div>
