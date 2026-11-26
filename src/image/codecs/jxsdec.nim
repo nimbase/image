@@ -11,6 +11,7 @@
 # Sample decode (entropy/DWT) is follow-up phases —
 # `decodeJxsRaw`/`decodeJxs` return `ekUnsupported` after the headers
 # validate.
+import std/options
 import ./../error
 import ./../dynamic
 import ./../buffer
@@ -259,12 +260,20 @@ func satSub32(a, b: uint32): uint32 =
 func satSub8(a, b: uint8): uint8 =
   if a < b: 0 else: a - b
 
-func jxsNBeta(nlx, nly: uint8): uint32 =
+func jxsFDiv2*(a: int): int =
+  ## floor(a / 2), backend-independent.
+  if a >= 0: a div 2 else: -((-a + 1) div 2)
+
+func jxsFDiv4*(a: int): int =
+  ## floor(a / 4), backend-independent.
+  if a >= 0: a div 4 else: -((-a + 3) div 4)
+
+func jxsNBeta*(nlx, nly: uint8): uint32 =
   let mn = min(nlx, nly).uint32
   let mx = max(nlx, nly).uint32
   2 * mn + mx + 1
 
-proc jxsBetaLevels(beta: uint32, nlx, nly: uint8):
+proc jxsBetaLevels*(beta: uint32, nlx, nly: uint8):
     tuple[dx, dy: uint32, tx, ty: bool] =
   ## Annex B.3 inverse enumeration (decoder side: β → levels).
   let nlxU = nlx.uint32
@@ -617,7 +626,7 @@ proc jxsBrRead(r: var JxsBitReader, n: int): ImageResult[uint32] =
   if n < 0 or n > 24:
     return err[uint32](decodingError("jxs: bit read width"))
   if r.bitPos + n > r.buf.len * 8:
-    return err[uint32](decodingError("jxs: precinct header truncated"))
+    return err[uint32](decodingError("jxs: entropy truncated"))
   var v: uint32 = 0
   for k in 0..<n:
     let p = r.bitPos + k
@@ -625,6 +634,55 @@ proc jxsBrRead(r: var JxsBitReader, n: int): ImageResult[uint32] =
     v = (v shl 1) or bit.uint32
   r.bitPos += n
   ok(v)
+
+proc jxsBrBit(r: var JxsBitReader): ImageResult[uint8] =
+  ## Single-bit read (MSB-first).
+  if r.bitPos >= r.buf.len * 8:
+    return err[uint8](decodingError("jxs: entropy truncated"))
+  let p = r.bitPos
+  let bit = (r.buf[p div 8] shr uint8(7 - (p mod 8))) and 1
+  inc r.bitPos
+  ok(bit)
+
+func jxsBrRemaining*(r: JxsBitReader): int =
+  r.buf.len * 8 - r.bitPos
+
+func jxsBrConsumed*(r: JxsBitReader): int =
+  (r.bitPos + 7) div 8
+
+func jxsBrAtByte*(r: JxsBitReader): bool =
+  r.bitPos mod 8 == 0
+
+proc jxsBrAlign(r: var JxsBitReader) =
+  ## Skip to the next byte boundary (Annex C `pad(8)`).
+  if r.bitPos mod 8 != 0:
+    r.bitPos += 8 - (r.bitPos mod 8)
+
+proc jxsBrSkip(r: var JxsBitReader, n: int): ImageResult[bool] =
+  ## Skip `n` whole filler bytes; must sit on a byte boundary.
+  if r.bitPos mod 8 != 0:
+    return err[bool](decodingError("jxs: filler skip off byte boundary"))
+  if r.bitPos div 8 + n > r.buf.len:
+    return err[bool](decodingError("jxs: filler skip past end"))
+  r.bitPos += n * 8
+  ok(true)
+
+proc jxsVlc*(r: var JxsBitReader, rv, tv: int): ImageResult[int] =
+  ## Annex C.7.1 Table C.15 signed-quantity VLC.
+  let theta = max(rv - tv, 0)
+  var x = 0
+  while true:
+    let bR = jxsBrBit(r)
+    if not bR.ok: return err[int](bR.err)
+    if bR.value == 0: break
+    inc x
+    if x >= 32:
+      return err[int](decodingError("jxs: VLC lost synchronisation"))
+  if x > 2 * theta: ok(x - theta)
+  elif x > 0:
+    if (x and 1) == 1: ok(-((x + 1) div 2))
+    else: ok(x div 2)
+  else: ok(0)
 
 proc jxsParsePrecinctHdr*(data: openArray[uint8], prec: JxsPrecinctPlan):
     ImageResult[JxsPrecinctHdr] =
@@ -687,6 +745,640 @@ func jxsTruncT*(q, g, pr, r: uint8): uint8 =
   let qq = q.int
   let v = qq - g.int - extra.int
   if v <= 0: 0 elif v >= 15: 15 else: v.uint8
+
+func jxsTruncTable*(q, r: uint8, bands: seq[JxsBand]): seq[uint8] =
+  ## Per-band truncation positions for one precinct.
+  var t: seq[uint8] = @[]
+  for bd in bands:
+    t.add(jxsTruncT(q, bd.gain, bd.priority, r))
+  t
+
+func jxsNcg*(wpb: uint32, ng: uint8): uint32 =
+  ## Annex B.8: Ncg = ceil(Wpb/Ng).
+  if ng == 0: 0 else: divCeil32(wpb, ng.uint32)
+
+func jxsNs*(wpb: uint32, ng, ss: uint8): uint32 =
+  ## Annex B.9: Ns = ceil(Wpb/(Ng*Ss)).
+  let d = ng.uint32 * ss.uint32
+  if d == 0: 0 else: divCeil32(wpb, d)
+
+# ---------------------------------------------------------------------------
+# Annex C.4/C.5 packet-body decode: significance, bitplane-count, data,
+# optional sign sub-packets into per-band coefficient buffers.
+
+type
+  JxsBandCoef* = object
+    wpb*: uint32
+    numLines*: uint32
+    v*: seq[uint32] # magnitudes, row-major
+    s*: seq[uint8]  # signs (0/1)
+    m*: seq[uint8]  # bitplane counts, ncg per line
+
+  JxsPrecinctState* = object
+    coefs*: seq[JxsBandCoef]
+    sigFlags*: seq[uint8]
+    sigStart*: seq[int]
+
+  JxsPrecinctTop* = object
+    lastM*: seq[seq[uint8]] # per-band last-line bitplane counts
+    t*: seq[uint8]          # per-band truncation of precinct above
+
+proc jxsInitState*(bands: seq[JxsBand], ng: uint8): JxsPrecinctState =
+  var st: JxsPrecinctState
+  for bd in bands:
+    if not bd.exists:
+      st.coefs.add(JxsBandCoef())
+    else:
+      let lines: uint32 =
+        if bd.l1 > bd.l0: (bd.l1 - bd.l0).uint32 else: 0
+      let ncg = jxsNcg(bd.wpb, ng)
+      st.coefs.add(JxsBandCoef(wpb: bd.wpb, numLines: lines,
+        v: newSeq[uint32](bd.wpb.int * lines.int),
+        s: newSeq[uint8](bd.wpb.int * lines.int),
+        m: newSeq[uint8](ncg.int * lines.int)))
+  st
+
+proc jxsCaptureTop*(bands: seq[JxsBand], ng: uint8, trunc: seq[uint8],
+    st: JxsPrecinctState): JxsPrecinctTop =
+  ## Table C.11 predecessor: last decoded line's M per band + T table.
+  var top: JxsPrecinctTop
+  top.t = trunc
+  for bi, bd in bands:
+    if not bd.exists or bd.l1 <= bd.l0 or bi >= st.coefs.len:
+      top.lastM.add(@[])
+      continue
+    let ncg = jxsNcg(bd.wpb, ng).int
+    let lastLine = (bd.l1 - bd.l0).int - 1
+    let cf = st.coefs[bi]
+    if cf.m.len >= (lastLine + 1) * ncg and ncg > 0:
+      top.lastM.add(cf.m[lastLine * ncg ..< lastLine * ncg + ncg])
+    else:
+      top.lastM.add(newSeq[uint8](max(ncg, 0)))
+  top
+
+type
+  JxsBodyOut* = object
+    consumed*: int
+    sigBytes*: int
+
+proc jxsDecodePacketBody*(data: openArray[uint8],
+    bands: seq[JxsBand], ng, ss, br, fs, rm: uint8,
+    trunc: seq[uint8], dModes: seq[uint8],
+    pkt: JxsPacketHdr, layout: seq[JxsPacketEntry],
+    state: var JxsPrecinctState, top: Option[JxsPrecinctTop]):
+    ImageResult[JxsBodyOut] =
+  ## Annex C.4/C.5: significance → bitplane-count → data → [sign].
+  ## Returns total bytes consumed (including Lcnt/Ldat/Lsgn filler).
+  for e in layout:
+    let bi = e.band.int
+    if bi >= bands.len:
+      return err[JxsBodyOut](decodingError("jxs: packet band out of range"))
+    let bd = bands[bi]
+    if not bd.exists:
+      return err[JxsBodyOut](decodingError("jxs: packet on absent band"))
+    if e.line < bd.l0 or e.line >= bd.l1:
+      return err[JxsBodyOut](decodingError("jxs: packet line outside band"))
+  let buf = @data
+  var cursor = 0
+  # --- significance ---
+  var sigR = JxsBitReader(buf: buf, bitPos: 0)
+  state.sigFlags = @[]
+  state.sigStart = @[]
+  for e in layout:
+    let bi = e.band.int
+    state.sigStart.add(state.sigFlags.len)
+    if not bands[bi].exists: continue
+    if pkt.dr == 0 and (dModes[bi] and 2) != 0:
+      let ns = jxsNs(bands[bi].wpb, ng, ss).int
+      for _ in 0..<ns:
+        let zR = jxsBrBit(sigR)
+        if not zR.ok: return err[JxsBodyOut](zR.err)
+        state.sigFlags.add(zR.value)
+  jxsBrAlign(sigR)
+  let sigBytes = jxsBrConsumed(sigR)
+  cursor += sigBytes
+  # --- bitplane counts ---
+  if cursor + pkt.lcnt.int > buf.len:
+    return err[JxsBodyOut](decodingError("jxs: count sub-packet truncated"))
+  var cntR = JxsBitReader(buf: buf[cursor ..< cursor + pkt.lcnt.int],
+    bitPos: 0)
+  let mMax: int =
+    if br >= 8: 255 else: ((1 shl br.int) - 1)
+  let mMaxC = min(mMax, 31)
+  for ei, e in layout:
+    let bi = e.band.int
+    if not bands[bi].exists: continue
+    let bd = bands[bi]
+    let li = (e.line - bd.l0).int
+    let ncg = jxsNcg(bd.wpb, ng).int
+    let t = trunc[bi].int
+    let dpb = dModes[bi]
+    let cf = addr state.coefs[bi]
+    if pkt.dr == 1:
+      for g in 0..<ncg:
+        let mR = jxsBrRead(cntR, br.int)
+        if not mR.ok: return err[JxsBodyOut](mR.err)
+        if mR.value.int > mMaxC:
+          return err[JxsBodyOut](decodingError("jxs: raw count overflow"))
+        cf.m[li * ncg + g] = mR.value.uint8
+    elif (dpb and 1) == 0:
+      let mtop = t
+      for g in 0..<ncg:
+        let sg = g div ss.int
+        let z: uint8 =
+          if (dpb and 2) != 0:
+            if sg < state.sigFlags.len - state.sigStart[ei]:
+              state.sigFlags[state.sigStart[ei] + sg]
+            else: 0
+          else: 0
+        let dR =
+          if (dpb and 2) == 0 or z == 0: jxsVlc(cntR, mtop, t)
+          else: ok(0)
+        if not dR.ok: return err[JxsBodyOut](dR.err)
+        let m = mtop + dR.value
+        if m < 0 or m > mMaxC:
+          return err[JxsBodyOut](decodingError("jxs: count out of range"))
+        cf.m[li * ncg + g] = m.uint8
+    else:
+      let firstLine = e.line < bd.l0 + 1
+      if firstLine and top.isNone:
+        return err[JxsBodyOut](decodingError(
+          "jxs: vertical prediction at slice top"))
+      let ttop =
+        if firstLine:
+          if top.get.t.len > bi: top.get.t[bi].int else: 0
+        else: t
+      let teff = max(t, ttop)
+      let prevLi =
+        if firstLine: 0 else: ((e.line - 1) - bd.l0).int
+      for g in 0..<ncg:
+        let sg = g div ss.int
+        let z: uint8 =
+          if (dpb and 2) != 0:
+            if sg < state.sigFlags.len - state.sigStart[ei]:
+              state.sigFlags[state.sigStart[ei] + sg]
+            else: 0
+          else: 0
+        let mAbove: int =
+          if firstLine:
+            if top.get.lastM.len > bi and top.get.lastM[bi].len > g:
+              top.get.lastM[bi][g].int
+            else: 0
+          else: cf.m[prevLi * ncg + g].int
+        let mtop = max(mAbove, teff)
+        var dR: ImageResult[int]
+        if (dpb and 2) == 0 or z == 0:
+          dR = jxsVlc(cntR, mtop, t)
+        elif rm == 0:
+          dR = ok(0)
+        else:
+          dR = ok(t - mtop)
+        if not dR.ok: return err[JxsBodyOut](dR.err)
+        let m = mtop + dR.value
+        if m < 0 or m > mMaxC:
+          return err[JxsBodyOut](decodingError("jxs: count out of range"))
+        cf.m[li * ncg + g] = m.uint8
+  jxsBrAlign(cntR)
+  if jxsBrConsumed(cntR) > pkt.lcnt.int:
+    return err[JxsBodyOut](decodingError("jxs: count overran Lcnt"))
+  cursor += pkt.lcnt.int
+  # --- data ---
+  if cursor + pkt.ldat.int > buf.len:
+    return err[JxsBodyOut](decodingError("jxs: data sub-packet truncated"))
+  var datR = JxsBitReader(buf: buf[cursor ..< cursor + pkt.ldat.int],
+    bitPos: 0)
+  var tails = newSeq[seq[uint32]](layout.len)
+  for ei, e in layout:
+    let bi = e.band.int
+    if not bands[bi].exists: continue
+    let bd = bands[bi]
+    let li = (e.line - bd.l0).int
+    let ncg = jxsNcg(bd.wpb, ng).int
+    let t = trunc[bi].uint32
+    let wpb = bd.wpb.int
+    let ngI = ng.int
+    let cf = addr state.coefs[bi]
+    let lineOff = li * wpb
+    let tailLen = ncg * ngI - wpb
+    tails[ei] = newSeq[uint32](max(tailLen, 0))
+    for g in 0..<ncg:
+      let m = cf.m[li * ncg + g].uint32
+      let base = g * ngI
+      let lo = min(base, wpb)
+      let inBand = min(base + ngI, wpb) - lo
+      for k in 0..<inBand: cf.v[lineOff + lo + k] = 0
+      if m > t:
+        if fs == 0:
+          var k = 0
+          while k < ngI:
+            let n = min(ngI - k, 32)
+            let bR = jxsBrRead(datR, n)
+            if not bR.ok: return err[JxsBodyOut](bR.err)
+            for i in 0..<n:
+              let bit = (bR.value shr (n - 1 - i)) and 1
+              if base + k + i < wpb:
+                cf.s[lineOff + base + k + i] = bit.uint8
+            k += n
+        let nplanes = (m - t).int
+        for plane in countdown(nplanes - 1, 0):
+          var k = 0
+          while k < ngI:
+            let n = min(ngI - k, 32)
+            let bR = jxsBrRead(datR, n)
+            if not bR.ok: return err[JxsBodyOut](bR.err)
+            for i in 0..<n:
+              let bit = (bR.value shr (n - 1 - i)) and 1
+              let xp = base + k + i
+              if xp < wpb:
+                cf.v[lineOff + xp] = cf.v[lineOff + xp] or
+                  (bit shl plane)
+              else:
+                tails[ei][xp - wpb] = tails[ei][xp - wpb] or
+                  (bit shl plane)
+            k += n
+  jxsBrAlign(datR)
+  if jxsBrConsumed(datR) > pkt.ldat.int:
+    return err[JxsBodyOut](decodingError("jxs: data overran Ldat"))
+  cursor += pkt.ldat.int
+  # --- sign ---
+  if fs == 1:
+    if cursor + pkt.lsgn.int > buf.len:
+      return err[JxsBodyOut](decodingError("jxs: sign sub-packet truncated"))
+    var sgnR = JxsBitReader(buf: buf[cursor ..< cursor + pkt.lsgn.int],
+      bitPos: 0)
+    for ei, e in layout:
+      let bi = e.band.int
+      if not bands[bi].exists: continue
+      let bd = bands[bi]
+      let li = (e.line - bd.l0).int
+      let ncg = jxsNcg(bd.wpb, ng).int
+      let wpb = bd.wpb.int
+      let ngI = ng.int
+      let cf = addr state.coefs[bi]
+      let lineOff = li * wpb
+      for g in 0..<ncg:
+        for k in 0..<ngI:
+          let xp = g * ngI + k
+          if xp >= wpb:
+            if tails[ei][xp - wpb] != 0:
+              let bR = jxsBrBit(sgnR)
+              if not bR.ok: return err[JxsBodyOut](bR.err)
+          elif cf.v[lineOff + xp] != 0:
+            let bR = jxsBrBit(sgnR)
+            if not bR.ok: return err[JxsBodyOut](bR.err)
+            cf.s[lineOff + xp] = bR.value
+    jxsBrAlign(sgnR)
+    if jxsBrConsumed(sgnR) > pkt.lsgn.int:
+      return err[JxsBodyOut](decodingError("jxs: sign overran Lsgn"))
+    cursor += pkt.lsgn.int
+  ok(JxsBodyOut(consumed: cursor, sigBytes: sigBytes))
+
+# ---------------------------------------------------------------------------
+# Annex E 5/3 wavelet transform. Inverse follows Table E.1 order
+# (horizontal synthesis first, vertical last on joint levels); forward
+# follows Table E.8 (vertical first). Lifting uses floor division so
+# negative sums match the spec's arithmetic shifts on every backend.
+# (jxsFDiv2/jxsFDiv4/jxsFDivPow2 live with the foundations above.)
+
+proc jxsSynthLine*(low, high: openArray[int], outP: var openArray[int]) =
+  ## Table E.6 one-row inverse lift: low/high → interleaved row.
+  let nl = low.len
+  let nh = high.len
+  outP[0] = low[0] - jxsFDiv4(high[0] + high[0] + 2)
+  for n in 1..<nh:
+    outP[2*n] = low[n] - jxsFDiv4(high[n-1] + high[n] + 2)
+  if nl > nh:
+    outP[2*nh] = low[nh] - jxsFDiv4(high[nh-1] + high[nh-1] + 2)
+  for n in 0..<nh-1:
+    outP[2*n+1] = high[n] + jxsFDiv2(outP[2*n] + outP[2*n+2])
+  if nh >= 1:
+    let last = nh - 1
+    let right = if nl > nh: outP[2*last+2] else: outP[2*last]
+    outP[2*last+1] = high[last] + jxsFDiv2(outP[2*last] + right)
+
+proc jxsAnalyseLine*(x: openArray[int], low, high: var openArray[int]) =
+  ## Table E.12 one-row forward lift: interleaved row → low/high.
+  let nl = low.len
+  let nh = high.len
+  for n in 0..<nh-1:
+    high[n] = x[2*n+1] - jxsFDiv2(x[2*n] + x[2*n+2])
+  if nh >= 1:
+    let last = nh - 1
+    let right = if nl > nh: x[2*last+2] else: x[2*last]
+    high[last] = x[2*last+1] - jxsFDiv2(x[2*last] + right)
+    low[0] = x[0] + jxsFDiv4(high[0] + high[0] + 2)
+    for n in 1..<nh:
+      low[n] = x[2*n] + jxsFDiv4(high[n-1] + high[n] + 2)
+    if nl > nh:
+      low[nh] = x[2*nh] + jxsFDiv4(high[nh-1] + high[nh-1] + 2)
+
+proc jxsSynthRows*(buf: var seq[int], w, h: int) =
+  ## Table E.6 vertical pass in place (even rows then odd rows).
+  for y in countup(0, h-1, 2):
+    for x in 0..<w:
+      let a = if y > 0: buf[(y-1)*w+x] else: buf[(y+1)*w+x]
+      let b = if y+1 < h: buf[(y+1)*w+x] else: buf[(y-1)*w+x]
+      buf[y*w+x] = buf[y*w+x] - jxsFDiv4(a + b + 2)
+  for y in countup(1, h-1, 2):
+    for x in 0..<w:
+      let a = buf[(y-1)*w+x]
+      let b = if y+1 < h: buf[(y+1)*w+x] else: a
+      buf[y*w+x] = buf[y*w+x] + jxsFDiv2(a + b)
+
+proc jxsAnalyseRows*(buf: var seq[int], w, h: int) =
+  ## Table E.11 vertical forward pass in place (odd rows then even).
+  for y in countup(1, h-1, 2):
+    for x in 0..<w:
+      let a = buf[(y-1)*w+x]
+      let b = if y+1 < h: buf[(y+1)*w+x] else: a
+      buf[y*w+x] = buf[y*w+x] - jxsFDiv2(a + b)
+  for y in countup(0, h-1, 2):
+    for x in 0..<w:
+      let a = if y > 0: buf[(y-1)*w+x] else: buf[(y+1)*w+x]
+      let b = if y+1 < h: buf[(y+1)*w+x] else: buf[(y-1)*w+x]
+      buf[y*w+x] = buf[y*w+x] + jxsFDiv4(a + b + 2)
+
+func jxsBandDims*(wc, hc: int, dx, dy: uint32, tx, ty: bool):
+    tuple[w, h: int] =
+  ## Annex B.2 band dimensions in a component grid.
+  let w =
+    if not tx:
+      if dx == 0: wc else: divCeil32(wc.uint32, 1'u32 shl dx).int
+    else:
+      let dm: uint32 = if dx == 0: 1 else: 1'u32 shl (dx - 1)
+      divCeil32(wc.uint32, dm).int div 2
+  let h =
+    if not ty:
+      if dy == 0: hc else: divCeil32(hc.uint32, 1'u32 shl dy).int
+    else:
+      let dm: uint32 = if dy == 0: 1 else: 1'u32 shl (dy - 1)
+      divCeil32(hc.uint32, dm).int div 2
+  (w, h)
+
+proc jxsInverse2d*(w, h: int, ll, hl, lh, hh: openArray[int],
+    outP: var seq[int]): ImageResult[bool] =
+  ## Table E.1 joint level: horizontal synthesis on both row halves,
+  ## then vertical synthesis in place.
+  if w < 2 or h < 2:
+    return err[bool](decodingError("jxs: DWT block below 2x2"))
+  let llW = (w + 1) div 2
+  let hlW = w div 2
+  let llH = (h + 1) div 2
+  let lhH = h div 2
+  if ll.len != llW*llH or hl.len != hlW*llH or lh.len != llW*lhH or
+      hh.len != hlW*lhH or outP.len != w*h:
+    return err[bool](decodingError("jxs: DWT sub-band size mismatch"))
+  for y in 0..<h:
+    let n = y div 2
+    if y mod 2 == 0:
+      jxsSynthLine(ll.toOpenArray(n*llW, (n+1)*llW-1),
+        hl.toOpenArray(n*hlW, (n+1)*hlW-1),
+        outP.toOpenArray(y*w, (y+1)*w-1))
+    else:
+      jxsSynthLine(lh.toOpenArray(n*llW, (n+1)*llW-1),
+        hh.toOpenArray(n*hlW, (n+1)*hlW-1),
+        outP.toOpenArray(y*w, (y+1)*w-1))
+  jxsSynthRows(outP, w, h)
+  ok(true)
+
+proc jxsForward2d*(w, h: int, input: openArray[int], ll, hl, lh, hh:
+    var openArray[int]): ImageResult[bool] =
+  ## Table E.8 joint level: vertical analysis, then horizontal halves.
+  if w < 2 or h < 2:
+    return err[bool](decodingError("jxs: DWT block below 2x2"))
+  let llW = (w + 1) div 2
+  let hlW = w div 2
+  let llH = (h + 1) div 2
+  let lhH = h div 2
+  if input.len != w*h or ll.len != llW*llH or hl.len != hlW*llH or
+      lh.len != llW*lhH or hh.len != hlW*lhH:
+    return err[bool](decodingError("jxs: DWT sub-band size mismatch"))
+  var blk = @input
+  jxsAnalyseRows(blk, w, h)
+  for y in 0..<h:
+    let n = y div 2
+    if y mod 2 == 0:
+      jxsAnalyseLine(blk.toOpenArray(y*w, (y+1)*w-1),
+        ll.toOpenArray(n*llW, (n+1)*llW-1),
+        hl.toOpenArray(n*hlW, (n+1)*hlW-1))
+    else:
+      jxsAnalyseLine(blk.toOpenArray(y*w, (y+1)*w-1),
+        lh.toOpenArray(n*llW, (n+1)*llW-1),
+        hh.toOpenArray(n*hlW, (n+1)*hlW-1))
+  ok(true)
+
+proc jxsInverseCascade*(wc, hc: int, nlx, nly: uint8,
+    bands: seq[seq[int]], outP: var seq[int]): ImageResult[bool] =
+  ## Table E.1 cascade over per-component β buffers (local indexing).
+  if nlx == 0 and nly == 0:
+    if bands.len == 0 or bands[0].len != wc*hc or outP.len != wc*hc:
+      return err[bool](decodingError("jxs: DWT copy size mismatch"))
+    outP = bands[0]
+    return ok(true)
+  if nly > nlx:
+    return err[bool](unsupportedError(ukGenericFeature,
+      "jxs: NL,y > NL,x cascade"))
+  if wc < 2 or hc < 2:
+    return err[bool](decodingError("jxs: DWT plane below 2x2"))
+  let nBeta = jxsNBeta(nlx, nly).int
+  if bands.len != nBeta:
+    return err[bool](decodingError("jxs: DWT band count mismatch"))
+  proc findBand(dx, dy: uint32, tx, ty: bool): int =
+    for b in 0..<nBeta:
+      let (ddx, ddy, ttx, tty) = jxsBetaLevels(b.uint32, nlx, nly)
+      if ddx == dx and ddy == dy and ttx == tx and tty == ty: return b
+    -1
+  let dMin = min(nlx, nly)
+  var curW, curH: int
+  (curW, curH) = jxsBandDims(wc, hc, nlx.uint32, nly.uint32, false, false)
+  let ll0 = findBand(nlx.uint32, nly.uint32, false, false)
+  if ll0 < 0 or bands[ll0].len != curW*curH:
+    return err[bool](decodingError("jxs: DWT LL band missing"))
+  var curLL = bands[ll0]
+  # Phase 1: pure horizontal levels dx = nlx .. dMin+1.
+  var dxCur = nlx
+  while dxCur > dMin:
+    let hlB = findBand(dxCur.uint32, nly.uint32, true, false)
+    if hlB < 0:
+      return err[bool](decodingError("jxs: DWT HL band missing"))
+    let (hlW, hlH) = jxsBandDims(wc, hc, dxCur.uint32, nly.uint32,
+      true, false)
+    if bands[hlB].len != hlW*hlH or hlH != curH:
+      return err[bool](decodingError("jxs: DWT HL size mismatch"))
+    let (nxW, nxH) = jxsBandDims(wc, hc, (dxCur-1).uint32, nly.uint32,
+      false, false)
+    var nextLL = newSeq[int](nxW*nxH)
+    for y in 0..<curH:
+      jxsSynthLine(curLL.toOpenArray(y*curW, (y+1)*curW-1),
+        bands[hlB].toOpenArray(y*hlW, (y+1)*hlW-1),
+        nextLL.toOpenArray(y*nxW, (y+1)*nxW-1))
+    curLL = move(nextLL)
+    curW = nxW
+    curH = nxH
+    dec dxCur
+  # Phase 2: joint levels d = dMin .. 1.
+  var d = dMin
+  while d > 0:
+    let (eW, eH) = jxsBandDims(wc, hc, d.uint32, d.uint32, false, false)
+    if (curW, curH) != (eW, eH):
+      return err[bool](decodingError("jxs: DWT pre-step size mismatch"))
+    let hlB = findBand(d.uint32, d.uint32, true, false)
+    let lhB = findBand(d.uint32, d.uint32, false, true)
+    let hhB = findBand(d.uint32, d.uint32, true, true)
+    if hlB < 0 or lhB < 0 or hhB < 0:
+      return err[bool](decodingError("jxs: DWT joint band missing"))
+    let (nxW, nxH) = jxsBandDims(wc, hc, (d-1).uint32, (d-1).uint32,
+      false, false)
+    var nextLL = newSeq[int](nxW*nxH)
+    let r = jxsInverse2d(nxW, nxH, curLL, bands[hlB], bands[lhB],
+      bands[hhB], nextLL)
+    if not r.ok: return err[bool](r.err)
+    curLL = move(nextLL)
+    curW = nxW
+    curH = nxH
+    dec d
+  if (curW, curH) != (wc, hc):
+    return err[bool](decodingError("jxs: DWT final size mismatch"))
+  outP = move(curLL)
+  ok(true)
+
+proc jxsForwardCascade*(wc, hc: int, nlx, nly: uint8,
+    input: openArray[int]): ImageResult[seq[seq[int]]] =
+  ## Table E.8 forward cascade (test-encoder side).
+  if nlx == 0 and nly == 0:
+    return ok(@[@input])
+  if nly > nlx:
+    return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+      "jxs: NL,y > NL,x cascade"))
+  let nBeta = jxsNBeta(nlx, nly).int
+  var bands = newSeq[seq[int]](nBeta)
+  proc findBand(dx, dy: uint32, tx, ty: bool): int =
+    for b in 0..<nBeta:
+      let (ddx, ddy, ttx, tty) = jxsBetaLevels(b.uint32, nlx, nly)
+      if ddx == dx and ddy == dy and ttx == tx and tty == ty: return b
+    -1
+  var curLL = @input
+  var curW = wc
+  var curH = hc
+  let dMin = min(nlx, nly)
+  # Phase A: joint levels d = 1 .. dMin. Only HL/LH/HH land in band
+  # slots; the LL threads through to the next level.
+  var d: uint8 = 1
+  while d <= dMin:
+    let hlB = findBand(d.uint32, d.uint32, true, false)
+    let lhB = findBand(d.uint32, d.uint32, false, true)
+    let hhB = findBand(d.uint32, d.uint32, true, true)
+    if hlB < 0 or lhB < 0 or hhB < 0:
+      return err[seq[seq[int]]](decodingError("jxs: fwd joint band missing"))
+    let llW = (curW + 1) div 2
+    let hlW = curW div 2
+    let llH = (curH + 1) div 2
+    let lhH = curH div 2
+    var ll = newSeq[int](llW*llH)
+    var hl = newSeq[int](hlW*llH)
+    var lh = newSeq[int](llW*lhH)
+    var hh = newSeq[int](hlW*lhH)
+    let r = jxsForward2d(curW, curH, curLL, ll.toOpenArray(0, ll.len-1),
+      hl.toOpenArray(0, hl.len-1), lh.toOpenArray(0, lh.len-1),
+      hh.toOpenArray(0, hh.len-1))
+    if not r.ok: return err[seq[seq[int]]](r.err)
+    bands[hlB] = hl
+    bands[lhB] = lh
+    bands[hhB] = hh
+    curLL = ll
+    curW = llW
+    curH = llH
+    inc d
+  # Phase B: pure horizontal levels dx = dMin+1 .. nlx.
+  var dxCur = dMin + 1
+  while dxCur <= nlx:
+    let hlB = findBand(dxCur.uint32, nly.uint32, true, false)
+    if hlB < 0:
+      return err[seq[seq[int]]](decodingError("jxs: fwd HL band missing"))
+    let nextW = (curW + 1) div 2
+    let hlW = curW div 2
+    var ll = newSeq[int](nextW*curH)
+    var hl = newSeq[int](hlW*curH)
+    for y in 0..<curH:
+      jxsAnalyseLine(curLL.toOpenArray(y*curW, (y+1)*curW-1),
+        ll.toOpenArray(y*nextW, (y+1)*nextW-1),
+        hl.toOpenArray(y*hlW, (y+1)*hlW-1))
+    bands[hlB] = hl
+    curLL = ll
+    curW = nextW
+    inc dxCur
+  # Final LL lands in the LL_{nlx,nly} slot.
+  let llB = findBand(nlx.uint32, nly.uint32, false, false)
+  if llB < 0:
+    return err[seq[seq[int]]](decodingError("jxs: fwd LL band missing"))
+  bands[llB] = curLL
+  ok(bands)
+
+proc jxsDequantDeadzone*(cf: JxsBandCoef, t, ng: uint8,
+    outP: var seq[int]) =
+  ## Annex D.2 Table D.1.
+  let wpb = cf.wpb.int
+  let ngI = ng.int
+  let tU = t.uint32
+  let r: uint32 = (1'u32 shl tU) shr 1
+  for line in 0..<cf.numLines.int:
+    let ncg = if ngI == 0: 0 else: (wpb + ngI - 1) div ngI
+    for x in 0..<wpb:
+      let g = if ngI == 0: 0 else: x div ngI
+      let vv = cf.v[line * wpb + x]
+      let mm = if g < ncg: cf.m[line * ncg + g].uint32 else: 0'u32
+      let sgn = cf.s[line * wpb + x]
+      if mm > tU and vv != 0:
+        let mag = (vv shl tU) + r
+        outP[line * wpb + x] = if sgn == 0: mag.int else: -mag.int
+      else:
+        outP[line * wpb + x] = 0
+
+proc jxsDequantUniform*(cf: JxsBandCoef, t, ng: uint8,
+    outP: var seq[int]) =
+  ## Annex D.3 Table D.2 (Neumann-series reconstruction).
+  let wpb = cf.wpb.int
+  let ngI = ng.int
+  let tU = t.uint32
+  for line in 0..<cf.numLines.int:
+    let ncg = if ngI == 0: 0 else: (wpb + ngI - 1) div ngI
+    for x in 0..<wpb:
+      let g = if ngI == 0: 0 else: x div ngI
+      let vv = cf.v[line * wpb + x]
+      let mm = if g < ncg: cf.m[line * ncg + g].uint32 else: 0'u32
+      let sgn = cf.s[line * wpb + x]
+      if mm > tU and vv != 0:
+        var phi: uint64 = vv.uint64 shl tU
+        let zeta = mm - tU + 1
+        var rho: uint64 = 0
+        if zeta > 0:
+          while phi > 0:
+            rho += phi
+            if zeta >= 64: break
+            phi = phi shr zeta
+        outP[line * wpb + x] =
+          if sgn == 0: rho.int else: -rho.int
+      else:
+        outP[line * wpb + x] = 0
+
+proc jxsDequantPrecinct*(qpih: uint8, bands: seq[JxsBand], ng: uint8,
+    trunc: seq[uint8], coefs: seq[JxsBandCoef], fq: uint8):
+    seq[seq[int]] =
+  ## Per-band dequant + `c << Fq` (E.3 Table E.13).
+  var res: seq[seq[int]] = @[]
+  for b, cf in coefs:
+    if b >= bands.len or not bands[b].exists:
+      res.add(@[])
+      continue
+    var buf = newSeq[int](cf.wpb.int * cf.numLines.int)
+    let t = if b < trunc.len: trunc[b] else: 0
+    if qpih == 1: jxsDequantUniform(cf, t, ng, buf)
+    else: jxsDequantDeadzone(cf, t, ng, buf)
+    if fq != 0:
+      for i in 0..<buf.len: buf[i] = buf[i] shl fq.int
+    res.add(buf)
+  res
+
 
 proc findCodestream(data: openArray[uint8]): tuple[off, ln: int, boxed: bool] =
   ## For a `.jxs` file, locate the first `jp2c` box payload.
@@ -961,6 +1653,282 @@ proc parseJxsCodestream*(cs: openArray[uint8]): ImageResult[JxsHeaders] =
   h.codestreamLen = buf.len
   ok(h)
 
+
+# ---------------------------------------------------------------------------
+# Full-picture decode pipeline: precincts → gather → cascade → colour
+# → Annex G output → DynamicImage. Vertical slice: uniform depth,
+# full-res, Cpih 0/1 (gray/RCT), no NLT, no Star-Tetrix, no CWD.
+
+func jxsFDivPow2*(a: int, n: int): int =
+  ## floor(a / 2^n), backend-independent.
+  if n == 0: a
+  elif a >= 0: a shr n
+  else: -(((-a) + (1 shl n) - 1) div (1 shl n))
+
+proc jxsLinearOut*(omega: seq[int], bw, bc: uint8): ImageResult[seq[uint8]] =
+  ## Annex G.3 Table G.2 linear output scaling + clip + pack.
+  if bw < bc or bc < 8 or bc > 16:
+    return err[seq[uint8]](decodingError("jxs: bad (Bw,B[i]) for output"))
+  let zeta = (bw - bc).int
+  let m = (1 shl bc.int) - 1
+  let dc = 1 shl (bw.int - 1)
+  var res = newSeq[uint8](omega.len * (if bc == 8: 1 else: 2))
+  for i, v in omega:
+    var t = v + dc
+    if zeta > 0:
+      t = jxsFDivPow2(t + (1 shl (zeta - 1)), zeta)
+    if t < 0: t = 0
+    elif t > m: t = m
+    if bc == 8: res[i] = t.uint8
+    else:
+      res[2*i] = (t and 0xFF).uint8
+      res[2*i+1] = ((t shr 8) and 0xFF).uint8
+  ok(res)
+
+proc jxsInverseRct*(planes: var seq[seq[int]]) =
+  ## Annex F.3 Table F.2 in place on the first three planes.
+  let n = planes[0].len
+  for x in 0..<n:
+    let i0 = planes[0][x]
+    let i1 = planes[1][x]
+    let i2 = planes[2][x]
+    let o1 = i0 - jxsFDiv4(i1 + i2)
+    planes[0][x] = o1 + i2
+    planes[1][x] = o1
+    planes[2][x] = o1 + i1
+
+proc jxsForwardRct*(planes: var seq[seq[int]]) =
+  ## Annex F.4 Table F.3 (test-encoder side).
+  let n = planes[0].len
+  for x in 0..<n:
+    let r = planes[0][x]
+    let g = planes[1][x]
+    let b = planes[2][x]
+    planes[0][x] = jxsFDiv4(r + 2*g + b)
+    planes[1][x] = b - g
+    planes[2][x] = r - g
+
+func jxsLog2Sy*(sy: uint8): int =
+  case sy
+  of 1: 0
+  of 2: 1
+  of 4: 2
+  else: -1
+
+proc jxsGatherPrecinct*(prec: JxsPrecinctPlan, plan: JxsPicturePlan,
+    h: JxsHeaders, deq: seq[seq[int]],
+    gathered: var seq[seq[seq[int]]]): ImageResult[bool] =
+  ## Copy one precinct's dequantized bands into picture-level buffers.
+  let px = (prec.p mod plan.npX).int
+  let py = (prec.p div plan.npX).int
+  let nDec = plan.nDecomposed
+  for i in 0..<nDec.int:
+    let sxI = plan.sx[i]
+    let syI = plan.sy[i]
+    let lg = jxsLog2Sy(syI)
+    if lg < 0:
+      return err[bool](decodingError("jxs: bad sampling factor"))
+    let nlyI = satSub8(plan.nly, lg.uint8)
+    let wcI = divCeil32(plan.wf, sxI.uint32).int
+    let hcI = divCeil32(plan.hf, syI.uint32).int
+    for betaPic in 0..<plan.nBeta.int:
+      let b = (nDec * betaPic.uint32 + i.uint32).int
+      let bg = prec.bands[b]
+      if not bg.exists: continue
+      let loc = prec.bandLocalBeta[b]
+      if loc == high(uint32): continue
+      let lines = (bg.l1 - bg.l0).int
+      if lines <= 0: continue
+      let (dxL, dyL, txL, tyL) = jxsBetaLevels(loc, plan.nlx, nlyI)
+      let (picBW, picBH) = jxsBandDims(wcI, hcI, dxL, dyL, txL, tyL)
+      let colsU =
+        if not txL: divCeil32(plan.cs, (sxI.uint32 shl dxL).uint32).int
+        else:
+          let dm: uint32 =
+            if dxL == 0: sxI.uint32
+            else: sxI.uint32 shl (dxL - 1)
+          divCeil32(plan.cs, dm).int div 2
+      let colOff = px * colsU
+      let powH =
+        if nlyI == 0 or dyL >= nlyI: 1
+        else: 1 shl (nlyI - dyL).int
+      let rowOff = py * powH
+      if gathered[i][loc.int].len != picBW * picBH:
+        return err[bool](decodingError("jxs: gather buffer mismatch"))
+      let wpb = bg.wpb.int
+      for line in 0..<lines:
+        let pr = rowOff + line
+        if pr >= picBH: break
+        let cw = min(wpb, picBW - colOff)
+        if cw <= 0: break
+        for x in 0..<cw:
+          gathered[i][loc.int][pr * picBW + colOff + x] =
+            deq[b][line * wpb + x]
+  ok(true)
+
+proc jxsDecodeSlice*(sliceData: openArray[uint8], sPlan: JxsSlicePlan,
+    plan: JxsPicturePlan, h: JxsHeaders,
+    gathered: var seq[seq[seq[int]]]): ImageResult[bool] =
+  ## Decode one slice's precincts; accumulate into `gathered`.
+  let buf = @sliceData
+  var cursor = 0
+  let npX = plan.npX.int
+  var colTops = newSeq[Option[JxsPrecinctTop]](max(npX, 1))
+  let shortH = jxsUseShortHeader(h.pih)
+  let ng = h.pih.ng
+  let ss = h.pih.ss
+  let br = h.pih.br
+  let fs = h.pih.fs
+  let rm = h.pih.rm
+  let nBands = plan.nBands.int
+  for prec in sPlan.precincts:
+    let px = (prec.p mod plan.npX).int
+    if cursor >= buf.len:
+      return err[bool](decodingError("jxs: precinct past slice end"))
+    let phR = jxsParsePrecinctHdr(buf.toOpenArray(cursor, buf.len - 1),
+      prec)
+    if not phR.ok: return err[bool](phR.err)
+    let ph = phR.value
+    let estart = cursor + ph.headerBytes
+    let eend = estart + ph.lprc.int
+    if eend > buf.len:
+      return err[bool](decodingError("jxs: precinct overruns slice"))
+    let trunc = jxsTruncTable(ph.q, ph.r, prec.bands)
+    var state = jxsInitState(prec.bands, ng)
+    var ecursor = estart
+    var sumHdr = 0
+    var sumCnt = 0
+    var sumDat = 0
+    var sumSgn = 0
+    var sumSig = 0
+    var firstDr = newSeq[int](nBands)
+    for i in 0..<nBands: firstDr[i] = -1
+    for layout in prec.packets:
+      if layout.len == 0: continue
+      if ecursor + 5 > eend:
+        return err[bool](decodingError("jxs: packet past precinct end"))
+      let pktR = jxsParsePacketHdr(buf.toOpenArray(ecursor, eend - 1),
+        shortH)
+      if not pktR.ok: return err[bool](pktR.err)
+      let pkt = pktR.value
+      ecursor += pkt.headerBytes
+      let bodyR = jxsDecodePacketBody(
+        buf.toOpenArray(ecursor, eend - 1), prec.bands, ng, ss, br,
+        fs, rm, trunc, ph.d, pkt, layout, state, colTops[px])
+      if not bodyR.ok: return err[bool](bodyR.err)
+      ecursor += bodyR.value.consumed
+      # Table C.1/C.3 cross-check: inferred Lsig must match bytes read.
+      var sigBits = 0
+      for e in layout:
+        let bi = e.band.int
+        if pkt.dr == 0 and (ph.d[bi] and 2) != 0:
+          sigBits += jxsNs(prec.bands[bi].wpb, ng, ss).int
+      if (sigBits + 7) div 8 != bodyR.value.sigBytes:
+        return err[bool](decodingError("jxs: sig length mismatch"))
+      if h.pih.rl == 0:
+        for e in layout:
+          let bi = e.band.int
+          if firstDr[bi] < 0: firstDr[bi] = pkt.dr.int
+          elif firstDr[bi] != pkt.dr.int:
+            return err[bool](decodingError("jxs: Rl=0 raw mix"))
+      sumHdr += pkt.headerBytes
+      sumSig += bodyR.value.sigBytes
+      sumCnt += pkt.lcnt.int
+      sumDat += pkt.ldat.int
+      if fs == 1: sumSgn += pkt.lsgn.int
+    # Table C.1: Lprc must cover headers + sub-packets; rest is filler.
+    # (Lcnt/Ldat/Lsgn act as sub-packet bounds during the read, so a
+    # doctored-but-summing field only shifts filler, never samples.)
+    if sumHdr + sumSig + sumCnt + sumDat + sumSgn > ph.lprc.int:
+      return err[bool](decodingError("jxs: Lprc too small for packets"))
+    colTops[px] = some(jxsCaptureTop(prec.bands, ng, trunc, state))
+    let deq = jxsDequantPrecinct(h.pih.qpih, prec.bands, ng, trunc,
+      state.coefs, h.pih.fq)
+    let gR = jxsGatherPrecinct(prec, plan, h, deq, gathered)
+    if not gR.ok: return err[bool](gR.err)
+    cursor = eend
+  ok(true)
+
+proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
+    plan: JxsPicturePlan): ImageResult[seq[seq[int]]] =
+  ## Vertical slice: uniform depth, full-res, Cpih 0/1, no NLT/CWD.
+  ## Returns post-colour-transform sample planes (row-major ints).
+  if h.hasNlt:
+    return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+      "jxs: NLT output scaling"))
+  if h.pih.cpih == 3:
+    return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+      "jxs: Star-Tetrix transform"))
+  if plan.sd > 0:
+    return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+      "jxs: suppressed components"))
+  if h.pih.cpih != 0 and h.pih.cpih != 1:
+    return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+      "jxs: colour transform"))
+  for c in h.comps:
+    if c.sx != 1 or c.sy != 1:
+      return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+        "jxs: subsampled components"))
+  let b0 = h.comps[0].bitDepth
+  for c in h.comps:
+    if c.bitDepth != b0:
+      return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+        "jxs: mixed bit depths"))
+  if h.pih.bw < b0:
+    return err[seq[seq[int]]](decodingError("jxs: Bw below B[i]"))
+  if h.pih.cpih == 1 and h.comps.len < 3:
+    return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+      "jxs: RCT needs Nc >= 3"))
+  if uint64(h.pih.wf) * uint64(h.pih.hf) > (1'u64 shl 28):
+    return err[seq[seq[int]]](limitError(lkDimensionError,
+      "jxs: picture exceeds 268 Mpixel"))
+  if h.slices.len != plan.slices.len:
+    return err[seq[seq[int]]](decodingError("jxs: slice count mismatch"))
+  let nc = h.comps.len
+  let wf = h.pih.wf.int
+  let hf = h.pih.hf.int
+  # per-component band buffers (local-β indexing; identity for full-res)
+  var gathered = newSeq[seq[seq[int]]](nc)
+  for i in 0..<nc:
+    let nlyIc = h.pih.nly # full-res enforced above (sy=1 → N'L,y=NL,y)
+    let wcI = wf
+    let hcI = hf
+    let nb = jxsNBeta(h.pih.nlx, nlyIc).int
+    var bufs = newSeq[seq[int]](nb)
+    for b in 0..<nb:
+      let (dxL, dyL, txL, tyL) = jxsBetaLevels(b.uint32, h.pih.nlx,
+        nlyIc)
+      let (bwB, bhB) = jxsBandDims(wcI, hcI, dxL, dyL, txL, tyL)
+      bufs[b] = newSeq[int](bwB * bhB)
+    gathered[i] = move(bufs)
+  for si, sp in plan.slices:
+    let sl = h.slices[si]
+    let r = jxsDecodeSlice(cs.toOpenArray(sl.dataOff,
+      sl.dataOff + sl.dataLen - 1), sp, plan, h, gathered)
+    if not r.ok: return err[seq[seq[int]]](r.err)
+  var samples = newSeq[seq[int]](nc)
+  for i in 0..<nc:
+    let lg = jxsLog2Sy(h.comps[i].sy)
+    let nlyI = satSub8(h.pih.nly, lg.uint8)
+    let wcI = (wf + h.comps[i].sx.int - 1) div h.comps[i].sx.int
+    let hcI = (hf + h.comps[i].sy.int - 1) div h.comps[i].sy.int
+    var outP = newSeq[int](wcI * hcI)
+    let r = jxsInverseCascade(wcI, hcI, h.pih.nlx, nlyI, gathered[i],
+      outP)
+    if not r.ok: return err[seq[seq[int]]](r.err)
+    samples[i] = move(outP)
+  const guard = 1 shl 26
+  for i in 0..<nc:
+    for x in 0..<samples[i].len:
+      if samples[i][x] < -guard: samples[i][x] = -guard
+      elif samples[i][x] > guard: samples[i][x] = guard
+  if h.pih.cpih == 1:
+    var refs = samples
+    jxsInverseRct(refs)
+    samples = move(refs)
+  ok(samples)
+
+
 proc headersInfo(h: JxsHeaders, boxed: bool): JxsInfo =
   var mx: uint8 = 0
   for c in h.comps:
@@ -984,13 +1952,72 @@ proc jxsInfo*(data: openArray[uint8]): ImageResult[JxsInfo] =
   ok(headersInfo(h.value, false))
 
 proc decodeJxsRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
-  ## Bare-codestream decode. Phase 0/1: framing only.
-  let h = parseJxsCodestream(data)
-  if not h.ok: return err[DynamicImage](h.err)
+  ## Bare-codestream decode: lossless 8-bit gray + RCT RGB(A) stills.
+  ## Subsampled, mixed-depth, NLT, Star-Tetrix and lossy-quantized
+  ## streams beyond the vertical slice are clean `ekUnsupported`.
+  let h0 = parseJxsCodestream(data)
+  if not h0.ok: return err[DynamicImage](h0.err)
+  var h = h0.value
+  let sd: uint8 = if h.cwdSd < 0: 0 else: h.cwdSd.uint8
+  let planR = jxsBuildPlan(h.pih, h.comps, h.wgt, sd)
+  if not planR.ok: return err[DynamicImage](planR.err)
+  let picR = jxsDecodePicture(data, h, planR.value)
+  if not picR.ok: return err[DynamicImage](picR.err)
+  let planes = picR.value
+  let nc = h.comps.len
+  let w = h.pih.wf.uint32
+  let hh = h.pih.hf.uint32
+  let bd = h.comps[0].bitDepth
+  var rawPlanes: seq[seq[uint8]] = @[]
+  for i in 0..<nc:
+    let loR = jxsLinearOut(planes[i], h.pih.bw, h.comps[i].bitDepth)
+    if not loR.ok: return err[DynamicImage](loR.err)
+    rawPlanes.add(loR.value)
+  if nc == 1 and bd == 8:
+    var px = newSeq[Luma[uint8]](w.int * hh.int)
+    for i in 0..<px.len: px[i] = Luma[uint8](data: [rawPlanes[0][i]])
+    return ok(DynamicImage(kind: dkLuma8,
+      luma8: GrayImage(width: w, height: hh, pixels: move(px))))
+  if nc == 1 and bd > 8:
+    var px = newSeq[Luma[uint16]](w.int * hh.int)
+    for i in 0..<px.len:
+      px[i] = Luma[uint16](data: [
+        uint16(rawPlanes[0][2*i]) or (uint16(rawPlanes[0][2*i+1]) shl 8)])
+    return ok(DynamicImage(kind: dkLuma16,
+      luma16: Gray16Image(width: w, height: hh, pixels: move(px))))
+  if h.pih.cpih == 1 and bd == 8 and (nc == 3 or nc == 4):
+    if nc == 3:
+      var px = newSeq[Rgb[uint8]](w.int * hh.int)
+      for i in 0..<px.len:
+        px[i] = Rgb[uint8](data: [rawPlanes[0][i], rawPlanes[1][i],
+          rawPlanes[2][i]])
+      return ok(DynamicImage(kind: dkRgb8,
+        rgb8: RgbImage(width: w, height: hh, pixels: move(px))))
+    var px = newSeq[Rgba[uint8]](w.int * hh.int)
+    for i in 0..<px.len:
+      px[i] = Rgba[uint8](data: [rawPlanes[0][i], rawPlanes[1][i],
+        rawPlanes[2][i], rawPlanes[3][i]])
+    return ok(DynamicImage(kind: dkRgba8,
+      rgba8: RgbaImage(width: w, height: hh, pixels: move(px))))
+  if h.pih.cpih == 1 and bd > 8 and (nc == 3 or nc == 4):
+    proc u16At(p: seq[uint8], i: int): uint16 =
+      uint16(p[2*i]) or (uint16(p[2*i+1]) shl 8)
+    if nc == 3:
+      var px = newSeq[Rgb[uint16]](w.int * hh.int)
+      for i in 0..<px.len:
+        px[i] = Rgb[uint16](data: [u16At(rawPlanes[0], i),
+          u16At(rawPlanes[1], i), u16At(rawPlanes[2], i)])
+      return ok(DynamicImage(kind: dkRgb16,
+        rgb16: Rgb16Image(width: w, height: hh, pixels: move(px))))
+    var px = newSeq[Rgba[uint16]](w.int * hh.int)
+    for i in 0..<px.len:
+      px[i] = Rgba[uint16](data: [u16At(rawPlanes[0], i),
+        u16At(rawPlanes[1], i), u16At(rawPlanes[2], i),
+        u16At(rawPlanes[3], i)])
+    return ok(DynamicImage(kind: dkRgba16,
+      rgba16: Rgba16Image(width: w, height: hh, pixels: move(px))))
   err[DynamicImage](unsupportedError(ukGenericFeature,
-    "jxs: sample decode not yet implemented (framing ok: " &
-      $h.value.pih.wf & "x" & $h.value.pih.hf & " Nc=" &
-      $h.value.pih.nc & ")"))
+    "jxs: DynamicImage mapping for this layout"))
 
 proc decodeJxs*(data: openArray[uint8]): ImageResult[DynamicImage] =
   ## Bare codestream or `.jxs` file decode. Phase 0/1: framing only.
