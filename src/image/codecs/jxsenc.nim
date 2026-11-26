@@ -8,6 +8,7 @@
 # uniform depth, full-res, NL 1/1, single- or multi-slice, Cw=0,
 # Q=R=0, D=0 (no-pred VLC), Dr=0, Deadzone, Fq=0, no NLT/CWD.
 # Every emitted stream must decode bit-exactly (`q=0` lossless rule).
+import std/math
 import ./../error
 import ./jxsdec
 
@@ -43,12 +44,15 @@ func jxsBitLen(v: uint32): int =
 proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     cpih: uint8, nlx: uint8 = 1, nly: uint8 = 1, q: uint8 = 0,
     multiSlice = false,
-    sampling: seq[(uint8, uint8)] = @[]): ImageResult[seq[uint8]] =
-  ## Lossless (`q=0`) or lossy (`q=1..15`, precinct truncation) bare
-  ## codestream. `planesU`: Nc planes at native sampling in [0, 2^bd);
-  ## `sampling` (default all 1:1) gives per-component (sx, sy).
-  ## Gray (Nc=1, Cpih=0), YCbCr (Nc=3/4, Cpih=0) or RGB(A) (Nc=3/4,
-  ## Cpih=1, full-res).
+    sampling: seq[(uint8, uint8)] = @[],
+    bwAx: uint8 = 0, fqAx: uint8 = 0,
+    nltKind: uint8 = 0, nltDco: int32 = 0,
+    nltT1: uint32 = 0, nltT2: uint32 = 0, nltE: uint8 = 0,
+    qpih: uint8 = 0, sd: uint8 = 0): ImageResult[seq[uint8]] =
+  ## Lossless (`q=0`) or lossy (`q=1..15`) bare codestream. `planesU`:
+  ## Nc planes at native sampling in [0, 2^bd). `bwAx`/`fqAx` select
+  ## the Table A.8 pair (0 = auto: integer, or NLT-implied); `nltKind`
+  ## 1/2 emits the quadratic/extended NLT marker (Annex G.4/G.5).
   let nc = planesU.len
   if w < 2 or h < 2 or w > 65535 or h > 65535:
     return err[seq[uint8]](decodingError("jxs enc: bad dimensions"))
@@ -98,23 +102,90 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     for u in planesU[i]:
       if u.uint32 >= (1'u32 shl bd.int):
         return err[seq[uint8]](decodingError("jxs enc: sample range"))
-  let bw = bd
+  let bw: uint8 =
+    if bwAx != 0: bwAx
+    elif nltKind != 0 and bd > 8: 20
+    elif nltKind != 0: 18
+    else: bd
+  let fq: uint8 =
+    if fqAx != 0 or bwAx != 0: fqAx
+    elif nltKind != 0 and bd == 8: 6
+    elif nltKind != 0: 8
+    else: 0
+  if fq != 0 and fq != 6 and fq != 8:
+    return err[seq[uint8]](decodingError("jxs enc: Fq must be 0/6/8"))
+  if qpih > 1:
+    return err[seq[uint8]](decodingError("jxs enc: Qpih must be 0/1"))
+  if sd > 0:
+    if nc <= 3:
+      return err[seq[uint8]](decodingError("jxs enc: Sd needs Nc > 3"))
+    if sd.uint8 >= nc.uint8:
+      return err[seq[uint8]](decodingError("jxs enc: Sd must be < Nc"))
+    for i in (nc - sd.int)..<nc:
+      if sx[i] != 1 or sy[i] != 1:
+        return err[seq[uint8]](decodingError("jxs enc: Sd comp sampling"))
+    if cpih == 1 and nc - sd.int < 3:
+      return err[seq[uint8]](decodingError("jxs enc: RCT needs Nc-Sd >= 3"))
+  if nltKind == 2:
+    if nltT1 == 0 or nltT2 == 0 or nltT2 <= nltT1:
+      return err[seq[uint8]](decodingError("jxs enc: NLT needs 0<T1<T2"))
+    if nltE < 1 or nltE > 4:
+      return err[seq[uint8]](decodingError("jxs enc: NLT E range 1..4"))
+    if nltT1 >= (1'u32 shl bw.int) or nltT2 >= (1'u32 shl bw.int):
+      return err[seq[uint8]](decodingError("jxs enc: NLT thresholds"))
+  if nltKind == 1 and (nltDco < -(1 shl 15) or nltDco > (1 shl 15) - 1):
+    return err[seq[uint8]](decodingError("jxs enc: NLT DCO range"))
   # forward RCT for colour
   var planes = newSeq[seq[int]](nc)
   for i in 0..<nc:
     planes[i] = newSeq[int](cw[i] * ch[i])
     for x in 0..<cw[i]*ch[i]: planes[i][x] = planesU[i][x].int
-  # Annex G.3 inverse then F.4: level shift on the image samples FIRST
-  # (a uniform shift does not commute with the RCT: Cb/Cr differences
-  # would inherit a spurious bias), then the forward RCT, then the DWT.
-  let dc = 1 shl (bw.int - 1)
-  for i in 0..<nc:
-    for x in 0..<cw[i]*ch[i]: planes[i][x] -= dc
+  if nltKind == 0:
+    # Annex G.3 inverse then F.4: level shift on the image samples FIRST
+    # (a uniform shift does not commute with the RCT: Cb/Cr differences
+    # would inherit a spurious bias), then the forward RCT, then the DWT.
+    let dc = 1 shl (bw.int - 1)
+    let ups = bw.int - bd.int
+    for i in 0..<nc:
+      for x in 0..<cw[i]*ch[i]:
+        planes[i][x] = (planes[i][x] shl ups) - dc
+  else:
+    # Annex G.4/G.5 forward: per-sample map into [0, 2^Bw-1], then -dc.
+    let bwMax = (1 shl bw.int) - 1
+    let bMax = (1 shl bd.int) - 1
+    let dc = 1 shl (bw.int - 1)
+    var lut = newSeq[int](bwMax + 1) # extended reverse map, built lazily
+    var lutDone = false
+    for i in 0..<nc:
+      for x in 0..<cw[i]*ch[i]:
+        let smp = min(max(planes[i][x], 0), bMax)
+        var y: int
+        if nltKind == 1:
+          if smp == 0: y = 0
+          else:
+            y = int(sqrt(smp.float / bMax.float) * bwMax.float + 0.5)
+          y = min(max(y + nltDco.int, 0), bwMax)
+        else:
+          if not lutDone:
+            var prev = -1
+            for wcode in 0..bwMax:
+              let o = jxsNltExt(wcode - dc, bw, bd, nltT1, nltT2, nltE)
+              for v in (prev + 1)..o:
+                if v <= bMax: lut[v] = wcode
+              prev = o
+              if prev >= bMax: break
+            lutDone = true
+          y = lut[smp]
+        planes[i][x] = y - dc
   if cpih == 1:
     jxsForwardRct(planes)
-  # forward cascade per component at its effective depth
+  # forward cascade per component at its effective depth;
+  # suppressed (Sd) tail components bypass the DWT (raw-coded).
   var picBands = newSeq[seq[seq[int]]](nc)
   for i in 0..<nc:
+    if sd > 0 and i >= nc - sd.int:
+      picBands[i] = @[planes[i]]
+      continue
     let lg = jxsLog2Sy(sy[i])
     if lg < 0:
       return err[seq[uint8]](decodingError("jxs enc: bad sampling"))
@@ -122,22 +193,35 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     let fR = jxsForwardCascade(cw[i], ch[i], nlx, nlyI, planes[i])
     if not fR.ok: return err[seq[uint8]](fR.err)
     picBands[i] = fR.value
+  # E.3 forward: exact inverse of the decoder's `c << Fq`.
+  if fq != 0:
+    let rr = (1 shl fq.int) shr 1
+    for i in 0..<nc:
+      for b in 0..<picBands[i].len:
+        for k in 0..<picBands[i][b].len:
+          let t = picBands[i][b][k]
+          picBands[i][b][k] =
+            if t >= 0: (t + rr) shr fq.int
+            else: -((-t + rr) shr fq.int)
   # picture header + plan (WGT zeros; existing bands only)
   var pih = JxsPih(lcod: 0, ppih: 0, plev: 0, wf: w.uint16,
     hf: h.uint16, cw: 0, hsl: 1, nc: nc.uint8, ng: 4, ss: 8, bw: bw,
-    fq: 0, br: 4, fslc: 0, ppoc: 0, cpih: cpih, nlx: nlx, nly: nly,
-    lh: 0, rl: 0, qpih: 0, fs: 0, rm: 0)
+    fq: fq, br: 4, fslc: 0, ppoc: 0, cpih: cpih, nlx: nlx, nly: nly,
+    lh: 0, rl: 0, qpih: qpih, fs: 0, rm: 0)
   let nBeta = jxsNBeta(nlx, nly).int
   var comps: seq[JxsComp] = @[]
   for i in 0..<nc:
     comps.add(JxsComp(bitDepth: bd, sx: sx[i], sy: sy[i]))
   # count existing (β,i) slots for the WGT body (Annex A.4.11 skips
-  # non-existent bands, same order the walker consumes)
+  # non-existent bands, same order the walker consumes: wavelet slots
+  # for decomposed comps, one tail slot per suppressed component)
+  let nDec = nc - sd.int
   var nExist = 0
   for beta in 0..<nBeta:
-    for i in 0..<nc:
+    for i in 0..<nDec:
       if jxsPicBetaToLocal(beta.uint32, nlx, nly, sy[i]) >= 0:
         inc nExist
+  nExist += sd.int
   var wgtZ = newSeq[uint8](2 * nExist)
   # truncation is uniform T=q (G=P=R=0); M floor is T (lossy) or 0.
   let truncU = q
@@ -156,7 +240,7 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     br = jxsBitLen(maxM.uint32).uint8 # 2^Br-1 >= maxM
   pih.br = br
   let useShort = w * nc < 32752
-  let planR = jxsBuildPlan(pih, comps, wgtZ, 0)
+  let planR = jxsBuildPlan(pih, comps, wgtZ, sd)
   if not planR.ok: return err[seq[uint8]](planR.err)
   var plan = planR.value
   if multiSlice:
@@ -164,7 +248,7 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     pih.hsl = 1
   else:
     pih.hsl = plan.npY.uint16
-  let planR2 = jxsBuildPlan(pih, comps, wgtZ, 0)
+  let planR2 = jxsBuildPlan(pih, comps, wgtZ, sd)
   if not planR2.ok: return err[seq[uint8]](planR2.err)
   plan = planR2.value
   # emit
@@ -179,7 +263,12 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     outP.add(uint8(ll and 0xFF))
     for bb in body: outP.add(bb)
   marker(JxsSoc)
-  seg(JxsMkrCap, @[])
+  if nltKind == 1:
+    seg(JxsMkrCap, @[0x20'u8]) # bit 2: quadratic NLT
+  elif nltKind == 2:
+    seg(JxsMkrCap, @[0x10'u8]) # bit 3: extended NLT
+  else:
+    seg(JxsMkrCap, @[])
   var pihB: seq[uint8] = @[]
   pihB.add(@[0'u8, 0, 0, 0]) # Lcod VBR
   pihB.add(@[0'u8, 0]) # Ppih
@@ -189,10 +278,10 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
   pihB.add(@[0'u8, 0]) # Cw
   pihB.add(uint8(pih.hsl shr 8)); pihB.add(uint8(pih.hsl and 0xFF))
   pihB.add(pih.nc); pihB.add(4); pihB.add(8); pihB.add(bw)
-  pihB.add(br) # Fq=0 | Br
+  pihB.add((fq shl 4) or br) # Fq | Br
   pihB.add(cpih) # Fslc/Ppoc/Cpih
   pihB.add((nlx shl 4) or nly) # NLx/NLy
-  pihB.add(0x00) # Lh/Rl/Qpih/Fs/Rm
+  pihB.add(qpih shl 4) # Lh/Rl/Qpih/Fs/Rm (rest zero)
   seg(JxsMkrPih, pihB)
   var cdtB: seq[uint8] = @[]
   for i in 0..<nc:
@@ -200,6 +289,18 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     cdtB.add((sx[i] shl 4) or sy[i])
   seg(JxsMkrCdt, cdtB)
   seg(JxsMkrWgt, wgtZ)
+  if nltKind == 1:
+    let dcoU = (if nltDco < 0: (1 shl 15) or (-nltDco) else: nltDco) and 0xFFFF
+    seg(JxsMkrNlt, @[1'u8, uint8(dcoU shr 8), uint8(dcoU and 0xFF)])
+  elif nltKind == 2:
+    var nltB = @[2'u8]
+    for v in [nltT1, nltT2]:
+      nltB.add(uint8(v shr 24)); nltB.add(uint8((v shr 16) and 0xFF))
+      nltB.add(uint8((v shr 8) and 0xFF)); nltB.add(uint8(v and 0xFF))
+    nltB.add(nltE)
+    seg(JxsMkrNlt, nltB)
+  if sd > 0:
+    seg(JxsMkrCwd, @[sd])
   for sp in plan.slices:
     var slhB = @[uint8(sp.t shr 8), uint8(sp.t and 0xFF)]
     seg(JxsMkrSlh, slhB)
@@ -214,15 +315,23 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
           continue
         let i = prec.bandComp[b].int
         let loc = prec.bandLocalBeta[b].int
-        let lgI = jxsLog2Sy(sy[i])
-        if lgI < 0:
-          return err[seq[uint8]](decodingError("jxs enc: bad sampling"))
-        let nlyI = satSub8(nly, lgI.uint8)
-        let (dxL, dyL, txL, tyL) = jxsBetaLevels(loc.uint32, nlx, nlyI)
-        let (picBW, _) = jxsBandDims(cw[i], ch[i], dxL, dyL, txL, tyL)
-        let powH =
-          if nlyI == 0 or dyL >= nlyI: 1
-          else: 1 shl (nlyI.int - dyL.int)
+        let isSupp = sd > 0 and i >= nc - sd.int
+        var picBW = 0
+        var powH = 1
+        if isSupp:
+          # raw-coded tail: full-width plane, picture-height rows
+          picBW = cw[i]
+          powH = if nly == 0: 1 else: 1 shl nly.int
+        else:
+          let lgI = jxsLog2Sy(sy[i])
+          if lgI < 0:
+            return err[seq[uint8]](decodingError("jxs enc: bad sampling"))
+          let nlyI = satSub8(nly, lgI.uint8)
+          let (dxL, dyL, txL, tyL) = jxsBetaLevels(loc.uint32, nlx, nlyI)
+          picBW = jxsBandDims(cw[i], ch[i], dxL, dyL, txL, tyL).w
+          powH =
+            if nlyI == 0 or dyL >= nlyI: 1
+            else: 1 shl (nlyI.int - dyL.int)
         let rowOff = py * powH
         let lines = (bg.l1 - bg.l0).int
         segLines[b] = lines
@@ -333,13 +442,16 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
   ok(outP)
 
 proc encodeJxsGray8*(w, h: int, px: openArray[uint8], nlx: uint8 = 1,
-    nly: uint8 = 1, q: uint8 = 0, multiSlice = false): ImageResult[seq[uint8]] =
-  ## Gray still, 8-bit; `q=0` lossless, `q=1..15` lossy (precinct cut).
+    nly: uint8 = 1, q: uint8 = 0, multiSlice = false,
+    qpih: uint8 = 0): ImageResult[seq[uint8]] =
+  ## Gray still, 8-bit; `q=0` lossless, `q=1..15` lossy (precinct cut);
+  ## `qpih` selects the deadzone (0) or uniform (1) inverse quantizer.
   if px.len != w * h:
     return err[seq[uint8]](decodingError("jxs enc: pixel count"))
   var pl = newSeq[uint16](w * h)
   for i in 0..<pl.len: pl[i] = px[i]
-  jxsEncodeLossless(w, h, @[pl], 8, 0, nlx, nly, q, multiSlice)
+  jxsEncodeLossless(w, h, @[pl], 8, 0, nlx, nly, q, multiSlice,
+    @[], 0, 0, 0, 0, 0, 0, 0, qpih)
 
 proc encodeJxsGray16*(w, h: int, px: openArray[uint16], bd: uint8,
     nlx: uint8 = 1, nly: uint8 = 1, q: uint8 = 0,
@@ -361,6 +473,31 @@ proc encodeJxsRgb8*(w, h: int, rgb: openArray[uint8], nlx: uint8 = 1,
     g[i] = rgb[3*i+1]
     b[i] = rgb[3*i+2]
   jxsEncodeLossless(w, h, @[r, g, b], 8, 1, nlx, nly, q, multiSlice)
+
+proc encodeJxsNltQuad8*(w, h: int, px: openArray[uint8], dco: int32 = 0,
+    nlx: uint8 = 1, nly: uint8 = 1, q: uint8 = 0,
+    multiSlice = false): ImageResult[seq[uint8]] =
+  ## Gray still with quadratic NLT (Tnlt=1, Bw=18): forward
+  ## `y = round(sqrt(x/255) * (2^18-1)) + dco`. Roundtrips within a
+  ## few LSB (sqrt rounding), not bit-exact.
+  if px.len != w * h:
+    return err[seq[uint8]](decodingError("jxs enc: pixel count"))
+  var pl = newSeq[uint16](w * h)
+  for i in 0..<pl.len: pl[i] = px[i]
+  jxsEncodeLossless(w, h, @[pl], 8, 0, nlx, nly, q, multiSlice, @[],
+    0, 0, 1, dco)
+
+proc encodeJxsNltExt8*(w, h: int, px: openArray[uint8], t1, t2: uint32,
+    e: uint8, nlx: uint8 = 1, nly: uint8 = 1, q: uint8 = 0,
+    multiSlice = false): ImageResult[seq[uint8]] =
+  ## Gray still with extended NLT (Tnlt=2, Bw=18): forward reverse-LUT
+  ## pre-distortion. Roundtrips within a few LSB, not bit-exact.
+  if px.len != w * h:
+    return err[seq[uint8]](decodingError("jxs enc: pixel count"))
+  var pl = newSeq[uint16](w * h)
+  for i in 0..<pl.len: pl[i] = px[i]
+  jxsEncodeLossless(w, h, @[pl], 8, 0, nlx, nly, q, multiSlice, @[],
+    0, 0, 2, 0, t1, t2, e)
 
 proc encodeJxsYuv8*(w, h: int, y, cb, cr: openArray[uint8],
     sxC, syC: uint8, nlx: uint8 = 1, nly: uint8 = 1, q: uint8 = 0,

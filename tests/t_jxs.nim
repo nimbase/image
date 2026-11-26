@@ -266,6 +266,68 @@ test "jxs lossless gray16 roundtrip":
   for i in 0..<px.len:
     check dec.value.luma16.pixels[i].data[0] == px[i]
 
+test "jxs packet body hand-built oracle (Fs=1 separate signs)":
+  # Same counts as the Fs=0 oracle; data carries magnitudes only and a
+  # trailing sign sub-packet covers the 8 non-zero coefficients.
+  let bands = @[JxsBand(wpb: 16, gain: 0, priority: 0, l0: 0, l1: 1,
+    exists: true)]
+  let layout = @[JxsPacketEntry(band: 0, line: 0)]
+  let body = @[0xE5'u8, 0x80, 0xA2, 0xBA, 0xCA, 0x64]
+  let pktR = jxsParsePacketHdr(
+    @[0x00'u8, 0x03, 0x00, 0x10, 0x01], true)
+  # short header Dr=0,Ldat=3,Lcnt=2,Lsgn=1 → [00 03 00 10 01]
+  check pktR.ok
+  check pktR.value.ldat == 3
+  check pktR.value.lsgn == 1
+  var st = jxsInitState(bands, 4)
+  let decR = jxsDecodePacketBody(body, bands, 4, 8, 4, 1, 0,
+    @[0'u8], @[0'u8], pktR.value, layout, st, none(JxsPrecinctTop))
+  check decR.ok
+  check decR.value.consumed == 6
+  check st.coefs[0].m == @[3'u8, 0, 1, 2]
+  check st.coefs[0].v == @[5'u32, 0, 7, 1, 0, 0, 0, 0,
+    1, 0, 1, 0, 3, 2, 1, 0]
+  check st.coefs[0].s == @[0'u8, 0, 1, 1, 0, 0, 0, 0,
+    0, 0, 0, 0, 1, 0, 0, 0]
+
+test "jxs significance gating skips bitplane counts":
+  # Wpb=32 → Ncg=8, Ns=1; Z=1 marks the whole line insignificant:
+  # no VLC bits, Lcnt=0, Ldat=0, everything zero.
+  let bands = @[JxsBand(wpb: 32, gain: 0, priority: 0, l0: 0, l1: 1,
+    exists: true)]
+  let layout = @[JxsPacketEntry(band: 0, line: 0)]
+  let pktR = jxsParsePacketHdr(
+    @[0x00'u8, 0x00, 0x00, 0x00, 0x00], true)
+  check pktR.ok
+  var st = jxsInitState(bands, 4)
+  let decR = jxsDecodePacketBody(@[0x80'u8], bands, 4, 8, 4, 0, 0,
+    @[0'u8], @[2'u8], pktR.value, layout, st, none(JxsPrecinctTop))
+  check decR.ok
+  check decR.value.consumed == 1
+  for m in st.coefs[0].m: check m == 0
+  for v in st.coefs[0].v: check v == 0
+
+test "jxs raw mode override reads Br bits per group":
+  # Dr=1 overrides D=3 (would-be vertical+sig): raw counts then the
+  # same data sub-packet as the Fs=0 oracle.
+  let bands = @[JxsBand(wpb: 16, gain: 0, priority: 0, l0: 0, l1: 1,
+    exists: true)]
+  let layout = @[JxsPacketEntry(band: 0, line: 0)]
+  let body = @[0x30'u8, 0x12, 0x3A, 0x2B, 0x0A, 0x8C, 0xA0]
+  let pktR = jxsParsePacketHdr(
+    @[0x80'u8, 0x05, 0x00, 0x10, 0x00], true)
+  # Dr=1,Ldat=5,Lcnt=2,Lsgn=0 → [80 05 00 10 00]
+  check pktR.ok
+  check pktR.value.dr == 1
+  var st = jxsInitState(bands, 4)
+  let decR = jxsDecodePacketBody(body, bands, 4, 8, 4, 0, 0,
+    @[0'u8], @[3'u8], pktR.value, layout, st, none(JxsPrecinctTop))
+  check decR.ok
+  check decR.value.consumed == 7
+  check st.coefs[0].m == @[3'u8, 0, 1, 2]
+  check st.coefs[0].v == @[5'u32, 0, 7, 1, 0, 0, 0, 0,
+    1, 0, 1, 0, 3, 2, 1, 0]
+
 test "jxs truncation T clamps":
   check jxsTruncT(2, 0, 0, 1) == 1  # 2-0-1 (P<R)
   check jxsTruncT(2, 0, 1, 1) == 2  # 2-0-0 (P>=R)
@@ -439,6 +501,145 @@ test "jxs CICP full-range flag selects full swing":
   let full = decodeJxs(fx4.value)
   check full.ok
   check full.value.rgb8.pixels[0].data[0] == 235
+
+test "jxs NLT marker parses (quad DCO, extended, rejects)":
+  # Tnlt=1, σ=1, α=300 → DCO = 300 - 32768.
+  check jxsParseNlt(@[1'u8, 0x80, 0x00]).value.dco == -32768
+  # σ=0, α=12345 → DCO = 12345.
+  check jxsParseNlt(@[1'u8, 0x30, 0x39]).value.dco == 12345
+  let xe = jxsParseNlt(@[2'u8, 0, 0, 0, 100, 0, 0, 0, 200, 3])
+  check xe.ok
+  check xe.value.t1 == 100 and xe.value.t2 == 200 and xe.value.e == 3
+  check not jxsParseNlt(@[2'u8, 0, 0, 0, 200, 0, 0, 0, 200, 3]).ok # T2<=T1
+  check not jxsParseNlt(@[2'u8, 0, 0, 0, 100, 0, 0, 0, 200, 5]).ok # E>4
+  check not jxsParseNlt(@[9'u8]).ok # reserved Tnlt
+  check not jxsParseNlt(@[]).ok
+
+test "jxs uniform quantizer (Qpih=1) lossy path":
+  # Same Q ladder through the Neumann-series inverse: sane, bounded,
+  # and different from the deadzone reconstruction.
+  let (w, h) = (16, 16)
+  var px = newSeq[uint8](w * h)
+  for i in 0..<px.len: px[i] = uint8((i * 37 + 11) mod 251)
+  let enc = encodeJxsGray8(w, h, px, 1, 1, 2, false, 1)
+  check enc.ok
+  let h0 = parseJxsCodestream(enc.value)
+  check h0.ok
+  check h0.value.pih.qpih == 1
+  let dec = decodeJxsRaw(enc.value)
+  check dec.ok
+  var maxErr = 0
+  for i in 0..<px.len:
+    let d = abs(dec.value.luma8.pixels[i].data[0].int - px[i].int)
+    if d > maxErr: maxErr = d
+  check maxErr <= 8
+  # deadzone at the same Q gives a different (also valid) picture
+  let enc0 = encodeJxsGray8(w, h, px, 1, 1, 2)
+  check enc0.ok
+  let dec0 = decodeJxsRaw(enc0.value)
+  check dec0.ok
+  var same = true
+  for i in 0..<px.len:
+    if dec.value.luma8.pixels[i] != dec0.value.luma8.pixels[i]:
+      same = false
+      break
+  check not same
+
+test "jxs NLT quadratic roundtrips (Bw=18, CAP bit 2)":
+  let (w, h) = (32, 32)
+  var px = newSeq[uint8](w * h)
+  for j in 0..<h:
+    for i in 0..<w:
+      px[j*w+i] = uint8(min((i * 4 + j * 3) div 2, 255))
+  let enc = encodeJxsNltQuad8(w, h, px)
+  check enc.ok
+  let h0 = parseJxsCodestream(enc.value)
+  check h0.ok
+  check h0.value.pih.bw == 18 and h0.value.pih.fq == 6
+  check h0.value.nltKind == 1
+  check (h0.value.cap[0] and 0x20) != 0 # CAP bit 2 set
+  let dec = decodeJxsRaw(enc.value)
+  check dec.ok
+  var maxErr = 0
+  for i in 0..<px.len:
+    let d = abs(dec.value.luma8.pixels[i].data[0].int - px[i].int)
+    if d > maxErr: maxErr = d
+  check maxErr <= 2
+  # (18,6) with the CAP bit cleared is rejected (no NLT capability).
+  var doctored = enc.value
+  doctored[6] = 0x00
+  check not decodeJxsRaw(doctored).ok
+
+test "jxs NLT extended roundtrips (Bw=18, CAP bit 3)":
+  let (w, h) = (32, 32)
+  var px = newSeq[uint8](w * h)
+  for j in 0..<h:
+    for i in 0..<w:
+      px[j*w+i] = uint8(min((i * 4 + j * 3) div 2, 255))
+  let enc = encodeJxsNltExt8(w, h, px, 1'u32 shl 14, 1'u32 shl 16, 1)
+  check enc.ok
+  let h0 = parseJxsCodestream(enc.value)
+  check h0.ok
+  check h0.value.pih.bw == 18 and h0.value.pih.fq == 6
+  check h0.value.nltKind == 2
+  check (h0.value.cap[0] and 0x10) != 0 # CAP bit 3 set
+  let dec = decodeJxsRaw(enc.value)
+  check dec.ok
+  var maxErr = 0
+  for i in 0..<px.len:
+    let d = abs(dec.value.luma8.pixels[i].data[0].int - px[i].int)
+    if d > maxErr: maxErr = d
+  check maxErr <= 2
+
+test "jxs NLT quadratic high-bit-depth (Bw=20) roundtrips":
+  # 12-bit gray + quadratic NLT auto-selects (Bw=20, Fq=8); the
+  # wavelet domain runs at Bw=20 for precision headroom.
+  let (w5, h5) = (16, 16)
+  var px5 = newSeq[uint16](w5 * h5)
+  for i in 0..<px5.len: px5[i] = uint16((i * 257 + 13) mod 4096)
+  let enc5 = jxsEncodeLossless(w5, h5, @[px5], 12, 0, 1, 1, 0, false,
+    @[], 0, 0, 1, 0)
+  check enc5.ok
+  let h05 = parseJxsCodestream(enc5.value)
+  check h05.ok
+  check h05.value.pih.bw == 20 and h05.value.pih.fq == 8
+  check h05.value.nltKind == 1
+  let dec5 = decodeJxsRaw(enc5.value)
+  check dec5.ok
+  check dec5.value.kind == dkLuma16
+  var maxErr5 = 0
+  for i in 0..<px5.len:
+    let d = abs(dec5.value.luma16.pixels[i].data[0].int - px5[i].int)
+    if d > maxErr5: maxErr5 = d
+  check maxErr5 <= 8
+
+test "jxs CWD suppression (Sd=1) roundtrips lossless":
+  # 4 full-res comps, last one raw-coded: decode bypasses the DWT for
+  # it. Comps 0-2 convert YCbCr->RGB (compare vs direct conversion);
+  # comp 3 passes through bit-exactly.
+  let (w, h) = (12, 10)
+  var planes = newSeq[seq[uint16]](4)
+  for c in 0..<4:
+    planes[c] = newSeq[uint16](w * h)
+    for i in 0..<w*h:
+      planes[c][i] = uint16((i * (13 + c * 7) + c) mod 251)
+  let enc = jxsEncodeLossless(w, h, planes, 8, 0, 1, 1, 0, false,
+    @[], 0, 0, 0, 0, 0, 0, 0, 0, 1)
+  check enc.ok
+  let h0 = parseJxsCodestream(enc.value)
+  check h0.ok
+  check h0.value.cwdSd == 1
+  let dec = decodeJxsRaw(enc.value)
+  check dec.ok
+  check dec.value.kind == dkRgba8
+  for i in 0..<w*h:
+    let (er, eg, eb) = jxsYcbcrPixel(planes[0][i].int, planes[1][i].int,
+      planes[2][i].int, 8)
+    let got = dec.value.rgba8.pixels[i].data
+    check got[0].int == er
+    check got[1].int == eg
+    check got[2].int == eb
+    check got[3] == planes[3][i].uint8
 
 test "jxs chroma-local beta drops deep LH/HH for sy=2":
   # NL 2/2 → Nβ=7. sy=2 loses one vertical level: picture β=2,3

@@ -79,6 +79,11 @@ type
     wgt*: seq[uint8]
     nlt*: seq[uint8]
     hasNlt*: bool
+    nltKind*: uint8 # 0 = none, 1 = quadratic, 2 = extended
+    nltDco*: int
+    nltT1*: uint32
+    nltT2*: uint32
+    nltE*: uint8
     cwdSd*: int # -1 = absent (Sd=0), else 1..Nc-1
     cts*: seq[uint8]
     hasCts*: bool
@@ -1545,6 +1550,122 @@ proc findCodestream(data: openArray[uint8]): tuple[off, ln: int, boxed: bool] =
     p += hdr + plen
   (-1, 0, true)
 
+
+type
+  JxsNlt* = object
+    ## Parsed NLT marker (Annex A.4.6 Table A.16).
+    case kind*: uint8
+    of 1: # quadratic (Annex G.4)
+      dco*: int
+    of 2: # extended (Annex G.5)
+      t1*: uint32
+      t2*: uint32
+      e*: uint8
+    else: discard
+
+proc jxsParseNlt*(body: openArray[uint8]): ImageResult[JxsNlt] =
+  ## Table A.16: Tnlt=1 → σ:α DCO (Lnlt=5); Tnlt=2 → T1+T2+E (Lnlt=12).
+  if body.len == 0:
+    return err[JxsNlt](decodingError("jxs: empty NLT body"))
+  case body[0]
+  of 1:
+    if body.len != 3:
+      return err[JxsNlt](decodingError("jxs: NLT Tnlt=1 needs 3 bytes"))
+    let packed = (body[1].uint16 shl 8) or body[2].uint16
+    let sigma = (packed shr 15) and 1
+    let alpha = (packed and 0x7FFF).int
+    ok(JxsNlt(kind: 1, dco: alpha - sigma.int * (1 shl 15)))
+  of 2:
+    if body.len != 10:
+      return err[JxsNlt](decodingError("jxs: NLT Tnlt=2 needs 10 bytes"))
+    let t1 = (body[1].uint32 shl 24) or (body[2].uint32 shl 16) or
+      (body[3].uint32 shl 8) or body[4].uint32
+    let t2 = (body[5].uint32 shl 24) or (body[6].uint32 shl 16) or
+      (body[7].uint32 shl 8) or body[8].uint32
+    let e = body[9]
+    if t1 == 0 or t2 == 0 or t2 <= t1:
+      return err[JxsNlt](decodingError("jxs: NLT needs 0 < T1 < T2"))
+    if e < 1 or e > 4:
+      return err[JxsNlt](decodingError("jxs: NLT E range 1..4"))
+    if t1 > (1'u32 shl 20) - 1 or t2 > (1'u32 shl 20) - 1:
+      # Bw ≤ 20 everywhere; wider thresholds cannot be addressed.
+      return err[JxsNlt](decodingError("jxs: NLT thresholds exceed 2^20-1"))
+    ok(JxsNlt(kind: 2, t1: t1, t2: t2, e: e))
+  else:
+    return err[JxsNlt](unsupportedError(ukGenericFeature,
+      "jxs: reserved NLT Tnlt"))
+
+func jxsNltQuad*(v, bw, bc: int, dco: int): int =
+  ## Annex G.4 Table G.3 scalar kernel (i64: v² overflows 32 bits).
+  let zeta = 2 * bw - bc
+  let m = (1 shl bc) - 1
+  let dcB = 1 shl (bw - 1)
+  let bwMax = (1 shl bw) - 1
+  let zu = max(zeta, 0)
+  let half = if zu == 0: 0 else: 1 shl (zu - 1)
+  var t = v + dcB
+  if t < 0: t = 0 elif t > bwMax: t = bwMax
+  var q = t * t
+  if zu > 0: q = (q + half) shr zu
+  q += dco
+  if q < 0: q = 0 elif q > m: q = m
+  q
+
+func jxsNltExt*(v: int, bw, bc: uint8, t1, t2: uint32, e: uint8): int =
+  ## Annex G.5 Table G.4 scalar kernel.
+  let bwi = bw.int
+  let m = (1 shl bc.int) - 1
+  let dcB = 1 shl (bw.int - 1)
+  let bwMax = (1 shl bw.int) - 1
+  let b2 = t1.int * t1.int
+  let shAE = 2 * bwi - 2 - 2 * e.int
+  let a1 = b2 + (t1.int shl (bwi - e.int)) + (1 shl shAE)
+  let b1 = t1.int + (1 shl (bwi - e.int - 1))
+  let a3 = b2 + (t2.int shl (bwi - e.int)) - (1 shl shAE)
+  let b3 = t2.int - (1 shl (bwi - e.int - 1))
+  let zeta = 2 * bwi - bc.int
+  let zu = max(zeta, 0)
+  let half = if zu == 0: 0 else: 1 shl (zu - 1)
+  var t = v + dcB
+  if t < t1.int:
+    t = b1 - t
+    if t < 0: t = 0 elif t > bwMax: t = bwMax
+    t = a1 - t * t
+  elif t < t2.int:
+    t = (t shl (bwi - e.int)) + b2
+  else:
+    t -= b3
+    if t < 0: t = 0 elif t > bwMax: t = bwMax
+    t = a3 + t * t
+  if zu > 0: t = (t + half) shr zu
+  if t < 0: t = 0 elif t > m: t = m
+  t
+
+proc jxsNltOut*(omega: seq[int], bw, bc: uint8,
+    nlt: JxsNlt): ImageResult[seq[uint8]] =
+  ## Annex G.4/G.5 output scaling + clip + pack.
+  if bw < 8 or bw > 20 or bc < 8 or bc > 16:
+    return err[seq[uint8]](decodingError("jxs: bad (Bw,B[i]) for NLT"))
+  var res = newSeq[uint8](omega.len * (if bc == 8: 1 else: 2))
+  case nlt.kind
+  of 1:
+    for i, v in omega:
+      let t = jxsNltQuad(v, bw.int, bc.int, nlt.dco)
+      if bc == 8: res[i] = t.uint8
+      else:
+        res[2*i] = (t and 0xFF).uint8
+        res[2*i+1] = ((t shr 8) and 0xFF).uint8
+  of 2:
+    for i, v in omega:
+      let t = jxsNltExt(v, bw, bc, nlt.t1, nlt.t2, nlt.e)
+      if bc == 8: res[i] = t.uint8
+      else:
+        res[2*i] = (t and 0xFF).uint8
+        res[2*i+1] = ((t shr 8) and 0xFF).uint8
+  else:
+    return err[seq[uint8]](decodingError("jxs: bad NLT kind"))
+  ok(res)
+
 proc parseJxsCodestream*(cs: openArray[uint8]): ImageResult[JxsHeaders] =
   ## Marker-chain parse: SOC CAP PIH header-loop SLH* EOC.
   ## Slice lengths use the scan fallback (empty-entropy safe); the
@@ -1620,7 +1741,16 @@ proc parseJxsCodestream*(cs: openArray[uint8]): ImageResult[JxsHeaders] =
       if h.hasNlt:
         return err[JxsHeaders](decodingError("jxs: duplicate NLT"))
       h.nlt = rdS()
+      let nR = jxsParseNlt(h.nlt)
+      if not nR.ok: return err[JxsHeaders](nR.err)
       h.hasNlt = true
+      h.nltKind = nR.value.kind
+      if nR.value.kind == 1:
+        h.nltDco = nR.value.dco
+      elif nR.value.kind == 2:
+        h.nltT1 = nR.value.t1
+        h.nltT2 = nR.value.t2
+        h.nltE = nR.value.e
     of JxsMkrCwd:
       if h.cwdSd != -1:
         return err[JxsHeaders](decodingError("jxs: duplicate CWD"))
@@ -1822,6 +1952,7 @@ proc jxsLinearOut*(omega: seq[int], bw, bc: uint8): ImageResult[seq[uint8]] =
       res[2*i+1] = ((t shr 8) and 0xFF).uint8
   ok(res)
 
+
 proc jxsInverseRct*(planes: var seq[seq[int]]) =
   ## Annex F.3 Table F.2 in place on the first three planes.
   let n = planes[0].len
@@ -1901,8 +2032,11 @@ func jxsLog2Sy*(sy: uint8): int =
 
 proc jxsGatherPrecinct*(prec: JxsPrecinctPlan, plan: JxsPicturePlan,
     h: JxsHeaders, deq: seq[seq[int]],
-    gathered: var seq[seq[seq[int]]]): ImageResult[bool] =
+    gathered: var seq[seq[seq[int]]],
+    samples: var seq[seq[int]]): ImageResult[bool] =
   ## Copy one precinct's dequantized bands into picture-level buffers.
+  ## Suppressed (Sd) tail bands bypass the DWT: raw samples go straight
+  ## into the component plane at the precinct's row offset.
   let px = (prec.p mod plan.npX).int
   let py = (prec.p div plan.npX).int
   let nDec = plan.nDecomposed
@@ -1948,12 +2082,39 @@ proc jxsGatherPrecinct*(prec: JxsPrecinctPlan, plan: JxsPicturePlan,
         for x in 0..<cw:
           gathered[i][loc.int][pr * picBW + colOff + x] =
             deq[b][line * wpb + x]
+  # Sd tail: raw-coded trailing components (sx=sy=1 enforced upstream).
+  let sdU = plan.nc - nDec
+  if sdU > 0:
+    let wfI = plan.wf.int
+    let hfI = plan.hf.int
+    let csI = plan.cs.int
+    let colOff = min(px * csI, wfI)
+    let wp = min(wfI - colOff, prec.wp.int)
+    let powPic = if plan.nly == 0: 1 else: 1 shl plan.nly.int
+    let picRowOff = py * powPic
+    for k in 0..<sdU.int:
+      let i = (nDec + k.uint32).int
+      let b = (nDec * plan.nBeta + k.uint32).int
+      if b >= prec.bands.len or b >= deq.len: continue
+      let bg = prec.bands[b]
+      if not bg.exists: continue
+      let lines = (bg.l1 - bg.l0).int
+      if lines <= 0: continue
+      let wpb = bg.wpb.int
+      for line in 0..<lines:
+        let pr = picRowOff + line
+        if pr >= hfI: break
+        let cw = min(min(wpb, wp), wfI - colOff)
+        if cw <= 0: break
+        for x in 0..<cw:
+          samples[i][pr * wfI + colOff + x] = deq[b][line * wpb + x]
   ok(true)
 
 proc jxsDecodeSlice*(sliceData: openArray[uint8], sPlan: JxsSlicePlan,
     plan: JxsPicturePlan, h: JxsHeaders,
-    gathered: var seq[seq[seq[int]]]): ImageResult[bool] =
-  ## Decode one slice's precincts; accumulate into `gathered`.
+    gathered: var seq[seq[seq[int]]],
+    samples: var seq[seq[int]]): ImageResult[bool] =
+  ## Decode one slice's precincts; accumulate into `gathered`/`samples`.
   let buf = @sliceData
   var cursor = 0
   let npX = plan.npX.int
@@ -2028,7 +2189,7 @@ proc jxsDecodeSlice*(sliceData: openArray[uint8], sPlan: JxsSlicePlan,
     colTops[px] = some(jxsCaptureTop(prec.bands, ng, trunc, state))
     let deq = jxsDequantPrecinct(h.pih.qpih, prec.bands, ng, trunc,
       state.coefs, h.pih.fq)
-    let gR = jxsGatherPrecinct(prec, plan, h, deq, gathered)
+    let gR = jxsGatherPrecinct(prec, plan, h, deq, gathered, samples)
     if not gR.ok: return err[bool](gR.err)
     cursor = eend
   ok(true)
@@ -2036,17 +2197,15 @@ proc jxsDecodeSlice*(sliceData: openArray[uint8], sPlan: JxsSlicePlan,
 proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
     plan: JxsPicturePlan): ImageResult[seq[seq[int]]] =
   ## Supported matrix: uniform depth, Cpih 0/1 (YCbCr 444/422/420 or
-  ## RCT), 1-4 comps, no NLT/CWD/Star-Tetrix. Returns post-colour-
-  ## transform sample planes (row-major ints, native comp resolution).
-  if h.hasNlt:
-    return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
-      "jxs: NLT output scaling"))
+  ## RCT), 1-4 comps, NLT quad/extended output, no CWD/Star-Tetrix.
+  ## Returns post-colour-transform sample planes (row-major ints).
   if h.pih.cpih == 3:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
       "jxs: Star-Tetrix transform"))
-  if plan.sd > 0:
+  if plan.sd > 0 and h.pih.cpih == 1 and
+      (h.pih.nc.int - plan.sd.int) < 3:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
-      "jxs: suppressed components"))
+      "jxs: RCT needs Nc-Sd >= 3"))
   if h.pih.cpih != 0 and h.pih.cpih != 1:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
       "jxs: colour transform"))
@@ -2094,13 +2253,19 @@ proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
       let (bwB, bhB) = jxsBandDims(wcI, hcI, dxL, dyL, txL, tyL)
       bufs[b] = newSeq[int](bwB * bhB)
     gathered[i] = move(bufs)
+  var samples = newSeq[seq[int]](nc)
+  for i in 0..<nc:
+    let lg0 = jxsLog2Sy(h.comps[i].sy)
+    let wc0 = (wf + h.comps[i].sx.int - 1) div h.comps[i].sx.int
+    let hc0 = (hf + h.comps[i].sy.int - 1) div h.comps[i].sy.int
+    samples[i] = newSeq[int](wc0 * hc0)
   for si, sp in plan.slices:
     let sl = h.slices[si]
     let r = jxsDecodeSlice(cs.toOpenArray(sl.dataOff,
-      sl.dataOff + sl.dataLen - 1), sp, plan, h, gathered)
+      sl.dataOff + sl.dataLen - 1), sp, plan, h, gathered, samples)
     if not r.ok: return err[seq[seq[int]]](r.err)
-  var samples = newSeq[seq[int]](nc)
   for i in 0..<nc:
+    if i >= plan.nDecomposed.int: continue # Sd: already raw samples
     let lg = jxsLog2Sy(h.comps[i].sy)
     let nlyI = satSub8(h.pih.nly, lg.uint8)
     let wcI = (wf + h.comps[i].sx.int - 1) div h.comps[i].sx.int
@@ -2182,9 +2347,16 @@ proc decodeJxsRawEx*(data: openArray[uint8], matrix = -1,
   var compW = newSeq[int](nc)
   var compH = newSeq[int](nc)
   for i in 0..<nc:
-    let loR = jxsLinearOut(planes[i], h.pih.bw, h.comps[i].bitDepth)
-    if not loR.ok: return err[DynamicImage](loR.err)
-    rawPlanes.add(loR.value)
+    if h.nltKind == 0:
+      let loR = jxsLinearOut(planes[i], h.pih.bw, h.comps[i].bitDepth)
+      if not loR.ok: return err[DynamicImage](loR.err)
+      rawPlanes.add(loR.value)
+    else:
+      let nlt = if h.nltKind == 1: JxsNlt(kind: 1, dco: h.nltDco)
+        else: JxsNlt(kind: 2, t1: h.nltT1, t2: h.nltT2, e: h.nltE)
+      let noR = jxsNltOut(planes[i], h.pih.bw, h.comps[i].bitDepth, nlt)
+      if not noR.ok: return err[DynamicImage](noR.err)
+      rawPlanes.add(noR.value)
     compW[i] = (w.int + h.comps[i].sx.int - 1) div h.comps[i].sx.int
     compH[i] = (hh.int + h.comps[i].sy.int - 1) div h.comps[i].sy.int
   proc sampAt(p: seq[uint8], b: uint8, i: int): int =
