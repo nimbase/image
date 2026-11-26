@@ -2647,9 +2647,10 @@ proc jxsDecodeSlice*(sliceData: openArray[uint8], sPlan: JxsSlicePlan,
 
 proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
     plan: JxsPicturePlan): ImageResult[seq[seq[int]]] =
-  ## Supported matrix: uniform depth, Cpih 0/1/3 (YCbCr 444/422/420,
-  ## RCT, Star-Tetrix CFA), 1-8 comps, NLT quad/extended output, CWD.
-  ## Returns post-colour-transform sample planes (row-major ints).
+  ## Supported matrix: Cpih 0/1/3 (YCbCr 444/422/420, RCT,
+  ## Star-Tetrix CFA), 1-8 comps, NLT quad/extended output, CWD, mixed
+  ## bit depths on the fractional (Bw,Fq) paths. Returns
+  ## post-colour-transform sample planes (row-major ints).
   if plan.sd > 0 and h.pih.cpih == 1 and
       (h.pih.nc.int - plan.sd.int) < 3:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
@@ -2658,11 +2659,16 @@ proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
       "jxs: colour transform"))
   let b0 = h.comps[0].bitDepth
+  var mixed = false
+  var bMax: uint8 = b0
   for c in h.comps:
-    if c.bitDepth != b0:
-      return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
-        "jxs: mixed bit depths"))
-  if h.pih.bw < b0:
+    if c.bitDepth != b0: mixed = true
+    if c.bitDepth > bMax: bMax = c.bitDepth
+  if mixed and h.pih.fq == 0:
+    # Table A.8 additional constraints: Fq=0 needs B[i]=B[0] for all i
+    # (already rejected at parse; belt and braces here).
+    return err[seq[seq[int]]](decodingError("jxs: Fq=0 needs uniform B[i]"))
+  if h.pih.bw < bMax:
     return err[seq[seq[int]]](decodingError("jxs: Bw below B[i]"))
   if h.pih.cpih == 1 and h.comps.len < 3:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
@@ -2808,10 +2814,18 @@ proc decodeJxsRawEx*(data: openArray[uint8], matrix = -1,
   ## (`matrix` = H.273 code point, -1 = none; `fullRange` from V).
   ## Gray + RCT RGB(A) stills at 8..16 bits, YCbCr 444/422/420 (→RGB
   ## via BT.709 studio swing, or full swing under a CICP full flag;
-  ## CICP matrix 0 at 4:4:4 decodes as RGB directly).
+  ## CICP matrix 0 at 4:4:4 decodes as RGB directly). Mixed bit depths
+  ## have no DynamicImage layout (like the reference, which routes them
+  ## to `decode_components`); use `decodeJxsComponents` for those.
   let h0 = parseJxsCodestream(data)
   if not h0.ok: return err[DynamicImage](h0.err)
   var h = h0.value
+  let b0m = h.comps[0].bitDepth
+  for c in h.comps:
+    if c.bitDepth != b0m:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "jxs: mixed bit depths have no DynamicImage layout; " &
+        "use decodeJxsComponents"))
   let sd: uint8 = if h.cwdSd < 0: 0 else: h.cwdSd.uint8
   let planR = jxsBuildPlan(h.pih, h.comps, h.wgt, sd)
   if not planR.ok: return err[DynamicImage](planR.err)
@@ -3034,6 +3048,70 @@ proc decodeJxsRawEx*(data: openArray[uint8], matrix = -1,
 proc decodeJxsRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
   ## Bare-codestream decode (no Part-3 colour override).
   decodeJxsRawEx(data)
+
+type
+  JxsDecodedComp* = object
+    ## One output component: packed samples (u8, or u16-LE for >8 bit),
+    ## at native sampling resolution.
+    bitDepth*: uint8
+    sx*: uint8
+    sy*: uint8
+    width*: int
+    height*: int
+    samples*: seq[uint8]
+
+  JxsDecodedComps* = object
+    width*: uint32
+    height*: uint32
+    cpih*: uint8
+    comps*: seq[JxsDecodedComp]
+
+proc decodeJxsComponentsRaw*(data: openArray[uint8]): ImageResult[JxsDecodedComps] =
+  ## Bare-codestream decode to per-component sample planes (Annex G
+  ## output scaling per B[i], NLT-aware). This is the mixed-bit-depth
+  ## route: every component keeps its own depth and packing, with no
+  ## DynamicImage layout imposed (mirrors the reference
+  ## `decode_components` contract for mixed depths).
+  let h0 = parseJxsCodestream(data)
+  if not h0.ok: return err[JxsDecodedComps](h0.err)
+  let h = h0.value
+  let sd: uint8 = if h.cwdSd < 0: 0 else: h.cwdSd.uint8
+  let planR = jxsBuildPlan(h.pih, h.comps, h.wgt, sd)
+  if not planR.ok: return err[JxsDecodedComps](planR.err)
+  let picR = jxsDecodePicture(data, h, planR.value)
+  if not picR.ok: return err[JxsDecodedComps](picR.err)
+  let planes = picR.value
+  var res = JxsDecodedComps(width: h.pih.wf.uint32,
+    height: h.pih.hf.uint32, cpih: h.pih.cpih)
+  for i in 0..<h.comps.len:
+    let bc = h.comps[i].bitDepth
+    let byR =
+      if h.nltKind == 0: jxsLinearOut(planes[i], h.pih.bw, bc)
+      else:
+        let nlt = if h.nltKind == 1: JxsNlt(kind: 1, dco: h.nltDco)
+          else: JxsNlt(kind: 2, t1: h.nltT1, t2: h.nltT2, e: h.nltE)
+        jxsNltOut(planes[i], h.pih.bw, bc, nlt)
+    if not byR.ok: return err[JxsDecodedComps](byR.err)
+    let cw = (h.pih.wf.int + h.comps[i].sx.int - 1) div h.comps[i].sx.int
+    let ch = (h.pih.hf.int + h.comps[i].sy.int - 1) div h.comps[i].sy.int
+    res.comps.add(JxsDecodedComp(bitDepth: bc, sx: h.comps[i].sx,
+      sy: h.comps[i].sy, width: cw, height: ch, samples: byR.value))
+  ok(res)
+
+proc decodeJxsComponents*(data: openArray[uint8]): ImageResult[JxsDecodedComps] =
+  ## Bare codestream or `.jxs` file decode to per-component planes.
+  if isJxsFile(data):
+    let mR = parseJxsFile(data)
+    if not mR.ok: return err[JxsDecodedComps](mR.err)
+    let m = mR.value
+    let h0 = parseJxsCodestream(data.toOpenArray(m.csOff,
+      m.csOff + m.csLen - 1))
+    if not h0.ok: return err[JxsDecodedComps](h0.err)
+    let vR = jxsCheckFileMeta(m, h0.value)
+    if not vR.ok: return err[JxsDecodedComps](vR.err)
+    return decodeJxsComponentsRaw(data.toOpenArray(m.csOff,
+      m.csOff + m.csLen - 1))
+  decodeJxsComponentsRaw(data)
 
 proc decodeJxs*(data: openArray[uint8]): ImageResult[DynamicImage] =
   ## Bare codestream or `.jxs` file decode. A contradictory `.jxs`

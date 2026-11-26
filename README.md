@@ -140,8 +140,9 @@ let fxs = writeJxsFile(enc.value)   # wrap a codestream in a .jxs file
 ```
 Lossless + lossy stills (gray/RGB(A) via RCT, CFA via Star-Tetrix,
 YCbCr 444/422/420; NL 1–8, all quantizers, NLT quad/extended,
-CWD-suppressed comps, per-band WGT weights, `.jxs` box + CICP).
-No profiles/CBR signalling, Annex H tables, or mixed depths yet.
+CWD-suppressed comps, per-band WGT incl. Annex H tables, `.jxs` box +
+CICP, verified profile/level/CBR signalling, exact-size CBR, mixed
+depths via `decodeJxsComponents`).
 
 ### PNG
 
@@ -261,7 +262,7 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] HEIF/HEIC stills: container + uncompressed + JPEG-in-HEIF + grids/overlays/iden + thumbnails/aux/groups/Exif/mime + writer (HEVC/VVC/AVC/EVC/JPEG2000 passthrough only — no pure-Nim video/wavelet decoders)
 - [ ] JPEG XL (jxl)
 - [x] JPEG 2000 (jp2): decoder codec only
-- [x] JPEG XS (jxs): lossless + lossy-Q stills (gray/RGB(A)/CFA/YCbCr 444/422/420, NL 1-8, NLT quad/extended, CWD, per-band WGT, `.jxs` box + CICP, profile/level/CBR gates; decode pixel-exact); no Annex H tables, CBR rate control, or mixed depths yet
+- [x] JPEG XS (jxs): lossless + lossy-Q stills (gray/RGB(A)/CFA/YCbCr 444/422/420, NL 1-8, NLT quad/extended, CWD, per-band WGT incl. Annex H tables, `.jxs` box + CICP, verified profile/level/CBR signalling, exact-size CBR, mixed depths via components API; decode pixel-exact at uniform depths)
   - raw codestream + JP2 container → `DynamicImage` (lossless 5/3 + RCT and lossy 9/7; legacy + HTJ2K code-blocks)
   - no encoder; no subsampling/palettes/packed headers (clean `Unsupported`)
 - [x] HEIF sequences/timed pict tracks (`unci` v0/v1 / `jpeg`, incl. fragmented `moof`), tiled `iloc` construction-1/2 + tiled `uncC` (clean-room TL profile), EVC brand
