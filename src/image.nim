@@ -28,6 +28,7 @@ import ./image/codecs/webp as webpApi
 import ./image/codecs/avif as avifApi
 import ./image/codecs/heif/heif as heifApi
 import ./image/codecs/j2k as j2kApi
+import ./image/codecs/jxs as jxsApi
 
 export colorApi
 export errorApi
@@ -58,3 +59,4 @@ export webpApi
 export avifApi
 export heifApi
 export j2kApi
+export jxsApi

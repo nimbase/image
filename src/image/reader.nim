@@ -65,6 +65,13 @@ func guessFormat*(data: openArray[uint8]): tuple[found: bool, f: ImageFormat] =
   if data.len >= 4 and data[0]==0xFF and data[1]==0x4F and
       data[2]==0xFF and data[3]==0x51:
     return (true, fmtJp2)
+  if data.len >= 4 and data[0]==0xFF and data[1]==0x10 and
+      data[2]==0xFF and data[3]==0x50:
+    return (true, fmtJxs)
+  if data.len >= 12 and data[0]==0 and data[1]==0 and data[2]==0 and
+      data[3]==12 and data[4]==uint8('J') and data[5]==uint8('X') and
+      data[6]==uint8('S') and data[7]==uint8(' '):
+    return (true, fmtJxs)
   # TGA has no file magic; structural match only (bare v1 headers,
   # including our own encoder output, carry no "TRUEVISION-XFILE"
   # footer). decodeTga re-validates strictly, so a false positive

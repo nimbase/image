@@ -28,6 +28,7 @@ import ./codecs/webp
 import ./codecs/avif
 import ./codecs/heif/heif
 import ./codecs/j2k
+import ./codecs/jxs
 
 const WebpMaxDim* = 16384
   ## VP8L header stores width-1 / height-1 in 14 bits.
@@ -53,6 +54,7 @@ proc decodeImage*(data: openArray[uint8]): ImageResult[DynamicImage] =
   of fmtWebP: decodeWebp(data)
   of fmtHeif: decodeHeif(@data)
   of fmtJp2: decodeJp2(data)
+  of fmtJxs: decodeJxs(data)
   of fmtAvif: decodeAvif(data) # v1 stub: returns Unsupported, propagates
   of fmtOpenExr: decodeExr(data)
   of fmtGif:

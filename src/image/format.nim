@@ -21,6 +21,7 @@ type
     fmtQoi
     fmtHeif
     fmtJp2
+    fmtJxs
 
 func fromExtension*(ext: string): tuple[found: bool, f: ImageFormat] =
   let e = ext.toLowerAscii()
@@ -41,6 +42,7 @@ func fromExtension*(ext: string): tuple[found: bool, f: ImageFormat] =
   of "qoi": (true, fmtQoi)
   of "heif", "heic", "hif", "heifs", "heics": (true, fmtHeif)
   of "jp2", "j2k", "jpx", "jpf": (true, fmtJp2)
+  of "jxs", "jxsc": (true, fmtJxs)
   else: (false, fmtPng)
 
 func fromPath*(path: string): ImageResult[ImageFormat] =
@@ -73,6 +75,7 @@ func fromMimeType*(mime: string): tuple[found: bool, f: ImageFormat] =
   of "image/heif-sequence": (true, fmtHeif)
   of "image/heic-sequence": (true, fmtHeif)
   of "image/jp2", "image/jpx": (true, fmtJp2)
+  of "image/jxs", "image/jxsc": (true, fmtJxs)
   else: (false, fmtPng)
 
 func toMimeType*(f: ImageFormat): string =
@@ -93,6 +96,7 @@ func toMimeType*(f: ImageFormat): string =
   of fmtFarbfeld: "application/octet-stream"
   of fmtHeif: "image/heif"
   of fmtJp2: "image/jp2"
+  of fmtJxs: "image/jxs"
 
 func extensionsStr*(f: ImageFormat): seq[string] =
   case f
@@ -112,8 +116,9 @@ func extensionsStr*(f: ImageFormat): seq[string] =
   of fmtQoi: @["qoi"]
   of fmtHeif: @["heif", "heic", "hif", "heifs", "heics"]
   of fmtJp2: @["jp2", "j2k"]
+  of fmtJxs: @["jxs", "jxsc"]
 
 func allFormats*(): seq[ImageFormat] =
   @[fmtGif, fmtIco, fmtJpeg, fmtPng, fmtBmp, fmtTiff, fmtTga, fmtPnm,
     fmtFarbfeld, fmtAvif, fmtWebP, fmtOpenExr, fmtQoi, fmtHdr, fmtHeif,
-    fmtJp2]
+    fmtJp2, fmtJxs]
