@@ -251,13 +251,13 @@ type
     cs*: uint32
     sd*: uint8
 
-func divCeil32(a, b: uint32): uint32 =
+func divCeil32*(a, b: uint32): uint32 =
   if b == 0: 0 else: (a + b - 1) div b
 
-func satSub32(a, b: uint32): uint32 =
+func satSub32*(a, b: uint32): uint32 =
   if a < b: 0 else: a - b
 
-func satSub8(a, b: uint8): uint8 =
+func satSub8*(a, b: uint8): uint8 =
   if a < b: 0 else: a - b
 
 func jxsFDiv2*(a: int): int =
@@ -1380,6 +1380,143 @@ proc jxsDequantPrecinct*(qpih: uint8, bands: seq[JxsBand], ng: uint8,
   res
 
 
+const
+  JxsBoxFtyp* = 0x66747970'u32
+  JxsBoxHeader* = 0x6A787368'u32 # 'jxsh'
+  JxsBoxIhdr* = 0x69686472'u32   # 'ihdr'
+  JxsBoxColr* = 0x636F6C72'u32   # 'colr'
+  JxsBrandJxs* = 0x6A787320'u32  # 'jxs '
+
+type
+  JxsFileMeta* = object
+    csOff*: int
+    csLen*: int
+    ihdrW*: uint32
+    ihdrH*: uint32
+    ihdrNc*: int
+    ihdrBd*: int # -1 = varying (BPC 0xFF)
+    matrix*: int # -1 = no CICP box, else H.273 code point
+    fullRange*: bool
+
+proc jxsBoxAt(data: openArray[uint8], p: int):
+    tuple[tb: uint32, hdr, plen: int, ok: bool] =
+  ## Parse one box header at `p` (LBox/TBox/[XLBox]).
+  if p + 8 > data.len: return (0'u32, 0, 0, false)
+  let lb = u32be(data, p)
+  let tb = u32be(data, p+4)
+  if lb == 1:
+    if p + 16 > data.len: return (0'u32, 0, 0, false)
+    if u32be(data, p+8) != 0: return (0'u32, 0, 0, false)
+    let lo = u32be(data, p+12)
+    if lo < 16: return (0'u32, 0, 0, false)
+    (tb, 16, lo.int - 16, true)
+  elif lb == 0:
+    (tb, 8, data.len - (p + 8), true)
+  elif lb < 8:
+    (0'u32, 0, 0, false)
+  else:
+    (tb, 8, lb.int - 8, true)
+
+proc parseJxsFile*(data: openArray[uint8]): ImageResult[JxsFileMeta] =
+  ## Part-3 box walk: Signature + FileType + Header(jxsh) + jp2c.
+  ## Returns codestream location, ihdr geometry and the first CICP
+  ## colour description (matrix/full-range) when present.
+  if not isJxsFile(data):
+    return err[JxsFileMeta](decodingError("jxs: not a JXS file"))
+  var meta: JxsFileMeta
+  meta.matrix = -1
+  meta.ihdrBd = -1
+  var p = 12 # past Signature
+  var haveFtyp = false
+  var jxshOff = -1
+  var jxshLen = 0
+  var csOff = -1
+  var csLen = 0
+  while p + 8 <= data.len:
+    let (tb, hdr, plen, ok) = jxsBoxAt(data, p)
+    if not ok or plen < 0 or p + hdr + plen > data.len:
+      return err[JxsFileMeta](decodingError("jxs: bad top-level box"))
+    if tb == JxsBoxFtyp:
+      if plen < 8:
+        return err[JxsFileMeta](decodingError("jxs: bad ftyp"))
+      # major(4) + minor(4) + compat list: require 'jxs ' compat
+      var compat = false
+      var q = p + hdr + 8
+      while q + 4 <= p + hdr + plen:
+        if u32be(data, q) == JxsBrandJxs: compat = true
+        q += 4
+      if not compat:
+        return err[JxsFileMeta](unsupportedError(ukFormat,
+          "jxs: ftyp without jxs brand"))
+      haveFtyp = true
+    elif tb == JxsBoxHeader:
+      if jxshOff >= 0:
+        return err[JxsFileMeta](decodingError("jxs: duplicate Header"))
+      jxshOff = p + hdr
+      jxshLen = plen
+    elif tb == JxsCodeStreamBox:
+      if csOff < 0:
+        csOff = p + hdr
+        csLen = plen
+    p += hdr + plen
+  if not haveFtyp:
+    return err[JxsFileMeta](decodingError("jxs: file without FileType"))
+  if jxshOff < 0:
+    return err[JxsFileMeta](decodingError("jxs: file without Header"))
+  if csOff < 0:
+    return err[JxsFileMeta](decodingError("jxs: file has no codestream"))
+  # inner boxes of jxsh: ihdr first, then colr/cdef/...
+  var q = jxshOff
+  let qEnd = jxshOff + jxshLen
+  var firstInner = true
+  var haveIhdr = false
+  var haveColr = false
+  while q + 8 <= qEnd:
+    let (tb, hdr, plen, ok) = jxsBoxAt(data, q)
+    if not ok or plen < 0 or q + hdr + plen > qEnd:
+      return err[JxsFileMeta](decodingError("jxs: bad Header box"))
+    if firstInner and tb != JxsBoxIhdr:
+      return err[JxsFileMeta](decodingError(
+        "jxs: Image Header shall be first in Header"))
+    firstInner = false
+    if tb == JxsBoxIhdr:
+      if haveIhdr:
+        return err[JxsFileMeta](decodingError("jxs: duplicate ihdr"))
+      if plen != 14:
+        return err[JxsFileMeta](decodingError("jxs: ihdr must be 14"))
+      let d = q + hdr
+      meta.ihdrH = u32be(data, d)
+      meta.ihdrW = u32be(data, d+4)
+      meta.ihdrNc = int(u16be(data, d+8))
+      let bpc = data[d+10]
+      let cc = data[d+11]
+      if cc != 12:
+        return err[JxsFileMeta](unsupportedError(ukFormat,
+          "jxs: ihdr compression is not JPEG XS"))
+      if bpc == 0xFF:
+        meta.ihdrBd = -1
+      elif (bpc and 0x80) != 0:
+        return err[JxsFileMeta](unsupportedError(ukGenericFeature,
+          "jxs: signed samples"))
+      else:
+        meta.ihdrBd = int(bpc and 0x7F) + 1
+      haveIhdr = true
+    elif tb == JxsBoxColr and not haveColr:
+      # first colr box decides; CICP (METH=5) carries matrix/range.
+      haveColr = true
+      let d = q + hdr
+      if plen >= 10 and data[d] == 5:
+        meta.matrix = int(u16be(data, d+7))
+        meta.fullRange = (data[d+9] and 0x80) != 0
+    q += hdr + plen
+  if not haveIhdr:
+    return err[JxsFileMeta](decodingError("jxs: Header without ihdr"))
+  if meta.ihdrW == 0 or meta.ihdrH == 0 or meta.ihdrNc <= 0:
+    return err[JxsFileMeta](decodingError("jxs: bad ihdr geometry"))
+  meta.csOff = csOff
+  meta.csLen = csLen
+  ok(meta)
+
 proc findCodestream(data: openArray[uint8]): tuple[off, ln: int, boxed: bool] =
   ## For a `.jxs` file, locate the first `jp2c` box payload.
   ## Returns (off, len, true), or (-1, 0, true) when absent.
@@ -1708,6 +1845,53 @@ proc jxsForwardRct*(planes: var seq[seq[int]]) =
     planes[1][x] = b - g
     planes[2][x] = r - g
 
+func jxsYcbcrPixel*(y, cb, cr: int, bd: uint8, fullRange = false):
+    tuple[r, g, b: int] =
+  ## BT.709 YCbCr→RGB, integer-exact. `fullRange` selects full swing
+  ## (CICP V flag); otherwise limited studio swing. Bare codestreams
+  ## carry no colour description; limited is the broadcast default.
+  ## 8-bit is the native rail-exact kernel; deeper depths downscale
+  ## into it and replicate out (`v*257`), exact at black/white and
+  ## monotonic throughout.
+  if bd == 8:
+    if fullRange:
+      let c = y
+      let d = cb - 128
+      let e = cr - 128
+      var r = jxsFDivPow2(256 * c + 403 * e + 128, 8)
+      var g = jxsFDivPow2(256 * c - 48 * d - 120 * e + 128, 8)
+      var b = jxsFDivPow2(256 * c + 475 * d + 128, 8)
+      if r < 0: r = 0 elif r > 255: r = 255
+      if g < 0: g = 0 elif g > 255: g = 255
+      if b < 0: b = 0 elif b > 255: b = 255
+      return (r, g, b)
+    let c = y - 16
+    let d = cb - 128
+    let e = cr - 128
+    var r = jxsFDivPow2(298 * c + 403 * e + 128, 8)
+    var g = jxsFDivPow2(298 * c - 48 * d - 120 * e + 128, 8)
+    var b = jxsFDivPow2(298 * c + 475 * d + 128, 8)
+    if r < 0: r = 0 elif r > 255: r = 255
+    if g < 0: g = 0 elif g > 255: g = 255
+    if b < 0: b = 0 elif b > 255: b = 255
+    return (r, g, b)
+  let sh = bd.int - 8
+  let s = 1 shl sh
+  var c8 = 0
+  var d8 = 0
+  var e8 = 0
+  if fullRange:
+    c8 = jxsFDivPow2(y, sh)
+    d8 = jxsFDivPow2(cb - 128 * s, sh)
+    e8 = jxsFDivPow2(cr - 128 * s, sh)
+    let (r8, g8, b8) = jxsYcbcrPixel(c8, d8 + 128, e8 + 128, 8, true)
+    return (r8 * 257, g8 * 257, b8 * 257)
+  c8 = jxsFDivPow2(y - 16 * s, sh)
+  d8 = jxsFDivPow2(cb - 128 * s, sh)
+  e8 = jxsFDivPow2(cr - 128 * s, sh)
+  let (r8, g8, b8) = jxsYcbcrPixel(c8 + 16, d8 + 128, e8 + 128, 8)
+  (r8 * 257, g8 * 257, b8 * 257)
+
 func jxsLog2Sy*(sy: uint8): int =
   case sy
   of 1: 0
@@ -1851,8 +2035,9 @@ proc jxsDecodeSlice*(sliceData: openArray[uint8], sPlan: JxsSlicePlan,
 
 proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
     plan: JxsPicturePlan): ImageResult[seq[seq[int]]] =
-  ## Vertical slice: uniform depth, full-res, Cpih 0/1, no NLT/CWD.
-  ## Returns post-colour-transform sample planes (row-major ints).
+  ## Supported matrix: uniform depth, Cpih 0/1 (YCbCr 444/422/420 or
+  ## RCT), 1-4 comps, no NLT/CWD/Star-Tetrix. Returns post-colour-
+  ## transform sample planes (row-major ints, native comp resolution).
   if h.hasNlt:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
       "jxs: NLT output scaling"))
@@ -1865,10 +2050,6 @@ proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
   if h.pih.cpih != 0 and h.pih.cpih != 1:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
       "jxs: colour transform"))
-  for c in h.comps:
-    if c.sx != 1 or c.sy != 1:
-      return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
-        "jxs: subsampled components"))
   let b0 = h.comps[0].bitDepth
   for c in h.comps:
     if c.bitDepth != b0:
@@ -1879,6 +2060,15 @@ proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
   if h.pih.cpih == 1 and h.comps.len < 3:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
       "jxs: RCT needs Nc >= 3"))
+  if h.pih.cpih == 1:
+    for i in 0..<min(3, h.comps.len):
+      if h.comps[i].sx != 1 or h.comps[i].sy != 1:
+        return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+          "jxs: RCT with subsampled component"))
+  if h.pih.cpih == 0 and h.comps.len == 1:
+    if h.comps[0].sx != 1 or h.comps[0].sy != 1:
+      return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
+        "jxs: subsampled luma"))
   if uint64(h.pih.wf) * uint64(h.pih.hf) > (1'u64 shl 28):
     return err[seq[seq[int]]](limitError(lkDimensionError,
       "jxs: picture exceeds 268 Mpixel"))
@@ -1887,12 +2077,15 @@ proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
   let nc = h.comps.len
   let wf = h.pih.wf.int
   let hf = h.pih.hf.int
-  # per-component band buffers (local-β indexing; identity for full-res)
+  # per-component band buffers (local-β indexing per N'L,y[i])
   var gathered = newSeq[seq[seq[int]]](nc)
   for i in 0..<nc:
-    let nlyIc = h.pih.nly # full-res enforced above (sy=1 → N'L,y=NL,y)
-    let wcI = wf
-    let hcI = hf
+    let lg = jxsLog2Sy(h.comps[i].sy)
+    if lg < 0:
+      return err[seq[seq[int]]](decodingError("jxs: bad sampling factor"))
+    let nlyIc = satSub8(h.pih.nly, lg.uint8)
+    let wcI = (wf + h.comps[i].sx.int - 1) div h.comps[i].sx.int
+    let hcI = (hf + h.comps[i].sy.int - 1) div h.comps[i].sy.int
     let nb = jxsNBeta(h.pih.nlx, nlyIc).int
     var bufs = newSeq[seq[int]](nb)
     for b in 0..<nb:
@@ -1938,23 +2131,40 @@ proc headersInfo(h: JxsHeaders, boxed: bool): JxsInfo =
     lossless: h.pih.fq == 0, boxed: boxed, profile: h.pih.ppih,
     level: h.pih.plev)
 
+proc jxsCheckFileMeta*(m: JxsFileMeta, h: JxsHeaders): ImageResult[bool] =
+  ## A.5.4.2: a contradictory `.jxs` header fails the file.
+  if m.ihdrW != h.pih.wf.uint32 or m.ihdrH != h.pih.hf.uint32 or
+      m.ihdrNc != h.comps.len:
+    return err[bool](decodingError("jxs: ihdr contradicts codestream"))
+  if m.ihdrBd >= 0:
+    for c in h.comps:
+      if c.bitDepth.int != m.ihdrBd:
+        return err[bool](decodingError("jxs: ihdr depth contradicts CDT"))
+  ok(true)
+
 proc jxsInfo*(data: openArray[uint8]): ImageResult[JxsInfo] =
   ## Header-only summary. Accepts a bare codestream or a `.jxs` file.
+  ## A contradictory `.jxs` header (ihdr vs PIH) fails, like decode.
   if isJxsFile(data):
-    let (off, ln, _) = findCodestream(data)
-    if off < 0:
-      return err[JxsInfo](decodingError("jxs: file has no codestream"))
-    let h = parseJxsCodestream(data.toOpenArray(off, off + ln - 1))
+    let mR = parseJxsFile(data)
+    if not mR.ok: return err[JxsInfo](mR.err)
+    let h = parseJxsCodestream(data.toOpenArray(mR.value.csOff,
+      mR.value.csOff + mR.value.csLen - 1))
     if not h.ok: return err[JxsInfo](h.err)
+    let vR = jxsCheckFileMeta(mR.value, h.value)
+    if not vR.ok: return err[JxsInfo](vR.err)
     return ok(headersInfo(h.value, true))
   let h = parseJxsCodestream(data)
   if not h.ok: return err[JxsInfo](h.err)
   ok(headersInfo(h.value, false))
 
-proc decodeJxsRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
-  ## Bare-codestream decode: lossless 8-bit gray + RCT RGB(A) stills.
-  ## Subsampled, mixed-depth, NLT, Star-Tetrix and lossy-quantized
-  ## streams beyond the vertical slice are clean `ekUnsupported`.
+proc decodeJxsRawEx*(data: openArray[uint8], matrix = -1,
+    fullRange = false): ImageResult[DynamicImage] =
+  ## Bare-codestream decode with optional Part-3 CICP override
+  ## (`matrix` = H.273 code point, -1 = none; `fullRange` from V).
+  ## Gray + RCT RGB(A) stills at 8..16 bits, YCbCr 444/422/420 (→RGB
+  ## via BT.709 studio swing, or full swing under a CICP full flag;
+  ## CICP matrix 0 at 4:4:4 decodes as RGB directly).
   let h0 = parseJxsCodestream(data)
   if not h0.ok: return err[DynamicImage](h0.err)
   var h = h0.value
@@ -1969,16 +2179,29 @@ proc decodeJxsRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
   let hh = h.pih.hf.uint32
   let bd = h.comps[0].bitDepth
   var rawPlanes: seq[seq[uint8]] = @[]
+  var compW = newSeq[int](nc)
+  var compH = newSeq[int](nc)
   for i in 0..<nc:
     let loR = jxsLinearOut(planes[i], h.pih.bw, h.comps[i].bitDepth)
     if not loR.ok: return err[DynamicImage](loR.err)
     rawPlanes.add(loR.value)
+    compW[i] = (w.int + h.comps[i].sx.int - 1) div h.comps[i].sx.int
+    compH[i] = (hh.int + h.comps[i].sy.int - 1) div h.comps[i].sy.int
+  proc sampAt(p: seq[uint8], b: uint8, i: int): int =
+    if b == 8: p[i].int
+    else: (uint16(p[2*i]) or (uint16(p[2*i+1]) shl 8)).int
   if nc == 1 and bd == 8:
+    if compW[0] != w.int or compH[0] != hh.int:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "jxs: subsampled luma"))
     var px = newSeq[Luma[uint8]](w.int * hh.int)
     for i in 0..<px.len: px[i] = Luma[uint8](data: [rawPlanes[0][i]])
     return ok(DynamicImage(kind: dkLuma8,
       luma8: GrayImage(width: w, height: hh, pixels: move(px))))
   if nc == 1 and bd > 8:
+    if compW[0] != w.int or compH[0] != hh.int:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "jxs: subsampled luma"))
     var px = newSeq[Luma[uint16]](w.int * hh.int)
     for i in 0..<px.len:
       px[i] = Luma[uint16](data: [
@@ -1986,6 +2209,10 @@ proc decodeJxsRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
     return ok(DynamicImage(kind: dkLuma16,
       luma16: Gray16Image(width: w, height: hh, pixels: move(px))))
   if h.pih.cpih == 1 and bd == 8 and (nc == 3 or nc == 4):
+    for i in 0..<nc:
+      if compW[i] != w.int or compH[i] != hh.int:
+        return err[DynamicImage](unsupportedError(ukGenericFeature,
+          "jxs: subsampled RCT plane"))
     if nc == 3:
       var px = newSeq[Rgb[uint8]](w.int * hh.int)
       for i in 0..<px.len:
@@ -2000,6 +2227,10 @@ proc decodeJxsRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
     return ok(DynamicImage(kind: dkRgba8,
       rgba8: RgbaImage(width: w, height: hh, pixels: move(px))))
   if h.pih.cpih == 1 and bd > 8 and (nc == 3 or nc == 4):
+    for i in 0..<nc:
+      if compW[i] != w.int or compH[i] != hh.int:
+        return err[DynamicImage](unsupportedError(ukGenericFeature,
+          "jxs: subsampled RCT plane"))
     proc u16At(p: seq[uint8], i: int): uint16 =
       uint16(p[2*i]) or (uint16(p[2*i+1]) shl 8)
     if nc == 3:
@@ -2016,14 +2247,132 @@ proc decodeJxsRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
         u16At(rawPlanes[3], i)])
     return ok(DynamicImage(kind: dkRgba16,
       rgba16: Rgba16Image(width: w, height: hh, pixels: move(px))))
+  if h.pih.cpih == 0 and (nc == 3 or nc == 4):
+    # YCbCr 444/422/420 (+ optional full-res alpha) → RGB(A).
+    # CICP matrix 0 at 4:4:4 means identity (RGB directly, no math);
+    # anything else decodes as YCbCr via BT.709 (limited studio swing
+    # by default, full swing under a CICP V flag).
+    let effM = if matrix in [0, 1]: matrix else: 1
+    let fr = fullRange and matrix >= 0
+    if compW[0] != w.int or compH[0] != hh.int:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "jxs: subsampled luma"))
+    let sxC = h.comps[1].sx.int
+    let syC = h.comps[1].sy.int
+    if h.comps[2].sx.int != sxC or h.comps[2].sy.int != syC:
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "jxs: luma/chroma sampling"))
+    if (sxC notin [1, 2]) or (syC notin [1, 2]) or
+        (sxC == 1 and syC == 2):
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "jxs: chroma sampling"))
+    if nc == 4 and (compW[3] != w.int or compH[3] != hh.int):
+      return err[DynamicImage](unsupportedError(ukGenericFeature,
+        "jxs: subsampled alpha"))
+    let cwC = compW[1]
+    let chC = compH[1]
+    if effM == 0:
+      # Identity: planes already hold RGB(A); requires 4:4:4.
+      if sxC != 1 or syC != 1:
+        return err[DynamicImage](unsupportedError(ukGenericFeature,
+          "jxs: CICP identity needs 4:4:4"))
+      if bd == 8 and nc == 3:
+        var px = newSeq[Rgb[uint8]](w.int * hh.int)
+        for i in 0..<px.len:
+          px[i] = Rgb[uint8](data: [rawPlanes[0][i], rawPlanes[1][i],
+            rawPlanes[2][i]])
+        return ok(DynamicImage(kind: dkRgb8,
+          rgb8: RgbImage(width: w, height: hh, pixels: move(px))))
+      if bd == 8:
+        var px = newSeq[Rgba[uint8]](w.int * hh.int)
+        for i in 0..<px.len:
+          px[i] = Rgba[uint8](data: [rawPlanes[0][i], rawPlanes[1][i],
+            rawPlanes[2][i], rawPlanes[3][i]])
+        return ok(DynamicImage(kind: dkRgba8,
+          rgba8: RgbaImage(width: w, height: hh, pixels: move(px))))
+      proc u16Id(p: seq[uint8], i: int): uint16 =
+        uint16(p[2*i]) or (uint16(p[2*i+1]) shl 8)
+      if nc == 3:
+        var px = newSeq[Rgb[uint16]](w.int * hh.int)
+        for i in 0..<px.len:
+          px[i] = Rgb[uint16](data: [u16Id(rawPlanes[0], i),
+            u16Id(rawPlanes[1], i), u16Id(rawPlanes[2], i)])
+        return ok(DynamicImage(kind: dkRgb16,
+          rgb16: Rgb16Image(width: w, height: hh, pixels: move(px))))
+      var px = newSeq[Rgba[uint16]](w.int * hh.int)
+      for i in 0..<px.len:
+        px[i] = Rgba[uint16](data: [u16Id(rawPlanes[0], i),
+          u16Id(rawPlanes[1], i), u16Id(rawPlanes[2], i),
+          u16Id(rawPlanes[3], i)])
+      return ok(DynamicImage(kind: dkRgba16,
+        rgba16: Rgba16Image(width: w, height: hh, pixels: move(px))))
+    if bd == 8:
+      if nc == 3:
+        var px = newSeq[Rgb[uint8]](w.int * hh.int)
+        for y in 0..<hh.int:
+          for x in 0..<w.int:
+            let cx = min(x div sxC, cwC - 1)
+            let cy = min(y div syC, chC - 1)
+            let (r, g, b) = jxsYcbcrPixel(rawPlanes[0][y*w.int+x].int,
+              rawPlanes[1][cy*cwC+cx].int, rawPlanes[2][cy*cwC+cx].int, 8, fr)
+            px[y*w.int+x] = Rgb[uint8](data: [r.uint8, g.uint8, b.uint8])
+        return ok(DynamicImage(kind: dkRgb8,
+          rgb8: RgbImage(width: w, height: hh, pixels: move(px))))
+      var px = newSeq[Rgba[uint8]](w.int * hh.int)
+      for y in 0..<hh.int:
+        for x in 0..<w.int:
+          let cx = min(x div sxC, cwC - 1)
+          let cy = min(y div syC, chC - 1)
+          let (r, g, b) = jxsYcbcrPixel(rawPlanes[0][y*w.int+x].int,
+            rawPlanes[1][cy*cwC+cx].int, rawPlanes[2][cy*cwC+cx].int, 8, fr)
+          px[y*w.int+x] = Rgba[uint8](data: [r.uint8, g.uint8, b.uint8,
+            rawPlanes[3][y*w.int+x]])
+      return ok(DynamicImage(kind: dkRgba8,
+        rgba8: RgbaImage(width: w, height: hh, pixels: move(px))))
+    # 9..16-bit: same conversion in the low `bd` bits.
+    if nc == 3:
+      var px = newSeq[Rgb[uint16]](w.int * hh.int)
+      for y in 0..<hh.int:
+        for x in 0..<w.int:
+          let cx = min(x div sxC, cwC - 1)
+          let cy = min(y div syC, chC - 1)
+          let (r, g, b) = jxsYcbcrPixel(sampAt(rawPlanes[0], bd, y*w.int+x),
+            sampAt(rawPlanes[1], bd, cy*cwC+cx),
+            sampAt(rawPlanes[2], bd, cy*cwC+cx), bd, fr)
+          px[y*w.int+x] = Rgb[uint16](data: [r.uint16, g.uint16, b.uint16])
+      return ok(DynamicImage(kind: dkRgb16,
+        rgb16: Rgb16Image(width: w, height: hh, pixels: move(px))))
+    var px = newSeq[Rgba[uint16]](w.int * hh.int)
+    for y in 0..<hh.int:
+      for x in 0..<w.int:
+        let cx = min(x div sxC, cwC - 1)
+        let cy = min(y div syC, chC - 1)
+        let (r, g, b) = jxsYcbcrPixel(sampAt(rawPlanes[0], bd, y*w.int+x),
+          sampAt(rawPlanes[1], bd, cy*cwC+cx),
+          sampAt(rawPlanes[2], bd, cy*cwC+cx), bd, fr)
+        px[y*w.int+x] = Rgba[uint16](data: [r.uint16, g.uint16, b.uint16,
+          sampAt(rawPlanes[3], bd, y*w.int+x).uint16])
+    return ok(DynamicImage(kind: dkRgba16,
+      rgba16: Rgba16Image(width: w, height: hh, pixels: move(px))))
   err[DynamicImage](unsupportedError(ukGenericFeature,
     "jxs: DynamicImage mapping for this layout"))
 
+proc decodeJxsRaw*(data: openArray[uint8]): ImageResult[DynamicImage] =
+  ## Bare-codestream decode (no Part-3 colour override).
+  decodeJxsRawEx(data)
+
 proc decodeJxs*(data: openArray[uint8]): ImageResult[DynamicImage] =
-  ## Bare codestream or `.jxs` file decode. Phase 0/1: framing only.
+  ## Bare codestream or `.jxs` file decode. A contradictory `.jxs`
+  ## header fails; CICP matrix/full-range steer the YCbCr→RGB output.
   if isJxsFile(data):
-    let (off, ln, _) = findCodestream(data)
-    if off < 0:
-      return err[DynamicImage](decodingError("jxs: file has no codestream"))
-    return decodeJxsRaw(data.toOpenArray(off, off + ln - 1))
+    let mR = parseJxsFile(data)
+    if not mR.ok: return err[DynamicImage](mR.err)
+    let m = mR.value
+    let h0 = parseJxsCodestream(data.toOpenArray(m.csOff,
+      m.csOff + m.csLen - 1))
+    if not h0.ok: return err[DynamicImage](h0.err)
+    let vR = jxsCheckFileMeta(m, h0.value)
+    if not vR.ok: return err[DynamicImage](vR.err)
+    return decodeJxsRawEx(data.toOpenArray(m.csOff,
+      m.csOff + m.csLen - 1), m.matrix, m.fullRange)
   decodeJxsRaw(data)

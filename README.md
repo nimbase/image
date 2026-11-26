@@ -131,6 +131,16 @@ let jp2 = decodeJp2(bytes)      # JP2 container; both -> DynamicImage
 ```
 Decode-only (lossless 5/3 + RCT and lossy 9/7, legacy + HTJ2K); no encoder.
 
+### JPEG XS
+
+```nim
+let img = decodeJxs(bytes)          # bare codestream or .jxs file -> DynamicImage
+let enc = encodeJxsGray8(w, h, px)  # lossless; also encodeJxsRgb8/Yuv8/Gray16
+let fxs = writeJxsFile(enc.value)   # wrap a codestream in a .jxs file
+```
+Lossless stills (gray/RGB(A) via RCT, YCbCr 444/422/420; NL 1–8, lossy Q
+ladder, `.jxs` box + CICP). No NLT/Star-Tetrix/CWD/profiles yet.
+
 ### PNG
 
 ```nim
@@ -249,6 +259,7 @@ let m = fromMimeType("image/jpeg")     # (found, fmtJpeg)
 - [x] HEIF/HEIC stills: container + uncompressed + JPEG-in-HEIF + grids/overlays/iden + thumbnails/aux/groups/Exif/mime + writer (HEVC/VVC/AVC/EVC/JPEG2000 passthrough only — no pure-Nim video/wavelet decoders)
 - [ ] JPEG XL (jxl)
 - [x] JPEG 2000 (jp2): decoder codec only
+- [x] JPEG XS (jxs): lossless + lossy-Q stills (gray/RGB(A)/YCbCr 444/422/420, NL 1–8, `.jxs` box + CICP; decode pixel-exact); no NLT/Star-Tetrix/CWD/profiles yet
   - raw codestream + JP2 container → `DynamicImage` (lossless 5/3 + RCT and lossy 9/7; legacy + HTJ2K code-blocks)
   - no encoder; no subsampling/palettes/packed headers (clean `Unsupported`)
 - [x] HEIF sequences/timed pict tracks (`unci` v0/v1 / `jpeg`, incl. fragmented `moof`), tiled `iloc` construction-1/2 + tiled `uncC` (clean-room TL profile), EVC brand

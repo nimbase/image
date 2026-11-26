@@ -221,7 +221,7 @@ test "jxs lossless gray8 roundtrip (single + multi slice, odd dims)":
       (9, 7, true), (32, 16, false), (5, 5, true)]:
     var px = newSeq[uint8](w * h)
     for i in 0..<px.len: px[i] = uint8((i * 37 + 11) mod 251)
-    let enc = encodeJxsGray8(w, h, px, ms)
+    let enc = encodeJxsGray8(w, h, px, multiSlice = ms)
     check enc.ok
     check probeJxs(enc.value)
     let inf = jxsInfo(enc.value)
@@ -244,7 +244,7 @@ test "jxs lossless rgb8 roundtrip (RCT)":
       rgb[3*i] = uint8((i * 13 + 5) mod 251)
       rgb[3*i+1] = uint8((i * 29 + 7) mod 251)
       rgb[3*i+2] = uint8((i * 7 + 101) mod 251)
-    let enc = encodeJxsRgb8(w, h, rgb, ms)
+    let enc = encodeJxsRgb8(w, h, rgb, multiSlice = ms)
     check enc.ok
     let dec = decodeJxsRaw(enc.value)
     check dec.ok
@@ -271,6 +271,174 @@ test "jxs truncation T clamps":
   check jxsTruncT(2, 0, 1, 1) == 2  # 2-0-0 (P>=R)
   check jxsTruncT(0, 0, 0, 1) == 0  # clamp low
   check jxsTruncT(31, 0, 0, 0) == 15 # clamp high
+
+test "jxs lossless deeper NL roundtrips":
+  # NL 2/1, 2/2, 3/2: multi-line precinct bands (LH/HH span 2-4 lines),
+  # joint + pure-horizontal cascade phases on both sides.
+  for (w, h, nlx, nly) in [(16, 16, 2'u8, 1'u8), (16, 16, 2, 2),
+      (24, 20, 3, 2), (9, 7, 2, 1), (32, 12, 3, 1)]:
+    var px = newSeq[uint8](w * h)
+    for i in 0..<px.len: px[i] = uint8((i * 37 + 11) mod 251)
+    let enc = encodeJxsGray8(w, h, px, nlx, nly)
+    check enc.ok
+    let dec = decodeJxsRaw(enc.value)
+    check dec.ok
+    check dec.value.kind == dkLuma8
+    for i in 0..<px.len:
+      check dec.value.luma8.pixels[i].data[0] == px[i]
+
+test "jxs lossy Q ladder is bounded and monotone":
+  # Deadzone truncation T=Q drops low bitplanes (midpoint rebuild) and
+  # the 5/3 synthesis spreads it; max error stays within 2^(Q+1) here.
+  # (`lossless` is a header-level Fq flag, as in the reference: a
+  # truncated Fq=0 stream still reports it.)
+  let (w, h) = (16, 16)
+  var px = newSeq[uint8](w * h)
+  for i in 0..<px.len: px[i] = uint8((i * 37 + 11) mod 251)
+  var prevMax = -1
+  for q in [1'u8, 2, 4]:
+    let enc = encodeJxsGray8(w, h, px, 1, 1, q)
+    check enc.ok
+    let dec = decodeJxsRaw(enc.value)
+    check dec.ok
+    var maxErr = 0
+    for i in 0..<px.len:
+      let d = abs(dec.value.luma8.pixels[i].data[0].int - px[i].int)
+      if d > maxErr: maxErr = d
+    check maxErr <= (1 shl (q.int + 1))
+    check maxErr >= prevMax
+    prevMax = maxErr
+
+test "jxs long packet headers roundtrip (Wf*Nc >= 32752)":
+  # 32752-wide gray: short form is illegal, encoder must emit long.
+  let (w, h) = (32752, 2)
+  var px = newSeq[uint8](w * h)
+  for i in 0..<px.len: px[i] = uint8(i mod 251)
+  let enc = encodeJxsGray8(w, h, px)
+  check enc.ok
+  let h0 = parseJxsCodestream(enc.value)
+  check h0.ok
+  check not jxsUseShortHeader(h0.value.pih)
+  let dec = decodeJxsRaw(enc.value)
+  check dec.ok
+  for i in countup(0, px.len - 1, 997):
+    check dec.value.luma8.pixels[i].data[0] == px[i]
+
+test "jxs BT.709 limited YCbCr hand vectors":
+  # White / black / neutral exact per the integer formula.
+  check jxsYcbcrPixel(235, 128, 128, 8) == (255, 255, 255)
+  check jxsYcbcrPixel(16, 128, 128, 8) == (0, 0, 0)
+  check jxsYcbcrPixel(180, 128, 128, 8) == (191, 191, 191)
+  # BT.709 limited red primary (63, 102, 240): float reference gives
+  # (231.1, 7.2, 6.3) — limited range cannot hold saturated red
+  # exactly; the integer kernel lands within 1 of float.
+  let (r, g, b) = jxsYcbcrPixel(63, 102, 240, 8)
+  check abs(r - 231) <= 1
+  check abs(g - 7) <= 1
+  check abs(b - 6) <= 1
+  # 16-bit true video levels: white 60160, black 4096, neutral 32768.
+  check jxsYcbcrPixel(60160, 32768, 32768, 16) == (65535, 65535, 65535)
+  check jxsYcbcrPixel(4096, 32768, 32768, 16) == (0, 0, 0)
+
+test "jxs subsampled 422/420 roundtrips (planar YUV in, RGB out)":
+  # Neutral-chroma ramps: decode must equal the direct BT.709
+  # conversion of the same planes (chroma replicated, no filter).
+  for (w, h, sxC, syC) in [(16, 12, 1'u8, 1'u8), (16, 12, 2, 1),
+      (16, 12, 2, 2), (15, 11, 2, 2)]:
+    let cwch = (w + sxC.int - 1) div sxC.int
+    let chch = (h + syC.int - 1) div syC.int
+    var y = newSeq[uint8](w * h)
+    var cb = newSeq[uint8](cwch * chch)
+    var cr = newSeq[uint8](cwch * chch)
+    for i in 0..<y.len: y[i] = uint8(16 + (i * 200) div y.len)
+    for i in 0..<cb.len:
+      cb[i] = uint8(100 + (i * 7) mod 50)
+      cr[i] = uint8(150 - (i * 5) mod 60)
+    let enc = encodeJxsYuv8(w, h, y, cb, cr, sxC, syC)
+    check enc.ok
+    let dec = decodeJxsRaw(enc.value)
+    check dec.ok
+    check dec.value.kind == dkRgb8
+    check dec.value.dimensions() == (w.uint32, h.uint32)
+    for yy in 0..<h:
+      for xx in 0..<w:
+        let cx = min(xx div sxC.int, cwch - 1)
+        let cy = min(yy div syC.int, chch - 1)
+        let (er, eg, eb) = jxsYcbcrPixel(y[yy*w+xx].int,
+          cb[cy*cwch+cx].int, cr[cy*cwch+cx].int, 8)
+        let got = dec.value.rgb8.pixels[yy*w+xx].data
+        check abs(got[0].int - er) <= 1
+        check abs(got[1].int - eg) <= 1
+        check abs(got[2].int - eb) <= 1
+
+test "jxs .jxs file roundtrips (box, CICP, ihdr gate)":
+  # Bare codestream -> boxed file -> decodeJxs: pixels identical.
+  let (w2, h2) = (12, 10)
+  var px2 = newSeq[uint8](w2 * h2)
+  for i in 0..<px2.len: px2[i] = uint8((i * 41 + 3) mod 251)
+  let cs2 = encodeJxsGray8(w2, h2, px2)
+  check cs2.ok
+  let fx = writeJxsFile(cs2.value)
+  check fx.ok
+  check isJxsFile(fx.value)
+  check probeJxs(fx.value)
+  let inf2 = jxsInfo(fx.value)
+  check inf2.ok
+  check inf2.value.boxed
+  check inf2.value.width == w2.uint32
+  let dec2 = decodeJxs(fx.value)
+  check dec2.ok
+  check dec2.value.kind == dkLuma8
+  for i in 0..<px2.len:
+    check dec2.value.luma8.pixels[i].data[0] == px2[i]
+  # Contradictory ihdr (width +1) fails cleanly.
+  var bad = fx.value
+  # ihdr WIDTH lives at: 12 (sig) + 20 (ftyp) + 8 (jxsh) + 8 (ihdr) + 4
+  let woff = 12 + 20 + 8 + 8 + 4
+  bad[woff] = uint8((w2 + 1) shr 8)
+  bad[woff+1] = uint8((w2 + 1) and 0xFF)
+  check not decodeJxs(bad).ok
+  check not jxsInfo(bad).ok
+
+test "jxs CICP matrix 0 decodes YUV444 as RGB direct":
+  # Same codestream, two colour readings: bare = YCbCr conversion,
+  # boxed with matrix 0 = identity (planes pass straight through).
+  let (w3, h3) = (8, 8)
+  var y3 = newSeq[uint8](w3 * h3)
+  var cb3 = newSeq[uint8](w3 * h3)
+  var cr3 = newSeq[uint8](w3 * h3)
+  for i in 0..<y3.len:
+    y3[i] = 100; cb3[i] = 50; cr3[i] = 200
+  let cs3 = encodeJxsYuv8(w3, h3, y3, cb3, cr3, 1, 1)
+  check cs3.ok
+  let bare = decodeJxsRaw(cs3.value)
+  check bare.ok
+  # bare: converted (not the raw triple)
+  check bare.value.rgb8.pixels[0].data != [100'u8, 50, 200]
+  let fx3 = writeJxsFile(cs3.value, 0) # matrix 0 = identity
+  check fx3.ok
+  let boxed = decodeJxs(fx3.value)
+  check boxed.ok
+  check boxed.value.kind == dkRgb8
+  for i in 0..<w3*h3:
+    check boxed.value.rgb8.pixels[i].data == [100'u8, 50, 200]
+
+test "jxs CICP full-range flag selects full swing":
+  # Y=235 neutral: limited decodes to 255, full-range to 235.
+  let (w4, h4) = (4, 4)
+  var y4 = newSeq[uint8](w4 * h4)
+  var c4 = newSeq[uint8](w4 * h4)
+  for i in 0..<y4.len: y4[i] = 235; c4[i] = 128
+  let cs4 = encodeJxsYuv8(w4, h4, y4, c4, c4, 1, 1)
+  check cs4.ok
+  let lim = decodeJxsRaw(cs4.value)
+  check lim.ok
+  check lim.value.rgb8.pixels[0].data[0] == 255
+  let fx4 = writeJxsFile(cs4.value, 1, true) # matrix 1, full range
+  check fx4.ok
+  let full = decodeJxs(fx4.value)
+  check full.ok
+  check full.value.rgb8.pixels[0].data[0] == 235
 
 test "jxs chroma-local beta drops deep LH/HH for sy=2":
   # NL 2/2 → Nβ=7. sy=2 loses one vertical level: picture β=2,3
