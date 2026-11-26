@@ -48,7 +48,10 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     bwAx: uint8 = 0, fqAx: uint8 = 0,
     nltKind: uint8 = 0, nltDco: int32 = 0,
     nltT1: uint32 = 0, nltT2: uint32 = 0, nltE: uint8 = 0,
-    qpih: uint8 = 0, sd: uint8 = 0): ImageResult[seq[uint8]] =
+    qpih: uint8 = 0, sd: uint8 = 0,
+    weights: seq[(uint8, uint8)] = @[],
+    stE1: uint8 = 0, stE2: uint8 = 0, stCt: uint8 = 0,
+    stCf: uint8 = 0): ImageResult[seq[uint8]] =
   ## Lossless (`q=0`) or lossy (`q=1..15`) bare codestream. `planesU`:
   ## Nc planes at native sampling in [0, 2^bd). `bwAx`/`fqAx` select
   ## the Table A.8 pair (0 = auto: integer, or NLT-implied); `nltKind`
@@ -62,8 +65,10 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     return err[seq[uint8]](decodingError("jxs enc: Nc 1..4"))
   if cpih == 1 and nc < 3:
     return err[seq[uint8]](decodingError("jxs enc: RCT needs Nc >= 3"))
-  if cpih != 0 and cpih != 1:
-    return err[seq[uint8]](decodingError("jxs enc: Cpih 0/1 only"))
+  if cpih == 3 and nc < 4:
+    return err[seq[uint8]](decodingError("jxs enc: Star-Tetrix needs Nc>=4"))
+  if cpih != 0 and cpih != 1 and cpih != 3:
+    return err[seq[uint8]](decodingError("jxs enc: Cpih 0/1/3 only"))
   if nlx < 1 or nlx > 8 or nly > nlx:
     return err[seq[uint8]](decodingError("jxs enc: NL range"))
   if q > 15:
@@ -85,6 +90,16 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     for i in 0..<min(3, nc):
       if sx[i] != 1 or sy[i] != 1:
         return err[seq[uint8]](decodingError("jxs enc: RCT subsampled"))
+  if cpih == 3:
+    for i in 0..<4:
+      if sx[i] != 1 or sy[i] != 1:
+        return err[seq[uint8]](decodingError("jxs enc: Star-Tetrix inputs"))
+    if stE1 > 3 or stE2 > 3:
+      return err[seq[uint8]](decodingError("jxs enc: Star-Tetrix e1/e2"))
+    if stCt > 1:
+      return err[seq[uint8]](decodingError("jxs enc: Star-Tetrix Ct"))
+    if stCf != 0 and stCf != 3:
+      return err[seq[uint8]](decodingError("jxs enc: Star-Tetrix Cf"))
   var maxSx: uint8 = 1
   var maxSy: uint8 = 1
   for i in 0..<nc:
@@ -179,6 +194,10 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
         planes[i][x] = y - dc
   if cpih == 1:
     jxsForwardRct(planes)
+  elif cpih == 3:
+    let fR = jxsForwardStarTetrix(planes, w, h, stE1, stE2, stCt.int,
+      stCf.int)
+    if not fR.ok: return err[seq[uint8]](fR.err)
   # forward cascade per component at its effective depth;
   # suppressed (Sd) tail components bypass the DWT (raw-coded).
   var picBands = newSeq[seq[seq[int]]](nc)
@@ -212,27 +231,54 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
   var comps: seq[JxsComp] = @[]
   for i in 0..<nc:
     comps.add(JxsComp(bitDepth: bd, sx: sx[i], sy: sy[i]))
-  # count existing (β,i) slots for the WGT body (Annex A.4.11 skips
-  # non-existent bands, same order the walker consumes: wavelet slots
-  # for decomposed comps, one tail slot per suppressed component)
+  # per-band (G,P): default zeros, or caller-supplied Annex-H-style
+  # weights indexed by flat band id b = nDec*β+i (then Sd tails).
   let nDec = nc - sd.int
-  var nExist = 0
+  let nBandsTot = nDec * nBeta + sd.int
+  if weights.len != 0 and weights.len != nBandsTot:
+    return err[seq[uint8]](decodingError("jxs enc: weights count"))
+  var bandG = newSeq[uint8](nBandsTot)
+  var bandP = newSeq[uint8](nBandsTot)
+  for b in 0..<nBandsTot:
+    if weights.len > 0:
+      if weights[b][0] > 15:
+        return err[seq[uint8]](decodingError("jxs enc: WGT gain cap"))
+      bandG[b] = weights[b][0]
+      bandP[b] = weights[b][1]
+  var wgtZ: seq[uint8] = @[]
   for beta in 0..<nBeta:
     for i in 0..<nDec:
       if jxsPicBetaToLocal(beta.uint32, nlx, nly, sy[i]) >= 0:
-        inc nExist
-  nExist += sd.int
-  var wgtZ = newSeq[uint8](2 * nExist)
-  # truncation is uniform T=q (G=P=R=0); M floor is T (lossy) or 0.
-  let truncU = q
-  # max emitted bitplane count sets Br (VLC bound min(2^Br-1,31))
+        let b = nDec * beta + i
+        wgtZ.add(bandG[b])
+        wgtZ.add(bandP[b])
+  for k in 0..<sd.int:
+    let b = nDec * nBeta + k
+    wgtZ.add(bandG[b])
+    wgtZ.add(bandP[b])
+  # per-band truncation T[p,b] = clamp(Q-G-(P<R?1:0), 0, 15), R=0 here.
+  var truncB = newSeq[uint8](nBandsTot)
+  for b in 0..<nBandsTot:
+    truncB[b] = jxsTruncT(q, bandG[b], bandP[b], 0)
+  # max emitted bitplane count sets Br (VLC bound min(2^Br-1,31));
+  # T is per picture band, coefficients per local band: walk picture
+  # bands and map to local ones (identity for full-res comps).
   var maxM = 0
-  for i in 0..<nc:
-    for b in 0..<picBands[i].len:
-      for v in picBands[i][b]:
+  for i in 0..<nDec:
+    for betaPic in 0..<nBeta:
+      let b = nDec * betaPic + i
+      let loc = jxsPicBetaToLocal(betaPic.uint32, nlx, nly, sy[i])
+      if loc < 0: continue
+      for v in picBands[i][loc]:
         let m = jxsBitLen(if v < 0: (-v).uint32 else: v.uint32)
-        let me = max(truncU.int, m)
+        let me = max(truncB[b].int, m)
         if me > maxM: maxM = me
+  for k in 0..<sd.int:
+    let b = nDec * nBeta + k
+    for v in picBands[nDec + k][0]:
+      let m = jxsBitLen(if v < 0: (-v).uint32 else: v.uint32)
+      let me = max(truncB[b].int, m)
+      if me > maxM: maxM = me
   if maxM > 31:
     return err[seq[uint8]](decodingError("jxs enc: M exceeds 31"))
   var br: uint8 = 4
@@ -289,6 +335,22 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
     cdtB.add((sx[i] shl 4) or sy[i])
   seg(JxsMkrCdt, cdtB)
   seg(JxsMkrWgt, wgtZ)
+  if cpih == 3:
+    seg(JxsMkrCts, @[stCf, uint8((stE1 shl 4) or stE2)])
+    var crgB: seq[uint8] = @[]
+    # Table F.9 super-pixel placements per Ct (RGGB / GRBG).
+    let pats =
+      if stCt == 0: [(0'u16, 0'u16), (32768'u16, 0'u16),
+        (0'u16, 32768'u16), (32768'u16, 32768'u16)]
+      else: [(32768'u16, 0'u16), (0'u16, 0'u16),
+        (32768'u16, 32768'u16), (0'u16, 32768'u16)]
+    for i in 0..<nc:
+      let (qx, qy) =
+        if i < 4: pats[i]
+        else: (0'u16, 0'u16) # suppressed tail: position-free
+      crgB.add(uint8(qx shr 8)); crgB.add(uint8(qx and 0xFF))
+      crgB.add(uint8(qy shr 8)); crgB.add(uint8(qy and 0xFF))
+    seg(JxsMkrCrg, crgB)
   if nltKind == 1:
     let dcoU = (if nltDco < 0: (1 shl 15) or (-nltDco) else: nltDco) and 0xFFFF
     seg(JxsMkrNlt, @[1'u8, uint8(dcoU shr 8), uint8(dcoU and 0xFF)])
@@ -341,13 +403,14 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
             sg[li * bg.wpb.int + x] =
               picBands[i][loc][(rowOff + li) * picBW + x]
         segs[b] = move(sg)
-      # M table per (band, line, group): emitted M floors at T (lossy:
-      # dropping high planes is illegal, T drops low ones instead).
+      # M table per (band, line, group): emitted M floors at the
+      # band's T (lossy: dropping high planes is illegal, T drops low).
       var mTab = newSeq[seq[seq[uint8]]](prec.bands.len)
       for b, bg in prec.bands:
         if not bg.exists or bg.wpb == 0:
           mTab[b] = @[]
           continue
+        let tB = truncB[b].int
         let ncg = jxsNcg(bg.wpb, 4).int
         var ml = newSeq[seq[uint8]](segLines[b])
         for li in 0..<segLines[b]:
@@ -360,7 +423,7 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
                 let v = segs[b][li * bg.wpb.int + x]
                 let a = if v < 0: (-v).uint32 else: v.uint32
                 if a > mxv: mxv = a
-            mm[g] = max(truncU, jxsBitLen(mxv).uint8)
+            mm[g] = max(tB.uint8, jxsBitLen(mxv).uint8)
           ml[li] = move(mm)
         mTab[b] = move(ml)
       # precinct body: reserve Lprc, then headers + packets
@@ -380,19 +443,21 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
         var cntW: JxsBitWriter
         for e in layout:
           let bi = e.band.int
+          let tBi = truncB[bi].int
           # line index within this precinct's segment
           let lix = (e.line - prec.bands[bi].l0).int
           for g in 0..<mTab[bi][lix].len:
-            cntW.putUnary(mTab[bi][lix][g].int - truncU.int) # theta=0
+            cntW.putUnary(mTab[bi][lix][g].int - tBi) # theta=0
         jxsAlign(cntW)
         var datW: JxsBitWriter
         for e in layout:
           let bi = e.band.int
+          let tBi = truncB[bi].int
           let bg = prec.bands[bi]
           let li = (e.line - bg.l0).int
           for g in 0..<mTab[bi][li].len:
             let m = mTab[bi][li][g].int
-            if m > truncU.int:
+            if m > tBi:
               let base = li * bg.wpb.int + g * 4
               # Table C.8: Fs=0 emits all Ng sign bits per group,
               # even past the band edge (0 there).
@@ -401,7 +466,7 @@ proc jxsEncodeLossless*(w, h: int, planesU: seq[seq[uint16]], bd: uint8,
                 var sgn: uint8 = 0
                 if x < bg.wpb.int and segs[bi][base + k] < 0: sgn = 1
                 datW.putBit(sgn)
-              for plane in countdown(m - 1, truncU.int):
+              for plane in countdown(m - 1, tBi):
                 for k in 0..<4:
                   let x = g * 4 + k
                   var bit: uint8 = 0
@@ -473,6 +538,36 @@ proc encodeJxsRgb8*(w, h: int, rgb: openArray[uint8], nlx: uint8 = 1,
     g[i] = rgb[3*i+1]
     b[i] = rgb[3*i+2]
   jxsEncodeLossless(w, h, @[r, g, b], 8, 1, nlx, nly, q, multiSlice)
+
+proc encodeJxsHighPrec8*(w, h: int, px: openArray[uint8],
+    q: uint8, multiSlice = false): ImageResult[seq[uint8]] =
+  ## Gray still through the (Bw=20, Fq=8) high-precision path: 8
+  ## fractional bits through the transform, lossy via `q`.
+  if px.len != w * h:
+    return err[seq[uint8]](decodingError("jxs enc: pixel count"))
+  var pl = newSeq[uint16](w * h)
+  for i in 0..<pl.len: pl[i] = px[i]
+  jxsEncodeLossless(w, h, @[pl], 8, 0, 1, 1, q, multiSlice, @[], 20, 8)
+
+proc encodeJxsCfa8*(w, h: int, r, g1, g2, b: openArray[uint8],
+    e1, e2, ct, cf: uint8, nlx: uint8 = 1, nly: uint8 = 1,
+    q: uint8 = 0, multiSlice = false): ImageResult[seq[uint8]] =
+  ## 4-component CFA still (Star-Tetrix, Cpih=3) in [R, G1, G2, B]
+  ## plane order; `q=0` lossless. Emits CTS + CRG markers.
+  if r.len != w * h or g1.len != w * h or g2.len != w * h or
+      b.len != w * h:
+    return err[seq[uint8]](decodingError("jxs enc: pixel count"))
+  var pr = newSeq[uint16](w * h)
+  var pg1 = newSeq[uint16](w * h)
+  var pg2 = newSeq[uint16](w * h)
+  var pb = newSeq[uint16](w * h)
+  for i in 0..<w*h:
+    pr[i] = r[i]
+    pg1[i] = g1[i]
+    pg2[i] = g2[i]
+    pb[i] = b[i]
+  jxsEncodeLossless(w, h, @[pr, pg1, pg2, pb], 8, 3, nlx, nly, q,
+    multiSlice, @[], 0, 0, 0, 0, 0, 0, 0, 0, 0, @[], e1, e2, ct, cf)
 
 proc encodeJxsNltQuad8*(w, h: int, px: openArray[uint8], dco: int32 = 0,
     nlx: uint8 = 1, nly: uint8 = 1, q: uint8 = 0,

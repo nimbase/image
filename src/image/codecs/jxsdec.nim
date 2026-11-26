@@ -1976,6 +1976,277 @@ proc jxsForwardRct*(planes: var seq[seq[int]]) =
     planes[1][x] = b - g
     planes[2][x] = r - g
 
+# ---------------------------------------------------------------------------
+# Annex F.5 Star-Tetrix (Cpih=3): CFA colour transform + CTS/CRG.
+
+type
+  JxsCts* = object
+    cf*: uint8 # 0 = full, 3 = restricted in-line
+    e1*: uint8 # 0..3
+    e2*: uint8 # 0..3
+
+proc jxsParseCts*(body: openArray[uint8]): ImageResult[JxsCts] =
+  ## Annex A.4.8 Tables A.19/A.20: Reserved|Cf then e1|e2 (2 bytes).
+  if body.len != 2:
+    return err[JxsCts](decodingError("jxs: CTS body must be 2 bytes"))
+  if (body[0] shr 4) != 0:
+    return err[JxsCts](decodingError("jxs: CTS reserved nibble"))
+  let cf = body[0] and 0x0F
+  if cf != 0 and cf != 3:
+    return err[JxsCts](decodingError("jxs: CTS Cf reserved"))
+  let e1 = (body[1] shr 4) and 0x0F
+  let e2 = body[1] and 0x0F
+  if e1 > 3 or e2 > 3:
+    return err[JxsCts](decodingError("jxs: CTS e1/e2 exceed 3"))
+  ok(JxsCts(cf: cf, e1: e1, e2: e2))
+
+proc jxsParseCrg*(body: openArray[uint8], nc: int):
+    ImageResult[seq[tuple[x, y: uint16]]] =
+  ## Annex A.4.9: 4 bytes per component (Xcrg + Ycrg, 1/65536 units).
+  if body.len != 4 * nc:
+    return err[seq[tuple[x, y: uint16]]](
+      decodingError("jxs: CRG body must be 4*Nc"))
+  var es: seq[tuple[x, y: uint16]] = @[]
+  for c in 0..<nc:
+    es.add((u16be(body, 4*c), u16be(body, 4*c+2)))
+  ok(es)
+
+func jxsQuant12*(v: uint16): uint8 =
+  if v == 0: 0 elif v == 32768: 1 else: 2
+
+func jxsCfaPatternType*(es: seq[tuple[x, y: uint16]]): int =
+  ## Table F.9: RGGB/BGGR → 0; GRBG/GBRG → 1; else -1 (reserved).
+  if es.len < 4: return -1
+  var q: array[4, tuple[x, y: uint8]] = [
+    (jxsQuant12(es[0].x), jxsQuant12(es[0].y)),
+    (jxsQuant12(es[1].x), jxsQuant12(es[1].y)),
+    (jxsQuant12(es[2].x), jxsQuant12(es[2].y)),
+    (jxsQuant12(es[3].x), jxsQuant12(es[3].y))]
+  let rggb = [(0'u8, 0'u8), (1'u8, 0'u8), (0'u8, 1'u8), (1'u8, 1'u8)]
+  let bggr = [(1'u8, 1'u8), (1'u8, 0'u8), (0'u8, 1'u8), (0'u8, 0'u8)]
+  let grbg = [(1'u8, 0'u8), (0'u8, 0'u8), (1'u8, 1'u8), (0'u8, 1'u8)]
+  let gbrg = [(0'u8, 1'u8), (0'u8, 0'u8), (1'u8, 1'u8), (1'u8, 0'u8)]
+  if q == rggb or q == bggr: 0
+  elif q == grbg or q == gbrg: 1
+  else: -1
+
+func jxsDisplacement*(ct: int, c: int): tuple[dx, dy: int] =
+  ## Table F.10 (δx, δy); (-1, -1) when undefined.
+  if c < 0 or c > 3: return (-1, -1)
+  if ct == 0:
+    const t = [(0, 1), (1, 1), (0, 0), (1, 0)]
+    return t[c]
+  if ct == 1:
+    const t = [(1, 1), (0, 1), (1, 0), (0, 0)]
+    return t[c]
+  (-1, -1)
+
+func jxsComponentAt*(ct: int, dx, dy: uint8): int =
+  ## Table F.11 inverse k[δx,δy] map; -1 when undefined.
+  if ct == 0:
+    if dx == 0 and dy == 1: return 0
+    if dx == 1 and dy == 1: return 1
+    if dx == 0 and dy == 0: return 2
+    if dx == 1 and dy == 0: return 3
+    return -1
+  if ct == 1:
+    if dx == 1 and dy == 1: return 0
+    if dx == 0 and dy == 1: return 1
+    if dx == 1 and dy == 0: return 2
+    if dx == 0 and dy == 0: return 3
+    return -1
+  -1
+
+func jxsStAccess*(wf, hf, cf, ct: int, dx, dy: array[4, int],
+    c, x, y, rx, ry: int): tuple[cc, xx, yy: int] =
+  ## Annex F.5.7 Table F.12 sub-pixel access with reflection.
+  var rxx = rx
+  var ryy = ry
+  let twoWf = 2 * wf
+  let twoHf = 2 * hf
+  let twoX = 2 * x
+  let twoY = 2 * y
+  if twoX + rxx + dx[c] < 0 or twoX + rxx + dx[c] >= twoWf:
+    rxx = -rxx
+  let inLine = cf == 3 and (ryy + dy[c] < 0 or ryy + dy[c] > 1)
+  let grid = twoY + ryy + dy[c] < 0 or twoY + ryy + dy[c] >= twoHf
+  if inLine or grid: ryy = -ryy
+  let xx = (twoX + rxx + dx[c]) div 2
+  let yy = (twoY + ryy + dy[c]) div 2
+  let qx = ((rxx + dx[c]) mod 2 + 2) mod 2
+  let qy = ((ryy + dy[c]) mod 2 + 2) mod 2
+  (jxsComponentAt(ct, qx.uint8, qy.uint8), xx, yy)
+
+proc jxsInverseStarTetrix*(planes: var seq[seq[int]], wf, hf: int,
+    e1, e2: uint8, ct, cf: int): ImageResult[bool] =
+  ## Annex F.5 inverse: O[4] (post-DWT) → Ω = [R, G1, G2, B].
+  ## Components ≥ 4 ride through unchanged (CWD tail).
+  if planes.len < 4:
+    return err[bool](decodingError("jxs: Star-Tetrix needs Nc >= 4"))
+  if ct < 0 or ct > 1:
+    return err[bool](decodingError("jxs: Star-Tetrix Ct reserved"))
+  if cf != 0 and cf != 3:
+    return err[bool](decodingError("jxs: Star-Tetrix Cf reserved"))
+  for i in 0..<4:
+    if planes[i].len != wf * hf:
+      return err[bool](decodingError("jxs: Star-Tetrix plane size"))
+  var dx: array[4, int]
+  var dy: array[4, int]
+  for c in 0..<4:
+    let (ddx, ddy) = jxsDisplacement(ct, c)
+    if ddx < 0: return err[bool](decodingError("jxs: bad displacement"))
+    dx[c] = ddx
+    dy[c] = ddy
+  let n = wf * hf
+  proc rd(pl: seq[seq[int]], c, x, y, rx, ry: int): int =
+    let (cc, xx, yy) = jxsStAccess(wf, hf, cf, ct, dx, dy, c, x, y, rx, ry)
+    if cc < 0 or xx < 0 or yy < 0 or xx >= wf or yy >= hf:
+      return 0
+    pl[cc][yy * wf + xx]
+  let o0 = planes[0]
+  let o1 = planes[1]
+  let o2 = planes[2]
+  let o3 = planes[3]
+  let o = @[o0, o1, o2, o3]
+  # step 1: inverse average (Table F.5)
+  var w10 = newSeq[int](n)
+  for y in 0..<hf:
+    for x in 0..<wf:
+      let s = rd(o, 0, x, y, -1, -1) + rd(o, 0, x, y, 1, -1) +
+        rd(o, 0, x, y, -1, 1) + rd(o, 0, x, y, 1, 1)
+      w10[y * wf + x] = o[0][y * wf + x] - jxsFDivPow2(s, 3)
+  # step 2: inverse delta (Table F.6)
+  let w1 = @[w10, o1, o2, o3]
+  var w23 = newSeq[int](n)
+  for y in 0..<hf:
+    for x in 0..<wf:
+      let s = rd(w1, 3, x, y, -1, -1) + rd(w1, 3, x, y, 1, -1) +
+        rd(w1, 3, x, y, -1, 1) + rd(w1, 3, x, y, 1, 1)
+      w23[y * wf + x] = w1[3][y * wf + x] + jxsFDivPow2(s, 2)
+  # step 3: inverse Y (Table F.7)
+  let w2 = @[w1[0], w1[1], w1[2], w23]
+  let t1 = 1 shl e1.int
+  let t2 = 1 shl e2.int
+  var w30 = newSeq[int](n)
+  var w33 = newSeq[int](n)
+  for y in 0..<hf:
+    for x in 0..<wf:
+      let bl = rd(w2, 0, x, y, -1, 0)
+      let br = rd(w2, 0, x, y, 1, 0)
+      let rt = rd(w2, 0, x, y, 0, -1)
+      let rb = rd(w2, 0, x, y, 0, 1)
+      w30[y * wf + x] = w2[0][y * wf + x] -
+        jxsFDivPow2(t2 * (bl + br) + t1 * (rt + rb), 3)
+      let bt = rd(w2, 3, x, y, 0, -1)
+      let bb = rd(w2, 3, x, y, 0, 1)
+      let rl = rd(w2, 3, x, y, -1, 0)
+      let rr = rd(w2, 3, x, y, 1, 0)
+      w33[y * wf + x] = w2[3][y * wf + x] -
+        jxsFDivPow2(t2 * (bt + bb) + t1 * (rl + rr), 3)
+  # step 4: inverse CbCr (Table F.8)
+  let w3 = @[w30, w2[1], w2[2], w33]
+  var w41 = newSeq[int](n)
+  var w42 = newSeq[int](n)
+  for y in 0..<hf:
+    for x in 0..<wf:
+      let s1 = rd(w3, 1, x, y, -1, 0) + rd(w3, 1, x, y, 1, 0) +
+        rd(w3, 1, x, y, 0, -1) + rd(w3, 1, x, y, 0, 1)
+      w41[y * wf + x] = w3[1][y * wf + x] + jxsFDivPow2(s1, 2)
+      let s2 = rd(w3, 2, x, y, -1, 0) + rd(w3, 2, x, y, 1, 0) +
+        rd(w3, 2, x, y, 0, -1) + rd(w3, 2, x, y, 0, 1)
+      w42[y * wf + x] = w3[2][y * wf + x] + jxsFDivPow2(s2, 2)
+  # Table F.4 reorder: Ω = [R=w42, G1=w33, G2=w30, B=w41]
+  planes[0] = move(w42)
+  planes[1] = move(w33)
+  planes[2] = move(w30)
+  planes[3] = move(w41)
+  ok(true)
+
+proc jxsForwardStarTetrix*(planes: var seq[seq[int]], wf, hf: int,
+    e1, e2: uint8, ct, cf: int): ImageResult[bool] =
+  ## Annex F.5 forward: Ω = [R, G1, G2, B] → O[4] (pre-DWT bands
+  ## [Ya, Cb, Cr, Δ]). Exact inverse of `jxsInverseStarTetrix`.
+  if planes.len < 4:
+    return err[bool](decodingError("jxs: Star-Tetrix needs Nc >= 4"))
+  if ct < 0 or ct > 1:
+    return err[bool](decodingError("jxs: Star-Tetrix Ct reserved"))
+  if cf != 0 and cf != 3:
+    return err[bool](decodingError("jxs: Star-Tetrix Cf reserved"))
+  for i in 0..<4:
+    if planes[i].len != wf * hf:
+      return err[bool](decodingError("jxs: Star-Tetrix plane size"))
+  var dx: array[4, int]
+  var dy: array[4, int]
+  for c in 0..<4:
+    let (ddx, ddy) = jxsDisplacement(ct, c)
+    if ddx < 0: return err[bool](decodingError("jxs: bad displacement"))
+    dx[c] = ddx
+    dy[c] = ddy
+  let n = wf * hf
+  proc rd(pl: seq[seq[int]], c, x, y, rx, ry: int): int =
+    let (cc, xx, yy) = jxsStAccess(wf, hf, cf, ct, dx, dy, c, x, y, rx, ry)
+    if cc < 0 or xx < 0 or yy < 0 or xx >= wf or yy >= hf:
+      return 0
+    pl[cc][yy * wf + xx]
+  # 1) reorder [R, G1, G2, B] → band layout [G2, B, R, G1]
+  let rIn = planes[0]
+  let g1In = planes[1]
+  let g2In = planes[2]
+  let bIn = planes[3]
+  let w4 = @[g2In, bIn, rIn, g1In]
+  # 2) forward CbCr: subtract green-neighbour averages
+  var w31 = newSeq[int](n)
+  var w32 = newSeq[int](n)
+  for y in 0..<hf:
+    for x in 0..<wf:
+      let s1 = rd(w4, 1, x, y, -1, 0) + rd(w4, 1, x, y, 1, 0) +
+        rd(w4, 1, x, y, 0, -1) + rd(w4, 1, x, y, 0, 1)
+      w31[y * wf + x] = w4[1][y * wf + x] - jxsFDivPow2(s1, 2)
+      let s2 = rd(w4, 2, x, y, -1, 0) + rd(w4, 2, x, y, 1, 0) +
+        rd(w4, 2, x, y, 0, -1) + rd(w4, 2, x, y, 0, 1)
+      w32[y * wf + x] = w4[2][y * wf + x] - jxsFDivPow2(s2, 2)
+  let w3 = @[w4[0], w31, w32, w4[3]]
+  # 3) forward Y: add chroma weighted sums back
+  let t1 = 1 shl e1.int
+  let t2 = 1 shl e2.int
+  var w20 = newSeq[int](n)
+  var w23 = newSeq[int](n)
+  for y in 0..<hf:
+    for x in 0..<wf:
+      let bl = rd(w3, 0, x, y, -1, 0)
+      let br = rd(w3, 0, x, y, 1, 0)
+      let rt = rd(w3, 0, x, y, 0, -1)
+      let rb = rd(w3, 0, x, y, 0, 1)
+      w20[y * wf + x] = w3[0][y * wf + x] +
+        jxsFDivPow2(t2 * (bl + br) + t1 * (rt + rb), 3)
+      let bt = rd(w3, 3, x, y, 0, -1)
+      let bb = rd(w3, 3, x, y, 0, 1)
+      let rl = rd(w3, 3, x, y, -1, 0)
+      let rr = rd(w3, 3, x, y, 1, 0)
+      w23[y * wf + x] = w3[3][y * wf + x] +
+        jxsFDivPow2(t2 * (bt + bb) + t1 * (rl + rr), 3)
+  # 4) forward delta: subtract Y corner average
+  let w2 = @[w20, w3[1], w3[2], w23]
+  var w13 = newSeq[int](n)
+  for y in 0..<hf:
+    for x in 0..<wf:
+      let s = rd(w2, 3, x, y, -1, -1) + rd(w2, 3, x, y, 1, -1) +
+        rd(w2, 3, x, y, -1, 1) + rd(w2, 3, x, y, 1, 1)
+      w13[y * wf + x] = w2[3][y * wf + x] - jxsFDivPow2(s, 2)
+  # 5) forward average: add Δ corner average into Ya
+  let w1 = @[w2[0], w2[1], w2[2], w13]
+  var o0 = newSeq[int](n)
+  for y in 0..<hf:
+    for x in 0..<wf:
+      let s = rd(w1, 0, x, y, -1, -1) + rd(w1, 0, x, y, 1, -1) +
+        rd(w1, 0, x, y, -1, 1) + rd(w1, 0, x, y, 1, 1)
+      o0[y * wf + x] = w1[0][y * wf + x] + jxsFDivPow2(s, 3)
+  planes[0] = move(o0)
+  planes[1] = w1[1]
+  planes[2] = w1[2]
+  planes[3] = move(w13)
+  ok(true)
+
 func jxsYcbcrPixel*(y, cb, cr: int, bd: uint8, fullRange = false):
     tuple[r, g, b: int] =
   ## BT.709 YCbCr→RGB, integer-exact. `fullRange` selects full swing
@@ -2029,6 +2300,186 @@ func jxsLog2Sy*(sy: uint8): int =
   of 2: 1
   of 4: 2
   else: -1
+
+# ---------------------------------------------------------------------------
+# ISO/IEC 21122-2 profile / level / sublevel conformance (Annex A).
+# Verifies the codestream's own Ppih/Plev/Lcod declarations; reserved
+# code points and violated bounds fail the stream (never decode under
+# an unknown profile). Buffer-model bounds need a channel rate and
+# stay out of scope.
+
+type
+  JxsProfile* = enum
+    jpUnrestricted, jpLight42210, jpLight44412, jpLightSubline42210,
+    jpMain42210, jpMain44412, jpMain444412, jpHigh44412, jpHigh444412
+
+  JxsChroma* = enum
+    jcMono, jc422, jc420, jc444, jc4224, jc4444, jcOther
+
+func jxsProfileOf*(ppih: uint16): tuple[ok: bool, p: JxsProfile] =
+  case ppih
+  of 0x0000: (true, jpUnrestricted)
+  of 0x1500: (true, jpLight42210)
+  of 0x1A00: (true, jpLight44412)
+  of 0x2500: (true, jpLightSubline42210)
+  of 0x3540: (true, jpMain42210)
+  of 0x3A40: (true, jpMain44412)
+  of 0x3E40: (true, jpMain444412)
+  of 0x4A40: (true, jpHigh44412)
+  of 0x4E40: (true, jpHigh444412)
+  else: (false, jpUnrestricted)
+
+func jxsMaxBpp*(p: JxsProfile): uint32 =
+  ## Table A.4 max-decoded-bpp (Full sublevel); 0 = none.
+  case p
+  of jpLight42210, jpLightSubline42210, jpMain42210: 20
+  of jpLight44412, jpMain44412, jpHigh44412: 36
+  of jpMain444412, jpHigh444412: 48
+  else: 0
+
+func jxsClassifyChroma*(sx, sy: seq[uint8]): JxsChroma =
+  if sx.len == 1: return jcMono
+  if sx.len == 3 and sx == @[1'u8, 1, 1] and sy == @[1'u8, 1, 1]:
+    return jc444
+  if sx.len == 3 and sx == @[1'u8, 2, 2] and sy == @[1'u8, 1, 1]:
+    return jc422
+  if sx.len == 3 and sx == @[1'u8, 2, 2] and sy == @[1'u8, 2, 2]:
+    return jc420
+  if sx.len == 4 and sx == @[1'u8, 1, 1, 1] and sy == @[1'u8, 1, 1, 1]:
+    return jc4444
+  if sx.len == 4 and sx == @[1'u8, 2, 2, 1] and sy == @[1'u8, 1, 1, 1]:
+    return jc4224
+  jcOther
+
+func jxsLevelBounds*(hi: uint8): tuple[ok: bool, w, h: uint32, l: uint64] =
+  ## Plev high byte → (Wmax, Hmax, Lmax); unknown → not ok.
+  case hi
+  of 0x00: (true, 0, 0, 0) # unrestricted, no bounds
+  of 0x10: (true, 2048, 8192, 4194304)
+  of 0x20: (true, 4096, 16384, 8912896)
+  of 0x24: (true, 4096, 16384, 16777216)
+  of 0x28: (true, 4096, 16384, 16777216)
+  of 0x30: (true, 8192, 32768, 35651584)
+  of 0x34: (true, 8192, 32768, 67108864)
+  of 0x38: (true, 8192, 32768, 67108864)
+  of 0x40: (true, 10240, 40960, 104857600)
+  else: (false, 0, 0, 0)
+
+func jxsSublevelNbpp*(lo: uint8): tuple[known: bool, nbpp: uint32,
+    full: bool] =
+  ## Plev low byte → nominal bpp (Table A.13); Full defers to profile.
+  if lo == 0x10: return (true, 12, false)
+  if lo == 0x80: return (true, 0, true)
+  if (lo and 0x0F) == 0x04: return (true, 3, false)
+  if (lo and 0x0F) == 0x08: return (true, 6, false)
+  if (lo and 0x0F) == 0x0C: return (true, 9, false)
+  if lo == 0x00: return (true, 0, false)
+  (false, 0, false)
+
+proc jxsCheckProfile*(h: JxsHeaders): ImageResult[bool] =
+  ## Tables A.1/A.2/A.3: every codestream-observable constraint of the
+  ## declared profile. Unrestricted (Ppih=0) always passes.
+  if h.pih.ppih == 0: return ok(true)
+  let (pok, prof) = jxsProfileOf(h.pih.ppih)
+  if not pok:
+    return err[bool](decodingError("jxs: reserved Ppih profile"))
+  let nc = h.comps.len
+  var maxComp = 3
+  if prof in [jpMain444412, jpHigh444412]: maxComp = 4
+  if nc > maxComp:
+    return err[bool](decodingError("jxs: profile component count"))
+  var depthsOk = true
+  for c in h.comps:
+    case prof
+    of jpLight42210, jpLightSubline42210, jpMain42210:
+      if c.bitDepth != 8 and c.bitDepth != 10: depthsOk = false
+    of jpLight44412, jpMain44412, jpHigh44412, jpMain444412, jpHigh444412:
+      if c.bitDepth != 8 and c.bitDepth != 10 and c.bitDepth != 12:
+        depthsOk = false
+    else: discard
+  if not depthsOk:
+    return err[bool](decodingError("jxs: profile bit depth"))
+  var sx: seq[uint8] = @[]
+  var sy: seq[uint8] = @[]
+  for c in h.comps:
+    sx.add(c.sx)
+    sy.add(c.sy)
+  let cf = jxsClassifyChroma(sx, sy)
+  var chromaOk = false
+  case prof
+  of jpLight42210, jpLightSubline42210, jpMain42210:
+    chromaOk = cf in [jcMono, jc422]
+  of jpLight44412, jpMain44412, jpHigh44412:
+    chromaOk = cf in [jcMono, jc422, jc444]
+  of jpMain444412, jpHigh444412:
+    chromaOk = cf in [jcMono, jc422, jc444, jc4224, jc4444]
+  else: chromaOk = true
+  if not chromaOk:
+    return err[bool](decodingError("jxs: profile chroma format"))
+  let nlxMin: uint8 = if prof == jpLightSubline42210: 0 else: 1
+  if h.pih.nlx < nlxMin or h.pih.nlx > 5:
+    return err[bool](decodingError("jxs: profile NL,x range"))
+  var maxNly: uint8 = 1
+  if prof in [jpHigh44412, jpHigh444412]: maxNly = 2
+  if prof == jpLightSubline42210: maxNly = 0
+  if h.pih.nly > maxNly:
+    return err[bool](decodingError("jxs: profile NL,y cap"))
+  if h.pih.nlx < h.pih.nly:
+    return err[bool](decodingError("jxs: profile NL,x < NL,y"))
+  let qpOk =
+    if prof in [jpLight42210, jpLight44412]: h.pih.qpih == 0
+    else: h.pih.qpih <= 1
+  if not qpOk:
+    return err[bool](decodingError("jxs: profile Qpih"))
+  if h.pih.hsl.uint32 * (1'u32 shl h.pih.nly) != 16:
+    return err[bool](decodingError("jxs: profile slice height"))
+  if prof in [jpLight42210, jpLight44412]:
+    if h.pih.cw != 0:
+      return err[bool](decodingError("jxs: profile needs Cw=0"))
+  elif prof == jpLightSubline42210:
+    var maxSx: uint8 = 1
+    for s in sx:
+      if s > maxSx: maxSx = s
+    let cs: uint32 =
+      if h.pih.cw == 0: h.pih.wf.uint32
+      else: 8'u32 * h.pih.cw.uint32 * maxSx.uint32 *
+        (1'u32 shl h.pih.nlx)
+    if cs > 2048:
+      return err[bool](decodingError("jxs: profile Cs cap"))
+  else:
+    if h.pih.cw != 0 and h.pih.nly != 0:
+      return err[bool](decodingError("jxs: profile Cw needs NL,y=0"))
+  ok(true)
+
+proc jxsCheckLevel*(h: JxsHeaders, csLen: int): ImageResult[bool] =
+  ## Table A.6/A.12/A.13 + §A.4.1/§A.4.2: level, sublevel and CBR size.
+  let hi = uint8(h.pih.plev shr 8)
+  let (lok, wmax, hmax, lmax) = jxsLevelBounds(hi)
+  if not lok:
+    return err[bool](decodingError("jxs: reserved Plev level"))
+  let lo = uint8(h.pih.plev and 0xFF)
+  let (sknown, nbpp, full) = jxsSublevelNbpp(lo)
+  if hi == 0 and not sknown:
+    discard # both unrestricted-ish; nothing to bound
+  if hi != 0:
+    if uint32(h.pih.wf) > wmax or uint32(h.pih.hf) > hmax or
+        uint64(h.pih.wf) * uint64(h.pih.hf) > lmax:
+      return err[bool](decodingError("jxs: level bounds"))
+  if full:
+    if h.pih.ppih == 0:
+      return err[bool](decodingError("jxs: Full sublevel needs profile"))
+    let (_, prof) = jxsProfileOf(h.pih.ppih)
+    let mb = jxsMaxBpp(prof)
+    if mb == 0:
+      return err[bool](decodingError("jxs: Full sublevel needs profile"))
+    if lmax > 0 and uint64(csLen) > lmax * mb div 8:
+      return err[bool](decodingError("jxs: coded size over Ssl,max"))
+  elif sknown and nbpp > 0 and lmax > 0:
+    if uint64(csLen) > lmax * nbpp div 8:
+      return err[bool](decodingError("jxs: coded size over Ssl,max"))
+  if h.pih.lcod != 0 and h.pih.lcod.int != csLen:
+    return err[bool](decodingError("jxs: Lcod mismatch"))
+  ok(true)
 
 proc jxsGatherPrecinct*(prec: JxsPrecinctPlan, plan: JxsPicturePlan,
     h: JxsHeaders, deq: seq[seq[int]],
@@ -2196,17 +2647,14 @@ proc jxsDecodeSlice*(sliceData: openArray[uint8], sPlan: JxsSlicePlan,
 
 proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
     plan: JxsPicturePlan): ImageResult[seq[seq[int]]] =
-  ## Supported matrix: uniform depth, Cpih 0/1 (YCbCr 444/422/420 or
-  ## RCT), 1-4 comps, NLT quad/extended output, no CWD/Star-Tetrix.
+  ## Supported matrix: uniform depth, Cpih 0/1/3 (YCbCr 444/422/420,
+  ## RCT, Star-Tetrix CFA), 1-8 comps, NLT quad/extended output, CWD.
   ## Returns post-colour-transform sample planes (row-major ints).
-  if h.pih.cpih == 3:
-    return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
-      "jxs: Star-Tetrix transform"))
   if plan.sd > 0 and h.pih.cpih == 1 and
       (h.pih.nc.int - plan.sd.int) < 3:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
       "jxs: RCT needs Nc-Sd >= 3"))
-  if h.pih.cpih != 0 and h.pih.cpih != 1:
+  if h.pih.cpih != 0 and h.pih.cpih != 1 and h.pih.cpih != 3:
     return err[seq[seq[int]]](unsupportedError(ukGenericFeature,
       "jxs: colour transform"))
   let b0 = h.comps[0].bitDepth
@@ -2233,6 +2681,11 @@ proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
       "jxs: picture exceeds 268 Mpixel"))
   if h.slices.len != plan.slices.len:
     return err[seq[seq[int]]](decodingError("jxs: slice count mismatch"))
+  # Declared profile / level / sublevel / CBR size must hold.
+  let gpR = jxsCheckProfile(h)
+  if not gpR.ok: return err[seq[seq[int]]](gpR.err)
+  let glR = jxsCheckLevel(h, cs.len)
+  if not glR.ok: return err[seq[seq[int]]](glR.err)
   let nc = h.comps.len
   let wf = h.pih.wf.int
   let hf = h.pih.hf.int
@@ -2281,8 +2734,34 @@ proc jxsDecodePicture*(cs: openArray[uint8], h: JxsHeaders,
       if samples[i][x] < -guard: samples[i][x] = -guard
       elif samples[i][x] > guard: samples[i][x] = guard
   if h.pih.cpih == 1:
+    if h.comps.len < 3:
+      return err[seq[seq[int]]](decodingError("jxs: RCT transform OOB"))
     var refs = samples
     jxsInverseRct(refs)
+    samples = move(refs)
+  elif h.pih.cpih == 3:
+    # Star-Tetrix: 4 CFA inputs at full picture resolution, trailing
+    # components pass through (Annex F.2 Table F.1, A.4.7).
+    if h.comps.len < 4:
+      return err[seq[seq[int]]](decodingError("jxs: Star-Tetrix needs Nc>=4"))
+    for i in 0..<4:
+      if h.comps[i].sx != 1 or h.comps[i].sy != 1:
+        return err[seq[seq[int]]](decodingError(
+          "jxs: Star-Tetrix needs full-res inputs"))
+    if not h.hasCrg:
+      return err[seq[seq[int]]](decodingError("jxs: Cpih=3 needs CRG"))
+    let ctsR = jxsParseCts(h.cts)
+    if not ctsR.ok: return err[seq[seq[int]]](ctsR.err)
+    let cts = ctsR.value
+    let crgR = jxsParseCrg(h.crg, h.comps.len)
+    if not crgR.ok: return err[seq[seq[int]]](crgR.err)
+    let ct = jxsCfaPatternType(crgR.value)
+    if ct < 0:
+      return err[seq[seq[int]]](decodingError("jxs: reserved CFA pattern"))
+    var refs = samples
+    let tR = jxsInverseStarTetrix(refs, wf, hf, cts.e1, cts.e2, ct,
+      cts.cf.int)
+    if not tR.ok: return err[seq[seq[int]]](tR.err)
     samples = move(refs)
   ok(samples)
 
@@ -2524,6 +3003,29 @@ proc decodeJxsRawEx*(data: openArray[uint8], matrix = -1,
           sampAt(rawPlanes[2], bd, cy*cwC+cx), bd, fr)
         px[y*w.int+x] = Rgba[uint16](data: [r.uint16, g.uint16, b.uint16,
           sampAt(rawPlanes[3], bd, y*w.int+x).uint16])
+    return ok(DynamicImage(kind: dkRgba16,
+      rgba16: Rgba16Image(width: w, height: hh, pixels: move(px))))
+  if h.pih.cpih == 3 and nc >= 4:
+    # CFA quad [R, G1, G2, B] carried as RGBA (lossless container;
+    # demosaicing is out of scope). Trailing comps must be full-res
+    # (suppressed ones are) — map the first four.
+    for i in 0..<4:
+      if compW[i] != w.int or compH[i] != hh.int:
+        return err[DynamicImage](unsupportedError(ukGenericFeature,
+          "jxs: Star-Tetrix plane size"))
+    if bd == 8:
+      var px = newSeq[Rgba[uint8]](w.int * hh.int)
+      for i in 0..<px.len:
+        px[i] = Rgba[uint8](data: [rawPlanes[0][i], rawPlanes[1][i],
+          rawPlanes[2][i], rawPlanes[3][i]])
+      return ok(DynamicImage(kind: dkRgba8,
+        rgba8: RgbaImage(width: w, height: hh, pixels: move(px))))
+    var px = newSeq[Rgba[uint16]](w.int * hh.int)
+    for i in 0..<px.len:
+      px[i] = Rgba[uint16](data: [sampAt(rawPlanes[0], bd, i).uint16,
+        sampAt(rawPlanes[1], bd, i).uint16,
+        sampAt(rawPlanes[2], bd, i).uint16,
+        sampAt(rawPlanes[3], bd, i).uint16])
     return ok(DynamicImage(kind: dkRgba16,
       rgba16: Rgba16Image(width: w, height: hh, pixels: move(px))))
   err[DynamicImage](unsupportedError(ukGenericFeature,

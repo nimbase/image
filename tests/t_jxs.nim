@@ -641,6 +641,179 @@ test "jxs CWD suppression (Sd=1) roundtrips lossless":
     check got[2].int == eb
     check got[3] == planes[3][i].uint8
 
+test "jxs CTS/CRG parse vectors":
+  # Cf=0, e1=1, e2=2.
+  let c0 = jxsParseCts(@[0x00'u8, 0x12])
+  check c0.ok
+  check c0.value.cf == 0 and c0.value.e1 == 1 and c0.value.e2 == 2
+  # Cf=3, e1=e2=3.
+  let c3 = jxsParseCts(@[0x03'u8, 0x33])
+  check c3.ok
+  check c3.value.cf == 3
+  check not jxsParseCts(@[0x10'u8, 0x00]).ok # reserved nibble
+  check not jxsParseCts(@[0x01'u8, 0x00]).ok # reserved Cf
+  check not jxsParseCts(@[0x00'u8, 0x44]).ok # e > 3
+  check not jxsParseCts(@[0x00'u8]).ok # short
+  # RGGB registration -> Ct=0; GRBG -> Ct=1; junk -> -1.
+  let rg = jxsParseCrg(@[0'u8, 0, 0, 0, 0x80, 0, 0, 0,
+    0, 0, 0x80, 0, 0x80, 0, 0x80, 0], 4)
+  check rg.ok
+  check jxsCfaPatternType(rg.value) == 0
+  check jxsDisplacement(0, 2) == (0, 0)
+  check jxsComponentAt(0, 0, 1) == 0
+  let gr = jxsParseCrg(@[0x80'u8, 0, 0, 0, 0, 0, 0, 0,
+    0x80, 0, 0x80, 0, 0, 0, 0x80, 0], 4)
+  check gr.ok
+  check jxsCfaPatternType(gr.value) == 1
+  check jxsDisplacement(1, 0) == (1, 1)
+  check jxsComponentAt(1, 1, 1) == 0
+  check jxsCfaPatternType(@[(0'u16, 0'u16), (0'u16, 5'u16),
+    (0'u16, 0'u16), (0'u16, 0'u16)]) == -1
+  check not jxsParseCrg(@[0'u8, 0, 0], 1).ok # length
+
+test "jxs Star-Tetrix forward/inverse roundtrips in place":
+  let (w, h) = (10, 8)
+  var pls: seq[seq[int]] = @[]
+  for c in 0..<4:
+    var p = newSeq[int](w * h)
+    for i in 0..<w*h: p[i] = (i * (7 + c * 3) + c) mod 251 - 125
+    pls.add(move(p))
+  let orig = pls
+  var fwd = pls
+  check jxsForwardStarTetrix(fwd, w, h, 1, 2, 0, 0).ok
+  var back = fwd
+  check jxsInverseStarTetrix(back, w, h, 1, 2, 0, 0).ok
+  check back == orig
+  # Cf=3 (in-line) + Ct=1 also roundtrips.
+  var fwd2 = orig
+  check jxsForwardStarTetrix(fwd2, w, h, 3, 0, 1, 3).ok
+  var back2 = fwd2
+  check jxsInverseStarTetrix(back2, w, h, 3, 0, 1, 3).ok
+  check back2 == orig
+
+test "jxs Star-Tetrix CFA still roundtrips losslessly":
+  # 4 CFA comps through the full codestream (CTS + CRG on the wire).
+  let (w, h) = (12, 10)
+  var r = newSeq[uint8](w * h)
+  var g1 = newSeq[uint8](w * h)
+  var g2 = newSeq[uint8](w * h)
+  var b = newSeq[uint8](w * h)
+  for i in 0..<w*h:
+    r[i] = uint8((i * 13 + 5) mod 251)
+    g1[i] = uint8((i * 29 + 7) mod 251)
+    g2[i] = uint8((i * 17 + 101) mod 251)
+    b[i] = uint8((i * 7 + 11) mod 251)
+  let enc = encodeJxsCfa8(w, h, r, g1, g2, b, 1, 2, 0, 0)
+  check enc.ok
+  let h0 = parseJxsCodestream(enc.value)
+  check h0.ok
+  check h0.value.pih.cpih == 3
+  check h0.value.hasCts
+  check h0.value.hasCrg
+  let dec = decodeJxsRaw(enc.value)
+  check dec.ok
+  check dec.value.kind == dkRgba8
+  for i in 0..<w*h:
+    check dec.value.rgba8.pixels[i].data == [r[i], g1[i], g2[i], b[i]]
+  # Missing CRG fails cleanly (Cpih=3 requires it).
+  var stripped: seq[uint8] = @[]
+  var k = 0
+  let cs = enc.value
+  while k < cs.len:
+    if k + 3 < cs.len and cs[k] == 0xFF and cs[k+1] == 0x19:
+      let ln = (cs[k+2].int shl 8) or cs[k+3].int
+      k += 2 + ln
+    else:
+      stripped.add(cs[k])
+      inc k
+  check stripped.len < cs.len # actually removed the CRG segment
+  check not decodeJxsRaw(stripped).ok
+
+test "jxs profile/level/CBR declarations verify":
+  # 16x16 gray NL1/1: Hsl=8 -> Hsl*2^NLy = 16 rows, Main444_12 shape.
+  let (w, h) = (16, 16)
+  var px = newSeq[uint8](w * h)
+  for i in 0..<px.len: px[i] = uint8((i * 37 + 3) mod 251)
+  let enc = encodeJxsGray8(w, h, px)
+  check enc.ok
+  # PIH body: Lcod @10, Ppih @14, Plev @16 (CAP empty => PIH at 6).
+  check enc.value[6] == 0xFF and enc.value[7] == 0x12
+  proc patched(base: seq[uint8], at: int, hi, lo: uint8): seq[uint8] =
+    result = base
+    result[at] = hi
+    result[at+1] = lo
+  # Valid Main444_12 + 4k1 level claim verifies.
+  let okClaim = patched(patched(enc.value, 14, 0x3A, 0x40), 16, 0x20, 0x00)
+  check decodeJxsRaw(okClaim).ok
+  # Reserved Ppih fails.
+  check not decodeJxsRaw(patched(enc.value, 14, 0x12, 0x34)).ok
+  # Reserved Plev level (high 0xFF) fails.
+  check not decodeJxsRaw(patched(enc.value, 16, 0xFF, 0x00)).ok
+  # Full sublevel (0x80) with unrestricted profile fails (§A.4.2).
+  check not decodeJxsRaw(patched(enc.value, 16, 0x00, 0x80)).ok
+  # Non-zero Lcod must match the SOC..EOC byte count.
+  var badLen = enc.value
+  badLen[10] = 0; badLen[11] = 0; badLen[12] = 0; badLen[13] = 1
+  check not decodeJxsRaw(badLen).ok
+  # ...while a truthful Lcod verifies.
+  var goodLen = enc.value
+  let n = enc.value.len
+  goodLen[10] = uint8(n shr 24); goodLen[11] = uint8((n shr 16) and 0xFF)
+  goodLen[12] = uint8((n shr 8) and 0xFF); goodLen[13] = uint8(n and 0xFF)
+  check decodeJxsRaw(goodLen).ok
+
+test "jxs high-precision (Bw=20, Fq=8) lossy is sane and bounded":
+  let (w, h) = (16, 16)
+  var px = newSeq[uint8](w * h)
+  for i in 0..<px.len: px[i] = uint8((i * 37 + 11) mod 251)
+  let enc = encodeJxsHighPrec8(w, h, px, 2)
+  check enc.ok
+  let h0 = parseJxsCodestream(enc.value)
+  check h0.ok
+  check h0.value.pih.bw == 20 and h0.value.pih.fq == 8
+  let dec = decodeJxsRaw(enc.value)
+  check dec.ok
+  var maxErr = 0
+  for i in 0..<px.len:
+    let d = abs(dec.value.luma8.pixels[i].data[0].int - px[i].int)
+    if d > maxErr: maxErr = d
+  check maxErr <= 8
+
+test "jxs WGT gains steer truncation (encoder weights)":
+  # Annex-H-style per-band (G,P): G=2 on the LL band lowers its T
+  # (Q-G), so the LL keeps more bitplanes than the flat-WGT stream.
+  # Encoder and decoder agree on T by construction (VLC is T-relative).
+  let (w, h) = (16, 16)
+  var px = newSeq[uint8](w * h)
+  for i in 0..<px.len: px[i] = uint8((i * 37 + 11) mod 251)
+  var pl = newSeq[uint16](w * h)
+  for i in 0..<pl.len: pl[i] = px[i]
+  let enc0 = jxsEncodeLossless(w, h, @[pl], 8, 0, 1, 1, 4)
+  check enc0.ok
+  # flat band ids for 1 comp NL1/1: b = β (0=LL,1=HL,2=LH,3=HH).
+  let enc1 = jxsEncodeLossless(w, h, @[pl], 8, 0, 1, 1, 4, false,
+    @[], 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    @[(2'u8, 0'u8), (0'u8, 0'u8), (0'u8, 0'u8), (0'u8, 0'u8)])
+  check enc1.ok
+  let h1 = parseJxsCodestream(enc1.value)
+  check h1.ok
+  check h1.value.wgt == @[2'u8, 0, 0, 0, 0, 0, 0, 0]
+  let dec0 = decodeJxsRaw(enc0.value)
+  check dec0.ok
+  let dec1 = decodeJxsRaw(enc1.value)
+  check dec1.ok
+  var same = true
+  for i in 0..<px.len:
+    if dec0.value.luma8.pixels[i] != dec1.value.luma8.pixels[i]:
+      same = false
+      break
+  check not same # gain changed truncation -> different output
+  var maxErr = 0
+  for i in 0..<px.len:
+    let d = abs(dec1.value.luma8.pixels[i].data[0].int - px[i].int)
+    if d > maxErr: maxErr = d
+  check maxErr <= 32
+
 test "jxs chroma-local beta drops deep LH/HH for sy=2":
   # NL 2/2 → Nβ=7. sy=2 loses one vertical level: picture β=2,3
   # (LH/HH at dy=2) have no chroma band; the rest map 1:1/proxy.
