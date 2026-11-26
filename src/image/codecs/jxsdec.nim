@@ -7,9 +7,10 @@
 # The SPECTEXT structure (marker values, PIH/CDT layouts, CAP bits,
 # header ordering rules) follows ISO/IEC 21122-1 Table A.2/A.7/etc.
 #
-# Status: framing + `jxsInfo` work. Sample decode (entropy/DWT) is
-# follow-up phases — `decodeJxsRaw`/`decodeJxs` return `ekUnsupported`
-# after the headers validate.
+# Status: framing + `jxsInfo` + picture-level conformance gates work.
+# Sample decode (entropy/DWT) is follow-up phases —
+# `decodeJxsRaw`/`decodeJxs` return `ekUnsupported` after the headers
+# validate.
 import ./../error
 import ./../dynamic
 import ./../buffer
@@ -340,6 +341,71 @@ proc parseJxsCodestream*(cs: openArray[uint8]): ImageResult[JxsHeaders] =
     return err[JxsHeaders](decodingError("jxs: Cpih=3 requires CTS"))
   if h.pih.cpih != 3 and h.hasCts:
     return err[JxsHeaders](decodingError("jxs: CTS without Cpih=3"))
+  # Picture-level conformance (Tables A.7/A.8/A.11 + Table 11 floors).
+  if h.pih.nlx == 0 or h.pih.nlx > 8:
+    return err[JxsHeaders](decodingError("jxs: NL,x must be 1..=8"))
+  if h.pih.nly > h.pih.nlx:
+    return err[JxsHeaders](unsupportedError(ukGenericFeature,
+      "jxs: NL,y > NL,x"))
+  if h.pih.hsl == 0:
+    return err[JxsHeaders](decodingError("jxs: Hsl must be >= 1"))
+  let b0 = h.comps[0].bitDepth
+  let bwFqOk = (h.pih.fq == 0 and h.pih.bw == b0) or
+    (h.pih.bw == 18 and h.pih.fq == 6) or
+    (h.pih.bw == 20 and h.pih.fq == 8)
+  if not bwFqOk:
+    return err[JxsHeaders](unsupportedError(ukGenericFeature,
+      "jxs: (Bw,Fq) outside Table A.8"))
+  if h.pih.fq == 0 and h.hasNlt:
+    return err[JxsHeaders](decodingError("jxs: NLT with Fq=0 forbidden"))
+  if h.pih.fq == 0:
+    for i, c in h.comps:
+      if c.bitDepth != b0:
+        return err[JxsHeaders](decodingError(
+          "jxs: Fq=0 requires uniform B[i]"))
+  if h.pih.bw == 18 and h.pih.fq == 6:
+    if not h.hasNlt:
+      return err[JxsHeaders](decodingError("jxs: (18,6) needs NLT"))
+    var cap23 = false
+    for bit in [2, 3]:
+      let by = bit div 8
+      let m = uint8(1) shl uint8(7 - (bit mod 8))
+      if by < h.cap.len and (h.cap[by] and m) != 0: cap23 = true
+    if not cap23:
+      return err[JxsHeaders](decodingError("jxs: (18,6) needs CAP bit 2/3"))
+  if h.pih.cpih == 1:
+    if h.comps.len < 3:
+      return err[JxsHeaders](unsupportedError(ukGenericFeature,
+        "jxs: RCT needs Nc >= 3"))
+    for i in 0..<3:
+      if h.comps[i].sx != 1 or h.comps[i].sy != 1:
+        return err[JxsHeaders](unsupportedError(ukGenericFeature,
+          "jxs: RCT with subsampled component"))
+  if h.pih.cpih == 3 and h.comps.len < 4:
+    return err[JxsHeaders](decodingError("jxs: Star-Tetrix needs Nc >= 4"))
+  # Table 11 dimension floors.
+  var maxSx: uint32 = 1
+  var maxSy: uint32 = 1
+  for c in h.comps:
+    if uint32(c.sx) > maxSx: maxSx = uint32(c.sx)
+    if uint32(c.sy) > maxSy: maxSy = uint32(c.sy)
+  if uint32(h.pih.wf) < maxSx * (1'u32 shl h.pih.nlx) or
+      uint32(h.pih.hf) < maxSy * (1'u32 shl h.pih.nly):
+    return err[JxsHeaders](decodingError("jxs: picture below Table 11 floor"))
+  if h.pih.cw > 0:
+    let csW = 8'u64 * uint64(h.pih.cw) * uint64(maxSx) *
+      (1'u64 shl h.pih.nlx)
+    if csW > 0 and csW < uint64(high(uint32)):
+      let cs = uint32(csW)
+      let rem = uint32(h.pih.wf) mod cs
+      if rem > 0 and rem < maxSx * (1'u32 shl h.pih.nlx):
+        return err[JxsHeaders](decodingError("jxs: Cw sliver column"))
+  # WGT body sanity (full per-band count check lands with geometry).
+  if h.wgt.len mod 2 != 0:
+    return err[JxsHeaders](decodingError("jxs: WGT body must be even"))
+  for i in countup(0, h.wgt.len - 1, 2):
+    if h.wgt[i] > 15:
+      return err[JxsHeaders](decodingError("jxs: WGT gain > 15"))
   while true:
     let m = rdM()
     if m == JxsEoc:

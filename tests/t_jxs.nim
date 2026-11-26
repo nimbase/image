@@ -35,7 +35,7 @@ proc minimalCs(wf = 8'u16, hf = 8'u16): seq[uint8] =
   result.add(seg(0xFF50, []))                     # CAP empty
   result.add(seg(0xFF12, pihBody(1, wf, hf)))     # PIH
   result.add(seg(0xFF13, [8'u8, 0x11]))           # CDT 1x 8-bit
-  result.add(seg(0xFF14, [0'u8, 0]))              # WGT stub
+  result.add(seg(0xFF14, [0'u8, 0, 0, 0, 0, 0, 0, 0])) # WGT 4 bands x (G,P)
   result.add(seg(0xFF20, [0'u8, 0]))              # SLH y=0, empty entropy
   result.add(@[0xFF'u8, 0x11])                    # EOC
 
